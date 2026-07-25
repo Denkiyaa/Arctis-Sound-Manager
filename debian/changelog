@@ -1,3 +1,49 @@
+arctis-sound-manager (1.2.9-1) noble; urgency=medium
+
+  * The Arctis Nova Pro Omni's controls finally work. Its profile was a Nova
+    Pro Wireless copy, and the DAC quietly refused almost everything ASM
+    sent it: commands went out with the wrong HID report id, so the base
+    station dropped them without a word — which is why sidetone, the volume
+    limiter and the DAC screen looked dead however you set them. Huge thanks
+    to @joorklee, who reverse-engineered the real protocol on hardware (a
+    Windows capture of SteelSeries GG driving the DAC, GG's own device
+    specification, and Linux writes confirmed by reading the values back off
+    the base station) and shared everything in #147. Sidetone, the volume
+    limiter, ANC and its level, transparency, mic volume and LED, the OLED
+    screen and the auto-off timer now speak the language this DAC actually
+    understands, and the headset's battery, charging state and Bluetooth
+    status are reported as the device really sends them instead of being
+    guessed from a sibling model's layout. The base station also pushes
+    changes as they happen, so what you do on the DAC shows up in ASM
+    without waiting for the next poll. (#70, #147, protocol by @joorklee)
+  * Arctis Nova 7P Gen 2 (1038:2298) is now recognised out of the box.
+    (#146, reported by @camperotactico)
+  * New Sonar presets show up the day they are published. The check ran at
+    most once every 24 hours, so a preset pack released shortly after your
+    last check stayed invisible for a full day and reopening the app changed
+    nothing. ASM now looks for new presets on every launch.
+  * A device you added yourself was ignored when writing the udev rules. The
+    documented way to support a headset ASM doesn't know yet is to drop a
+    copy of its configuration file into your own configuration folder and
+    add the product id there. That copy drove device detection, but the
+    bundled file silently won when the rules were generated — so the new
+    product id never reached the rules file, with no error to explain why
+    nothing happened. Your copy now wins everywhere. (#146)
+  * sudo asm-cli udev write-rules looked in root's home instead of yours,
+    which put your own device files out of reach entirely — the same
+    symptom, from the other end. The command reads the invoking user's
+    folder when elevated (and still never writes anything into your home as
+    root). It doesn't need sudo in the first place: it asks for the password
+    itself when it needs one. (#146)
+  * asm-cli diagnose now warns when it is run as root. A dump taken with
+    sudo describes root's session — no audio server, no settings, no device
+    files — which looks exactly like a badly broken installation and sends
+    troubleshooting down the wrong path. (#146)
+  * An unreadable device folder no longer aborts the whole udev rules
+    generation.
+
+ -- loteran <axel.valadon@gmail.com>  Sun, 26 Jul 2026 00:00:00 +0000
+
 arctis-sound-manager (1.2.8-1) noble; urgency=medium
 
   * The Output channel now has a device selector in the Channels tab, like
