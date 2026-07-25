@@ -42,6 +42,13 @@ class TypedDevice(Device):
     idProduct: int
 
 
+# Backoff before re-attempting a USB acquisition that failed with EACCES, in
+# seconds. Covers the boot-time race between udev applying the access rights
+# and the daemon claiming the device, without making a genuinely missing rules
+# file take noticeably longer to report.
+_USB_PERMISSION_RETRY_DELAYS = (1.0, 3.0, 6.0)
+
+
 class CoreEngine:
     logger: logging.Logger
     device_configurations: list[DeviceConfiguration]
@@ -76,6 +83,11 @@ class CoreEngine:
         # (udev rules missing or not yet applied to the connected device).
         # Read by the GUI to surface a "Fix permissions" action.
         self.permission_error: bool = False
+        # How many permission retries are still pending for this device. A
+        # dongle plugged in before boot can be enumerated before its access
+        # rights are in place, so the very first acquisition of the session
+        # races udev and loses; see _schedule_usb_permission_retry().
+        self._usb_permission_attempt: int = 0
 
         self.general_settings = GeneralSettings.read_from_file()
 
@@ -1247,6 +1259,10 @@ class CoreEngine:
         current_usb_device = self._find_hid_device(self.device_config.vendor_id, self.device_config.product_ids)
 
         if current_usb_device is None:
+            # A replug is a fresh start: give the next acquisition its full
+            # allowance of permission retries instead of inheriting a budget
+            # already spent on the previous session.
+            self._usb_permission_attempt = 0
             self.teardown()
     
     def _update_active_dial_interfaces(self) -> None:
@@ -1361,8 +1377,12 @@ class CoreEngine:
                 self.logger.info(f"Found device {self.usb_device.idProduct:04x}:{self.usb_device.idVendor:04x} ({self.device_config.name})")
                 if not self.kernel_detach(self.usb_device, self.device_config):
                     # USB permission error — message already logged with remediation
-                    # steps. Bail out so the daemon stays alive instead of crashing.
+                    # steps. Bail out so the daemon stays alive instead of crashing,
+                    # but give udev a chance to catch up first: at boot the device is
+                    # routinely enumerated before its access rights land.
+                    self._schedule_usb_permission_retry()
                     return
+                self._usb_permission_attempt = 0
 
             # Discover ALSA nodes for this device and update shared device state
             physical_out_game, physical_out_chat, physical_in = self._discover_physical_nodes(
@@ -1967,6 +1987,51 @@ class CoreEngine:
         # Surface the EACCES state to the GUI; clear it once a clean pass happens.
         self.permission_error = had_eacces
         return not had_eacces
+
+    def _schedule_usb_permission_retry(self) -> None:
+        """Retry acquiring the device before blaming the udev rules.
+
+        A dongle that never leaves its port is enumerated during boot, and the
+        daemon starts right behind it — early enough that the access rights are
+        not always in place yet on the freshly created device node. The first
+        acquisition of the session then fails with EACCES while every later one
+        succeeds, which is why quitting ASM and reopening it "fixed" it and why
+        the permissions dialog came back on every single boot even though the
+        rules on disk were perfectly valid.
+
+        Bailing out on that first failure also left the headset unmanaged until
+        the user clicked something, since nothing retried on its own.
+
+        Retries are scheduled off-thread (configure_virtual_sinks holds
+        _detect_lock and runs on the USB event path — it must not sleep). The
+        permission flag stays down while attempts remain, so the GUI is only
+        told about a genuine, lasting permission problem.
+        """
+        if self._usb_permission_attempt >= len(_USB_PERMISSION_RETRY_DELAYS):
+            self.logger.error(
+                "USB access still denied after %d retries — surfacing the "
+                "permissions dialog.", len(_USB_PERMISSION_RETRY_DELAYS),
+            )
+            return
+
+        delay = _USB_PERMISSION_RETRY_DELAYS[self._usb_permission_attempt]
+        self._usb_permission_attempt += 1
+        # Not a confirmed permission problem yet — don't prompt the user.
+        self.permission_error = False
+        self.logger.info(
+            "USB access denied on acquisition, retrying in %.1fs (attempt %d/%d)",
+            delay, self._usb_permission_attempt, len(_USB_PERMISSION_RETRY_DELAYS),
+        )
+
+        def _retry() -> None:
+            try:
+                self.configure_virtual_sinks()
+            except Exception as e:  # never kill the timer thread
+                self.logger.warning("USB permission retry failed: %r", e)
+
+        timer = threading.Timer(delay, _retry)
+        timer.daemon = True
+        timer.start()
 
     def release_all_interfaces(self, usb_device: TypedDevice, config: DeviceConfiguration) -> None:
         """Release every interface :meth:`kernel_detach` claimed.
