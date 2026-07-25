@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from arctis_sound_manager.constants import (HOME_CONFIG_FOLDER,
+                                            INVOKING_USER_CONFIG_FOLDER,
                                             SETTINGS_FOLDER,
                                             UDEV_RULES_PATHS)
 from arctis_sound_manager.utils import project_version
@@ -315,18 +316,35 @@ def _section_settings() -> str:
 
 def _section_yamls() -> str:
     out = io.StringIO()
-    out.write(f'HOME devices folder: {HOME_CONFIG_FOLDER}\n')
-    if HOME_CONFIG_FOLDER.is_dir():
-        for f in sorted(HOME_CONFIG_FOLDER.glob('*.yaml')):
-            out.write(f'  - {f.name} ({f.stat().st_size} bytes)\n')
-    else:
-        out.write('  (folder absent)\n')
+    folders = [HOME_CONFIG_FOLDER]
+    if INVOKING_USER_CONFIG_FOLDER is not None:
+        folders.insert(0, INVOKING_USER_CONFIG_FOLDER)
+    for folder in folders:
+        out.write(f'Devices folder: {folder}\n')
+        if folder.is_dir():
+            for f in sorted(folder.glob('*.yaml')):
+                out.write(f'  - {f.name} ({f.stat().st_size} bytes)\n')
+        else:
+            out.write('  (folder absent)\n')
     return out.getvalue()
 
 
 def diagnose(stream=sys.stdout) -> int:
     stream.write(f'# Arctis Sound Manager — diagnostic dump\n')
     stream.write(f'# Generated: {datetime.now(timezone.utc).isoformat()}\n')
+
+    if os.geteuid() == 0:
+        # A dump taken under sudo describes root's session: no PipeWire, no
+        # settings, no device overrides. It looks like a broken install and
+        # sends triage down the wrong path (#146).
+        stream.write(
+            '#\n'
+            '# !! WARNING: this dump was taken as root, so it describes root\'s session,\n'
+            '#    not yours. PipeWire, settings and device overrides below are those of\n'
+            '#    /root and will look absent or inactive even on a perfectly healthy\n'
+            '#    install. Please re-run WITHOUT sudo:  asm-cli diagnose\n'
+            '#\n'
+        )
 
     sections = [
         ('Versions / session', _section_versions),

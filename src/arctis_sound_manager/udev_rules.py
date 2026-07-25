@@ -26,9 +26,15 @@ _FOOTER_LABEL = 'LABEL="local_end"'
 def _iter_yaml_files(paths: Iterable[Path]) -> Iterable[Path]:
     seen: set[Path] = set()
     for p in paths:
-        if not p.is_dir():
+        try:
+            if not p.is_dir():
+                continue
+            candidates = sorted(p.glob('*.yaml'))
+        except OSError:
+            # Unreadable folder (another user's home, stale network mount…):
+            # skip it rather than aborting the whole rules generation.
             continue
-        for f in sorted(p.glob('*.yaml')):
+        for f in candidates:
             real = f.resolve()
             if real in seen:
                 continue
@@ -39,10 +45,14 @@ def _iter_yaml_files(paths: Iterable[Path]) -> Iterable[Path]:
 def load_devices(paths: Iterable[Path]) -> list[tuple[int, list[int], str]]:
     """Return [(vendor_id, [product_ids], name)] from every device YAML in *paths*.
 
-    Later paths override earlier ones for the same (vendor_id, name) key, so the
-    runtime DEVICES_CONFIG_FOLDER (HOME first, then SRC) keeps its current
-    "user override wins" semantics, while packaging callers passing only the
-    bundled SRC folder still get a deterministic order.
+    The FIRST path claiming a (vendor_id, name) key wins, which mirrors what
+    load_device_configurations() does at runtime: DEVICES_CONFIG_FOLDER lists
+    HOME before SRC, and the first match for a PID is the one the daemon uses.
+    A user override in ~/.config/arctis_manager/devices therefore drives the
+    udev rules too — it used to be silently overwritten by the bundled copy of
+    the same family, so a PID added by hand never made it into the rules file
+    (#146). Packaging callers passing only the bundled SRC folder are
+    unaffected and still get a deterministic order.
     """
     yaml = YAML(typ='safe')
     products: dict[tuple[int, str], tuple[int, list[int], str]] = {}
@@ -52,7 +62,7 @@ def load_devices(paths: Iterable[Path]) -> list[tuple[int, list[int], str]]:
         vid = int(device['vendor_id'])
         pids = [int(p) for p in device['product_ids']]
         name = str(device['name'])
-        products[(vid, name)] = (vid, pids, name)
+        products.setdefault((vid, name), (vid, pids, name))
     return list(products.values())
 
 

@@ -16,9 +16,11 @@ In particular we're going to focus on two different folders:
 - `~/.config/arctis_manager/devices` for device configuration files
 - `~/.config/arctis_manager/lang` for language files
 
+Copy the YAML you want to tweak into `~/.config/arctis_manager/devices` and edit **that** copy: a file of the same name there fully replaces the bundled one, for the daemon and for the udev rules alike. Editing the packaged file directly (under `site-packages`, or in a git clone that isn't the installed version) has no effect — the next package update overwrites it, and if you installed ASM from a distro package it isn't the file being read in the first place.
+
 In order to reload the configurations, you can either restart the service (`systemd --user restart arctis-manager`), or calling the config reload Dbus method.
 
-Every time you add a new configuration for the first time though, you'll need to run `asm-cli udev write-rules --force --reload` to write and reload the udev rules (this will prompt you for your sudoer password).
+Every time you add a new configuration for the first time though, you'll need to run `asm-cli udev write-rules --force --reload` to write and reload the udev rules (this will prompt you for your sudoer password — the command elevates itself, don't prefix it with `sudo`).
 
 ## Wireshark tutorial
 
