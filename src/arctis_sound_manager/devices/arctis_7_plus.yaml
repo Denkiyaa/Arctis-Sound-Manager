@@ -118,9 +118,16 @@ device:
       perc_min: 0
       perc_max: 4
     cable_charging:
-      type: on_off
-      off: 0x00
-      on: 0x01
+      # SteelSeries' own translate_charging_status, identical across every
+      # Arctis family: 0 unknown / 1 charging / 2 plugged in but not charging
+      # / 3 on battery. As an on_off pair this reported "not charging" for
+      # every state but one, including the plain on-battery case.
+      type: int_str_mapping
+      values:
+        0x00: unknown
+        0x01: on
+        0x02: plugged_not_charging
+        0x03: off
     media_mix:
       type: percentage
       perc_min: 0

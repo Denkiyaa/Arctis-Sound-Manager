@@ -153,9 +153,15 @@ device:
       perc_min: 0
       perc_max: 100
     cable_charging:
+      # SteelSeries' own translate_charging_status, identical across every
+      # Arctis family: 0 unknown / 1 charging / 2 plugged in but not charging
+      # / 3 on battery. 0x00 and 0x02 used to be unmapped, so the indicator
+      # simply vanished once the headset finished charging on the cable.
       type: int_str_mapping
       values:
+        0x00: unknown
         0x01: on
+        0x02: plugged_not_charging
         0x03: off
     media_mix:
       type: percentage
