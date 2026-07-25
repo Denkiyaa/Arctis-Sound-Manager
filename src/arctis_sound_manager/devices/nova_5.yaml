@@ -80,22 +80,27 @@ device:
         default: 0x0f
         update_sequence: [0x37, 'value']
       mic_side_tone:
+        # GG declares sidetone as level 0-10; the slider went to 15, so its top
+        # third sent values the firmware has no meaning for.
         type: slider
         min: 0x00
-        max: 0x0f
+        max: 0x0a
         step: 1
         min_label: off
         max_label: perc_100
         default: 0x00
         update_sequence: [0x39, 'value']
       mic_mute_led_brightness:
+        # GG declares muted_mic_brightness as level 0-3, like every other Arctis.
+        # "medium" sent 4 and "high" sent 10 — both out of range, so only the
+        # first two positions of this control could ever have done anything.
         type: button_group
         values_mapping:
           0x00: off
           0x01: low
-          0x04: medium
-          0x0a: high
-        default: 0x0a
+          0x02: medium
+          0x03: high
+        default: 0x03
         update_sequence: [0xae, 'value']
     wireless:
       wireless_mode:

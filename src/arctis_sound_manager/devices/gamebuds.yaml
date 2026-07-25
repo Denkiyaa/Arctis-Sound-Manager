@@ -43,12 +43,14 @@ device:
         default: 0x0a
         update_sequence: [0x37, 'value']
       mic_side_tone:
+        # GG declares sidetone as level 0-3. "medium" sent 6 and "high" sent 10,
+        # both out of range — only "off" and "low" ever reached the firmware.
         type: button_group
         values_mapping:
           0x00: off
-          0x03: low
-          0x06: medium
-          0x0a: high
+          0x01: low
+          0x02: medium
+          0x03: high
         default: 0x00
         update_sequence: [0x39, 'value']
     audio:
@@ -61,13 +63,16 @@ device:
         default: 0x00
         update_sequence: [0xbd, 'value']
       noise_level:
+        # GG declares transparency as level 1-3, not a 0-100% scale: the slider
+        # spent seven of its eleven positions outside the accepted range, and
+        # position 0 was invalid too.
         type: slider
-        min: 0x00
-        max: 0x0a
+        min: 0x01
+        max: 0x03
         step: 1
-        min_label: perc_0
-        max_label: perc_100
-        default: 0x06
+        min_label: low
+        max_label: high
+        default: 0x02
         update_sequence: [0xb9, 'value']
     headset:
       volume_limiter:
