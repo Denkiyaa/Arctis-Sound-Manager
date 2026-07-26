@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.14] - 27 July 2026
+
+### Fixed
+
+- **The in-app update no longer reports success while updating nothing**, on Fedora, Nobara and Ultramarine. ASM checked for its system package by name — and on those distributions the project is redistributed under a different one, `python3-arctis-sound-manager`. So the check concluded there was no system package at all, fell through, and offered a *pip* update to someone running one; and even once found, the upgrade command named the package too, so the update ran, announced success, and left the version untouched. Both now ask the package manager which package owns the running code, whatever a repackager chose to call it. ([#146](https://github.com/loteran/Arctis-Sound-Manager/issues/146), [discussion #140](https://github.com/loteran/Arctis-Sound-Manager/discussions/140))
+- **The custom equaliser button is back on the headsets it was written for.** 1.2.11 brought the on-device equaliser to nine models, but the switch stayed hidden on most of them: the daemon decided whether a headset had one by looking for a single command, and the families using a parametric format don't declare one. The Nova 7 Gen 1 and Gen 2, Nova 7P, Nova 5, GameBuds and Nova 3 Wireless all lost the control they had just gained — only the two families using the older plain-gain format kept it. Reported by **@camperotactico**, who asked whether his Nova 7P Gen 2 supported the feature at all. It does. ([#146](https://github.com/loteran/Arctis-Sound-Manager/issues/146))
+- **The fourth audio channel now carries your headset's name, like the other three.** In a system audio picker you saw "*headset* Game", "*headset* Chat", "*headset* Media" — and "Sonar Output EQ", which reads as an unrelated technical entry rather than the output of the same device. Reported by **@camperotactico**, who counted seven headset-related outputs and could not tell which was which. ([#146](https://github.com/loteran/Arctis-Sound-Manager/issues/146))
+
+### Added
+
+- **Bug reports and `asm-cli diagnose` now name the package the running code came from**, with its version and vendor. ASM is redistributed by third parties whose builds don't necessarily declare the same dependencies — one of them ships no dependency list at all, which brings back crashes on a missing `pactl` ([#117](https://github.com/loteran/Arctis-Sound-Manager/issues/117)) and silent spatial audio ([#88](https://github.com/loteran/Arctis-Sound-Manager/issues/88)) on code where both were fixed long ago. One line now answers "is this our build?" before anyone starts reading code that isn't the code being run.
+
 ## [1.2.13] - 26 July 2026
 
 ### Fixed
