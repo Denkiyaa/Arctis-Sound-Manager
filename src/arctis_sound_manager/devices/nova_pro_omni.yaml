@@ -75,6 +75,8 @@ device:
     - [0x01, 0x38, 0x01, 'settings.mic_side_tone'] # boom sidetone: state ON + level
     - [0x01, 0xbf, 'settings.mic_led_brightness']  # muted-mic LED brightness 1-10
     - [0x01, 0x27, 'settings.volume_limiter']      # volume limiter
+    - [0x01, 0xb2, 'settings.bluetooth_power_status']  # BT on at power-up
+    - [0x01, 0xb3, 'settings.bluetooth_auto_mute']     # what a call does to game audio
     - ['status.request']
 
   status:
@@ -184,6 +186,29 @@ device:
     height: 64         # Panel height in pixels
 
   settings:
+    bluetooth:
+      # The DAC's own Bluetooth preferences, both plain writes per the spec.
+      # Their current values are already read back in the 0x01b0 status frame
+      # (bluetooth_powerup_state / bluetooth_auto_mute), so the controls and
+      # the readout stay in step.
+      bluetooth_power_status:
+        type: toggle
+        values:
+          off: 0x00
+          on: 0x01
+          off_label: off
+          on_label: on
+        default: 0x00
+        update_sequence: [0x01, 0xb2, 'value']
+      bluetooth_auto_mute:
+        # bt_call_default: what the DAC does to game audio on an incoming call.
+        type: button_group
+        values_mapping:
+          0x00: none
+          0x01: -12_db
+          0x02: mute
+        default: 0x00
+        update_sequence: [0x01, 0xb3, 'value']
     headset:
       # 0x27 is the volume limiter, not a gain stage (renamed from 'gain').
       volume_limiter:
