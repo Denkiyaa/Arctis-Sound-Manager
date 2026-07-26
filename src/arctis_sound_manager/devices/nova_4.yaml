@@ -1,0 +1,152 @@
+# ── Arctis Nova 4 / 4X (0x12f2 / 0x12f6) ──────────────────────────────────────
+#
+# Written from SteelSeries' own device specification (base_arctis_nova_4_tx),
+# not from a USB capture. Every opcode, range and status offset below is taken
+# verbatim from it, and each of this device's commands writes its payload
+# unchanged — no UI→firmware transform table to account for.
+#
+# NOT YET CONFIRMED ON HARDWARE: command_interface_index. The specification
+# describes the protocol but not the USB interface layout, and no one on the
+# project owns this headset. Interface 3 with HID SET_REPORT is what every
+# recent Arctis dongle uses (Nova 5, Nova 7 Gen 1 and Gen 2, Nova Pro Omni), so
+# it is the only sensible starting point. If controls turn out to have no
+# effect on real hardware, this is the line to revisit — see the Nova Pro Omni
+# (#70), where exactly this was wrong for two months.
+#
+# The Nova 4 has no Bluetooth and no 3.5 mm jack: the dongle is the only path,
+# so there are no Bluetooth settings here unlike the Nova 7 family.
+# ──────────────────────────────────────────────────────────────────────────────
+device:
+  name: SteelSeries Arctis Nova 4
+  vendor_id: 0x1038
+  product_ids:
+    - 0x12f2 # Arctis Nova 4
+    - 0x12f6 # Arctis Nova 4X
+  command_padding:
+    length: 64
+    position: end
+    filler: 0x00
+
+  command_transport: ctrl_output  # HID SET_REPORT (report id 0x00, no interrupt OUT)
+  command_interface_index: [3, 0]
+  listen_interface_indexes: [3]
+
+  device_init:
+    - ['status.request']
+    - [0xa3, 'settings.pm_shutdown']
+    - [0x37, 'settings.mic_volume']
+    - [0x39, 'settings.mic_side_tone']
+    # 0xae takes the LED level, then two bytes the firmware requires to avoid
+    # "unexpected behaviour": the dongle's connect-LED state (on) and its
+    # disconnect-LED brightness (0x14).
+    - [0xae, 'settings.mic_mute_led_brightness', 0x01, 0x14]
+    - [0x3a, 'settings.volume_limiter']
+    - ['status.request']
+
+  status:
+    request: 0xb0
+    response_mapping:
+      - starts_with: 0xb0
+        headset_power_status: 0x01
+        headset_battery_charge: 0x02
+        cable_charging: 0x03
+        media_mix: 0x04
+        chat_mix: 0x05
+
+    # The 0xB0 frame carries five fields and no microphone state, so there is
+    # no mic section here: listing one would show a permanently blank row.
+    representation:
+      headset:
+        - headset_power_status
+        - headset_battery_charge
+        - cable_charging
+
+  online_status:
+    status_variable: headset_power_status
+    online_value: on
+
+  audio:
+    spatial_engine: hesuvi
+
+  settings:
+    headset:
+      volume_limiter:
+        type: toggle
+        values:
+          off: 0x00
+          on: 0x01
+          off_label: off
+          on_label: on
+        default: 0x00
+        update_sequence: [0x3a, 'value']
+    microphone:
+      mic_volume:
+        type: slider
+        min: 0x00
+        max: 0x07
+        step: 1
+        min_label: mic_muted
+        max_label: perc_100
+        default: 0x07
+        update_sequence: [0x37, 'value']
+      mic_side_tone:
+        type: button_group
+        values_mapping:
+          0x00: off
+          0x01: low
+          0x02: medium
+          0x03: high
+        default: 0x00
+        update_sequence: [0x39, 'value']
+      mic_mute_led_brightness:
+        type: button_group
+        values_mapping:
+          0x00: off
+          0x01: low
+          0x02: medium
+          0x03: high
+        default: 0x03
+        update_sequence: [0xae, 'value', 0x01, 0x14]
+    power_management:
+      pm_shutdown:
+        type: button_group
+        values_mapping:
+          0x00: never
+          0x01: 1_minute
+          0x05: 5_minutes
+          0x0a: 10_minutes
+          0x0f: 15_minutes
+          0x1e: 30_minutes
+          0x2d: 45_minutes
+          0x3c: 60_minutes
+        default: 0x1e
+        update_sequence: [0xa3, 'value']
+
+  status_parse:
+    # connection_status: 0 not paired / 1 searching / 2 paired-not-connected /
+    # 3 paired-connected. Only 3 means the headset is actually reachable.
+    headset_power_status:
+      type: on_off
+      off: 0x02
+      on: 0x03
+    # Battery is reported in five steps, not a percentage:
+    # translate_battery_level maps 0-4 onto 0 / 25 / 50 / 75 / 100 %.
+    headset_battery_charge:
+      type: percentage
+      perc_min: 0
+      perc_max: 4
+    cable_charging:
+      type: int_str_mapping
+      values:
+        0x00: unknown
+        0x01: on
+        0x02: plugged_not_charging
+        0x03: off
+    media_mix:
+      type: percentage
+      perc_min: 0
+      perc_max: 100
+    chat_mix:
+      type: percentage
+      perc_min: 0
+      perc_max: 100

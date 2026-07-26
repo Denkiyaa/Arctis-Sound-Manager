@@ -4,6 +4,7 @@ device:
   product_ids:
     - 0x12cb # Arctis Nova Pro Wired
     - 0x12cd # Arctis Nova Pro Wired (Xbox)
+    - 0x12fa # Arctis Nova Pro Wired V2 — same base_arctis_nova_pro protocol
   command_padding:
     length: 16
     position: end
