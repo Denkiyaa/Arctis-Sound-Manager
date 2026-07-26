@@ -254,6 +254,21 @@ device:
         max_label: perc_100
         default: 0x0a # 100%
         update_sequence: [0x01, 0xbf, 'value']
+      mic_noise_reduction:
+        # Noise reduction done inside the DAC (0x3C), on the boom microphone.
+        # The frame is [0x3C, which_mics, boom_level, on_ear_level]: the first
+        # byte tells the firmware which microphones are being adjusted (0 none,
+        # 1 boom, 16 on-ear, 17 both) and the levels must stay >= 1 even when
+        # off, which is why the derived tokens exist. The on-ear microphone is
+        # left alone, hence its level pinned to 1 and never selected.
+        type: button_group
+        values_mapping:
+          0x00: off
+          0x01: low
+          0x02: medium
+          0x03: high
+        default: 0x00
+        update_sequence: [0x01, 0x3c, 'value.enabled', 'value.at_least_1', 0x01]
     power_management:
       pm_shutdown:
         type: slider

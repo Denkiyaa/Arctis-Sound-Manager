@@ -48,6 +48,16 @@ class TypedDevice(Device):
 # file take noticeably longer to report.
 _USB_PERMISSION_RETRY_DELAYS = (1.0, 3.0, 6.0)
 
+# Extra tokens a profile's update_sequence can use, for commands that carry a
+# byte derived from the setting rather than the setting itself. The Nova Pro
+# Omni's mic noise reduction needs both: an on/off byte telling the firmware
+# which microphones are being adjusted, and a level the firmware requires to
+# stay >= 1 even while that feature is off.
+_DERIVED_TOKENS = {
+    'value.enabled': lambda value: 0 if value == 0 else 1,
+    'value.at_least_1': lambda value: max(1, value),
+}
+
 
 class CoreEngine:
     logger: logging.Logger
@@ -1890,6 +1900,8 @@ class CoreEngine:
                 result.append(b)
             elif b == 'value':
                 result.append(value)
+            elif b in _DERIVED_TOKENS:
+                result.append(_DERIVED_TOKENS[b](value))
             elif isinstance(b, str) and b.startswith('settings.'):
                 setting_name = b.split('.', 1)[1]
                 result.append(self.device_settings.get(setting_name, 0))
