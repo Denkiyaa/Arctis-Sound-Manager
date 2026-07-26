@@ -1,3 +1,20 @@
+arctis-sound-manager (1.2.13-1) noble; urgency=medium
+
+  * The Arctis Nova 3P / 3X Wireless now report their state as it changes.
+    The profile released yesterday only polled the headset for its status;
+    this family relies on the dongle announcing changes instead —
+    SteelSeries' own documentation calls the connection event "crucial for
+    Nova 3 wireless devices to ensure accurate data retrieval". ASM now
+    listens to all five: ChatMix, microphone mute, battery level, connection
+    state and charging state. In practice that means the battery and the
+    charging indicator actually follow the headset, ChatMix moves with the
+    dial, and the mute button is reflected in the app. Found by comparing
+    notes with @rhavinx, who had reverse-engineered the same headset from
+    USB captures (#149) — his captures caught three frames the documentation
+    alone had not led me to.
+
+ -- loteran <axel.valadon@gmail.com>  Sun, 26 Jul 2026 00:00:00 +0000
+
 arctis-sound-manager (1.2.12-1) noble; urgency=medium
 
   * The Arctis Nova 3P and 3X Wireless have their own profile at last. They
