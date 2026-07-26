@@ -24,6 +24,7 @@ import logging
 import re
 from pathlib import Path
 
+from arctis_sound_manager import device_state
 from arctis_sound_manager.eq_types import EqBand, PW_LABEL
 
 _log = logging.getLogger(__name__)
@@ -171,6 +172,20 @@ def _conf_has_bare_ladspa(content: str) -> bool:
 _CONF_VERSION = 1
 
 _CONF_VERSION_RE = re.compile(r"^\s*#\s*ASM-CONF-VERSION:\s*(\d+)\s*$", re.MULTILINE)
+
+
+def _channel_node_description(channel: str) -> str:
+    """Label shown in system audio pickers for a channel's EQ node.
+
+    Only the Output channel's node is user-visible (the others are declared
+    Audio/Sink/Internal), and it sat in the list as "Sonar Output EQ" — no
+    mention of the headset, next to three siblings that all carry its name.
+    Reported as confusing in #146.
+    """
+    if channel != "output":
+        return f"Sonar {channel.capitalize()} EQ"
+    device = device_state.get_device_name()
+    return f"{device} Output" if device else "Arctis Output"
 
 
 def _conf_version_header() -> str:
@@ -1067,7 +1082,7 @@ context.modules = [
   {{ name = libpipewire-module-filter-chain
     flags = [ nofail ]
     args = {{
-      node.description = "Sonar {channel.capitalize()} EQ"
+      node.description = "{_channel_node_description(channel)}"
       filter.graph = {{
         nodes = [
 {nodes_text}
@@ -1183,7 +1198,7 @@ context.modules = [
   {{ name = libpipewire-module-filter-chain
     flags = [ nofail ]
     args = {{
-      node.description = "Sonar {channel.capitalize()} EQ"
+      node.description = "{_channel_node_description(channel)}"
       filter.graph = {{
         nodes = [
 {nodes_text}
