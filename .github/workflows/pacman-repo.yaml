@@ -128,6 +128,9 @@ jobs:
         run: |
           set -euo pipefail
           cd /repo
+          # makepkg emits a -debug companion package when debug symbols are on;
+          # it is dead weight in a repository meant for users.
+          rm -f ./*-debug-*.pkg.tar.zst
           for f in *.pkg.tar.zst; do
             gpg --batch --yes --detach-sign --no-armor --local-user "$GPG_KEY_ID" "$f"
           done
@@ -136,9 +139,11 @@ jobs:
           # repo-add leaves .db and .files as symlinks to the .tar.gz archives.
           # A GitHub release stores plain files, and pacman fetches the
           # extension-less names, so materialise them.
+          # --remove-destination: repo-add already created $l as a symlink to
+          # $l.tar.gz, so a plain cp would refuse to copy a file onto itself.
           for l in arctis-sound-manager.db arctis-sound-manager.files; do
-            cp -L "$l.tar.gz" "$l"
-            cp -L "$l.tar.gz.sig" "$l.sig"
+            cp -L --remove-destination "$l.tar.gz" "$l"
+            cp -L --remove-destination "$l.tar.gz.sig" "$l.sig"
           done
           ls -la
 
