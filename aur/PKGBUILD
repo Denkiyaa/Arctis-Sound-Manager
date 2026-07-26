@@ -130,6 +130,14 @@ package() {
     install -Dm644 src/arctis_sound_manager/desktop/com.github.loteran.arctis-sound-manager.metainfo.xml \
         "$pkgdir/usr/share/metainfo/com.github.loteran.arctis-sound-manager.metainfo.xml"
 
+    # AppStream catalog entry. The metainfo above describes the app; only this
+    # ties it to a package name, which is what a software centre needs to show
+    # it at all. Arch's archlinux-appstream-data covers the official repos only,
+    # so a package from anywhere else is invisible in Discover without it.
+    python3 scripts/generate_appstream_catalog.py \
+        --output "$pkgdir/usr/share/swcatalog/xml/$pkgname.xml.gz"
+    chmod 644 "$pkgdir/usr/share/swcatalog/xml/$pkgname.xml.gz"
+
     # First-run autostart (triggers asm-setup on first graphical login)
     install -Dm644 debian/asm-first-run.desktop \
         "$pkgdir/etc/xdg/autostart/asm-first-run.desktop"

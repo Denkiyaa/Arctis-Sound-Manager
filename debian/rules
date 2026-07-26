@@ -69,6 +69,14 @@ override_dh_auto_install:
 	install -Dm755 scripts/restart-user-services.sh \
 	    $(DEST)/usr/lib/arctis-sound-manager/restart-user-services.sh
 
+	# ── AppStream catalog entry ─────────────────────────────
+	# Debian/Ubuntu still read the pre-1.0 location; AppStream reads whichever
+	# one its version knows, and installing to both would double the component.
+	install -d $(DEST)/usr/share/app-info/xml
+	python3 scripts/generate_appstream_catalog.py \
+	    --output $(DEST)/usr/share/app-info/xml/arctis-sound-manager.xml.gz
+	chmod 644 $(DEST)/usr/share/app-info/xml/arctis-sound-manager.xml.gz
+
 	# ── Desktop entry ───────────────────────────────────────
 	install -Dm644 src/arctis_sound_manager/desktop/ArctisManager.desktop \
 	    $(DEST)/usr/share/applications/ArctisManager.desktop
