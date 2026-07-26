@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.10] - 26 July 2026
+
+### Added
+
+- **The Arctis Nova 4 and Nova 4X are now supported.** A whole family ASM simply did not recognise. You get the battery level, powered on/off detection and the audio routing that follows from it, sidetone, microphone volume, mute-LED brightness, the volume limiter and the sleep timer. Its battery is reported in five steps rather than as a percentage, which is how the headset itself works. **If ASM detects your Nova 4 but no control does anything, please say so in [#149](https://github.com/loteran/Arctis-Sound-Manager/issues/149)** — one command's output is all that's needed to finish the job.
+- **The Arctis Nova 7X White and the Arctis Nova Pro Wired V2 are now recognised.** Both speak a protocol ASM already implements and has had validated by users; only their product ids were missing, so the headsets were simply not detected.
+
+### Fixed
+
+- **The charging indicator no longer disappears when your headset finishes charging.** The headset reports four charging states — unknown, charging, plugged in but not charging, and running on battery — and ASM only understood two of them. The other two showed nothing at all, which meant the indicator went blank at the two moments you are most likely to look at it: once the battery reached full on the cable, and while the headset was off. Fixed on the Arctis 7+, Nova 5, and all four Nova 7 families. (Arctis 7+ owners: "on battery" was previously indistinguishable from "not charging".)
+- **ASM no longer asks for USB permissions on every boot.** Two users on Nobara reported having to click through the "USB device permissions not applied" dialog after every restart, with perfectly valid rules installed. Their rules were never the problem: a dongle that never leaves its port is detected while the machine is still booting, and ASM's background service starts right behind it — sometimes before the system has finished granting access to the device. That first attempt failed, and ASM reported it as missing permissions. Worse, it then gave up on the headset entirely and never tried again, so the click was genuinely what got the headset working each time. ASM now retries a few seconds later, so a boot-time race resolves itself silently while a real permissions problem is still reported. (discussion [#140](https://github.com/loteran/Arctis-Sound-Manager/discussions/140), diagnosed thanks to @jsuvanto and @DefactoCasual)
+- **The Nova 5's sidetone slider no longer has a dead zone.** Its top third sent levels the headset has no meaning for, so pushing it past roughly two-thirds changed nothing.
+
 ## [1.2.9] - 26 July 2026
 
 ### Added
