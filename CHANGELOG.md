@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.13] - 26 July 2026
+
+### Fixed
+
+- **The Arctis Nova 3P / 3X Wireless now report their state as it changes.** The profile released yesterday only polled the headset for its status; this family relies on the dongle announcing changes instead — SteelSeries' own documentation calls the connection event "crucial for Nova 3 wireless devices to ensure accurate data retrieval". ASM now listens to all five: ChatMix, microphone mute, battery level, connection state and charging state. In practice that means the battery and the charging indicator actually follow the headset, ChatMix moves with the dial, and the mute button is reflected in the app. Found by comparing notes with **@rhavinx**, who had reverse-engineered the same headset from USB captures ([#149](https://github.com/loteran/Arctis-Sound-Manager/issues/149)) — his captures caught three frames the documentation alone had not led me to.
+
 ## [1.2.12] - 26 July 2026
 
 ### Added
