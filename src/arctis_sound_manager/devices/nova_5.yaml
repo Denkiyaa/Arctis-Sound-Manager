@@ -91,16 +91,17 @@ device:
         default: 0x00
         update_sequence: [0x39, 'value']
       mic_mute_led_brightness:
-        # GG declares muted_mic_brightness as level 0-3, like every other Arctis.
-        # "medium" sent 4 and "high" sent 10 — both out of range, so only the
-        # first two positions of this control could ever have done anything.
+        # Wire values are 0 / 1 / 4 / 10, NOT 0-3: GG's UI works on a 0-3 scale
+        # and its transform_frontend_mic_muted_brightness_to_firmware_value maps
+        # it to these before sending. The struct's `range 0 3` describes GG's own
+        # API, not what goes out on USB — do not "fix" this to 0-3.
         type: button_group
         values_mapping:
           0x00: off
           0x01: low
-          0x02: medium
-          0x03: high
-        default: 0x03
+          0x04: medium
+          0x0a: high
+        default: 0x0a
         update_sequence: [0xae, 'value']
     wireless:
       wireless_mode:
