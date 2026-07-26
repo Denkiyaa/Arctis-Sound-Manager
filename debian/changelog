@@ -1,3 +1,72 @@
+arctis-sound-manager (1.2.12-1) noble; urgency=medium
+
+  * The Arctis Nova 3P and 3X Wireless have their own profile at last. They
+    were sharing one with the *wired* Nova 3 and being driven as if they
+    were that model — a different report id, a different transport, and on a
+    USB interface whose endpoint is physically too small to carry their
+    commands. Which is why several of their controls did nothing, and why
+    they had no battery reading at all. Owners now get the battery level and
+    powered on/off detection — and with it the automatic audio switching
+    that depends on knowing whether the headset is on — plus ChatMix, a
+    sidetone with ten steps where the shared profile offered four, the
+    volume limiter, the sleep timer, the range/quality switch, and the
+    on-device equaliser. One control disappears: the microphone LED
+    brightness, which these dongles have no command for — ASM was sending it
+    into the void. Huge thanks to @rhavinx (#149), whose hardware listing
+    supplied the one detail SteelSeries' protocol documentation does not
+    contain.
+
+ -- loteran <axel.valadon@gmail.com>  Sun, 26 Jul 2026 00:00:00 +0000
+
+arctis-sound-manager (1.2.11-1) noble; urgency=medium
+
+  * Your headset's own equaliser is now used, on nine models. Until now the
+    custom EQ was applied by the computer, and only ever reached the
+    hardware on the Nova Pro Wireless and Wired — on every other model it
+    did nothing at all. The curve is now set inside the headset on the Nova
+    7 Gen 1 and Gen 2, Nova 7P, Nova 5, Nova 4 and Arctis GameBuds as well.
+    That means it follows the headset to a console, a phone or another
+    computer, costs no CPU, and stays active even when ASM isn't running.
+    Each family speaks a different dialect for this — different opcodes,
+    different frame layouts, some needing a pause between writes — all of
+    which is now handled per model. Not yet verified on hardware for the
+    newly added families: if your equaliser sounds wrong rather than absent,
+    please say so in #146.
+  * The Nova Pro Omni and Nova Pro Wireless expose their Bluetooth
+    preferences: whether Bluetooth comes up with the base station, and what
+    an incoming call does to game audio (nothing, lower by 12 dB, or mute).
+    Both were previously forced to a fixed value at every start, silently
+    undoing whatever you had set from the DAC itself or from SteelSeries GG.
+  * The Nova Pro Omni's microphone noise reduction — done inside the base
+    station, rather than by a plugin on your computer.
+  * ASM now asks the headset what it already has instead of assuming, on the
+    Nova 7 Gen 2 family. A headset configured elsewhere — in GG on a
+    dual-boot machine, or from its own controls — used to be reset to this
+    app's defaults the first time ASM ran. Its own values are now adopted
+    for anything you have never set here; anything you have set stays yours.
+  * The Noise Cancelling section no longer appears on headsets that don't
+    have it. It sat there with controls that could not do anything, which
+    reads as a broken app rather than an absent feature. (#146, reported by
+    @camperotactico)
+  * The mixer's help tooltip is readable again. It rendered as a plain black
+    rectangle on dark themes: the app styled every other widget but never
+    tooltips, so their text came out dark on dark. Fixes every tooltip in
+    the app. (#146)
+  * Outputs no longer go missing from the device lists. Two optional
+    PipeWire properties were required to list a sink, and one declaring
+    neither was dropped without a word — which is how ordinary desktop
+    speakers ended up "not in the list". (#146, and the same cause as the
+    Bluetooth speakers of #134)
+  * The battery reading no longer implies precision the hardware doesn't
+    have on the Nova Pro Wireless. It reports nine levels, not a percentage,
+    so its readout showed values like 62 % for something measured in steps
+    of about twelve points. It now snaps to round numbers. Headsets that do
+    measure to the point are untouched.
+  * The Nova 5's sidetone slider had a dead zone: its top third sent levels
+    the headset has no meaning for.
+
+ -- loteran <axel.valadon@gmail.com>  Sun, 26 Jul 2026 00:00:00 +0000
+
 arctis-sound-manager (1.2.10-1) noble; urgency=medium
 
   * The Arctis Nova 4 and Nova 4X are now supported. A whole family ASM
