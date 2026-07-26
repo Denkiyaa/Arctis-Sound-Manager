@@ -42,6 +42,24 @@ class ConfigStatusParser:
     type: StatusParseType
     init_kwargs: dict[str, Any]
 
+class SettingsReadback:
+    """A query whose reply carries the device's current value for some settings.
+
+    `request` is the command to send, `starts_with` identifies the reply, and
+    `mapping` gives the offset of each setting inside it — same indexing as a
+    status response_mapping, i.e. without the report id.
+    """
+
+    def __init__(self, request: int, starts_with: int, mapping: dict[str, int]):
+        self.request = int(request)
+        self.starts_with = int(starts_with)
+        self.mapping = {str(k): int(v) for k, v in mapping.items()}
+
+    def values_from(self, response: list[int]) -> dict[str, int]:
+        return {name: response[offset] for name, offset in self.mapping.items()
+                if offset < len(response)}
+
+
 class ConfigStatusResponseMapping:
     starts_with: int
 
@@ -201,6 +219,14 @@ class DeviceConfiguration:
 
         online_status = raw_config.get('online_status', None)
         self.online_status = OnlineStatusConfig(**online_status) if online_status else None
+
+        # Commands that read a setting's current value back from the headset,
+        # so a fresh install adopts what the device already has instead of
+        # overwriting it with profile defaults.
+        self.settings_readback = [
+            SettingsReadback(**entry)
+            for entry in (raw_config.get('settings_readback', None) or [])
+        ]
 
         hardware_eq = raw_config.get('hardware_eq', None) or {}
         self.hardware_eq_command = (

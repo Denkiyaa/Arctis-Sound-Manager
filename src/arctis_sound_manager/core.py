@@ -1133,6 +1133,8 @@ class CoreEngine:
 
                 self.manage_mix_change()
 
+            self._absorb_settings_readback(read_input)
+
             await asyncio.sleep(0.1)
         except usb.core.USBError as e:
             if e.errno in (16, 110):  # EBUSY / ETIMEDOUT — back off to avoid spam
@@ -1572,6 +1574,10 @@ class CoreEngine:
 
     def init_device(self):
         self.logger.info("Initializing device...")
+        # Ask the headset what it currently has, before pushing anything. The
+        # replies land on the listen loop and only fill in settings the user
+        # never chose here — see _absorb_settings_readback().
+        self._request_settings_readback()
         if self.device_config and self.device_config.device_init:
             endpoint = self.get_command_endpoint_address()
             total = len(self.device_config.device_init)
@@ -2047,6 +2053,50 @@ class CoreEngine:
         # Surface the EACCES state to the GUI; clear it once a clean pass happens.
         self.permission_error = had_eacces
         return not had_eacces
+
+    def _request_settings_readback(self) -> None:
+        """Send the queries whose replies carry the device's current settings."""
+        if self.device_config is None or not self.device_config.settings_readback:
+            return
+        endpoint = self.get_command_endpoint_address()
+        for readback in self.device_config.settings_readback:
+            try:
+                self.send_command([readback.request], endpoint)
+            except usb.core.USBError as e:
+                # Not worth a retry: the settings simply stay at their defaults.
+                self.logger.warning("Settings readback 0x%02x failed: %r",
+                                    readback.request, e)
+
+    def _absorb_settings_readback(self, response: list[int]) -> None:
+        """Adopt values the headset reports for settings the user never set.
+
+        ASM pushes its own settings at every device init, which is right when
+        the user has made a choice and wrong when they haven't: a headset
+        configured elsewhere — in GG on a dual-boot, or from the device's own
+        controls — got flattened to profile defaults the first time ASM ran.
+
+        A value read back from the device therefore fills in blanks only. Once
+        a setting exists in the user's settings file it is theirs, and nothing
+        the headset reports may overwrite it, or a stale reply would fight
+        every change they make.
+        """
+        if self.device_config is None or not self.device_config.settings_readback:
+            return
+        if not response:
+            return
+
+        for readback in self.device_config.settings_readback:
+            if response[0] != readback.starts_with:
+                continue
+            for name, value in readback.values_from(response).items():
+                if self.device_settings.was_chosen_by_user(name):
+                    continue
+                if self.device_settings.get(name, None) == value:
+                    continue
+                self.logger.info(
+                    "Adopting %s=%s read back from the headset (never set here)",
+                    name, value)
+                self.device_settings.settings[name] = value
 
     def _schedule_usb_permission_retry(self) -> None:
         """Retry acquiring the device before blaming the udev rules.

@@ -68,6 +68,25 @@ device:
   # families this is not a run of gain bytes: each band carries a frequency,
   # filter type, gain in decidecibels and Q, sent over three frames the last of
   # which commits the curve. See hardware_eq.py.
+  # Ask the headset for its own current values at init. Offsets are indexed
+  # like a status response_mapping (no report id): 0x20 replies with mic
+  # volume, sidetone and volume limiter, 0xa0 with the inactivity timer and
+  # the muted-mic LED brightness. These only fill in settings the user has
+  # never chosen here — a headset configured in GG on a dual-boot keeps what
+  # it had instead of being flattened to our defaults.
+  settings_readback:
+    - request: 0x20
+      starts_with: 0x20
+      mapping:
+        mic_volume: 0x01
+        mic_side_tone: 0x02
+        volume_limiter: 0x03
+    - request: 0xa0
+      starts_with: 0xa0
+      mapping:
+        pm_shutdown: 0x01
+        mic_mute_led_brightness: 0x02
+
   hardware_eq:
     format: parametric
     name_command: 0xa7

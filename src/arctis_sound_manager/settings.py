@@ -24,6 +24,8 @@ class DeviceSettings(JsonSerializable):
         self.vendor_id = vendor_id
         self.product_id = product_id
         self.settings = ObservableDict()
+        # Names that came from the settings file rather than a profile default.
+        self._user_chosen: set[str] = set()
         # -1 = not yet detected; loaded/overwritten by read_from_file if a cache exists
         self.settings['dial_interface'] = -1
 
@@ -45,12 +47,20 @@ class DeviceSettings(JsonSerializable):
             # Clean old / invalid settings
             if key in self.settings:
                 self.settings[key] = int(raw[key])
+                # Remember that this one came from the user rather than from a
+                # profile default, so a value read back from the headset can
+                # fill in the blanks without overriding a deliberate choice.
+                self._user_chosen.add(key)
+
+    def was_chosen_by_user(self, name: str) -> bool:
+        """True if *name* was loaded from the settings file, not defaulted."""
+        return name in self._user_chosen
 
         # if raw:
         #     self.settings = ObservableDict(raw)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name in ('vendor_id', 'product_id', 'settings'):
+        if name in ('vendor_id', 'product_id', 'settings', '_user_chosen'):
             super().__setattr__(name, value)
 
             return
