@@ -28,6 +28,16 @@ device:
     - [0x27, 'settings.wear_sense']
     - [0x09]
 
+  # On-device parametric EQ (parametric_eq, opcode 0x19). Same shape as the
+  # Nova 5: no connection byte in the band frame, no commit frame, and a
+  # 600 ms pause between the two writes.
+  hardware_eq:
+    format: parametric
+    name_command: 0x19
+    band_command: 0x33
+    bands_carry_connection: false
+    frame_delay_ms: 600
+
   audio:
     spatial_engine: hesuvi
 

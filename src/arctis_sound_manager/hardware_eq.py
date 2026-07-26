@@ -84,7 +84,8 @@ def encode_parametric_eq(bands: list[EqBand], name: str = "Custom",
                          report_id: int = 0x00,
                          name_command: int = 0xA7,
                          band_command: int = 0x33,
-                         commit_command: int | None = None) -> list[list[int]]:
+                         commit_command: int | None = None,
+                         bands_carry_connection: bool = True) -> list[list[int]]:
     """Frames for the parametric families (Nova 7 Gen 2: 0xA7, Nova 5: 0xA5).
 
     GG sends the curve in order:
@@ -98,6 +99,10 @@ def encode_parametric_eq(bands: list[EqBand], name: str = "Custom",
          needs the commit says so, and a profile that doesn't can't grow a
          stray frame by omission.
 
+    The band frame differs between families, and getting it wrong shifts every
+    byte of the curve: the Nova 7 Gen 2 repeats the connection there, the
+    Nova 5 and the GameBuds do not. Hence `bands_carry_connection`.
+
     Returned as byte lists ready for CoreEngine.send_command(), which pads
     each one to the profile's frame length.
     """
@@ -109,9 +114,13 @@ def encode_parametric_eq(bands: list[EqBand], name: str = "Custom",
     for band in bands:
         payload += list(encode_band(band))
 
+    band_frame = [report_id, band_command]
+    if bands_carry_connection:
+        band_frame.append(connection)
+
     frames = [
         [report_id, name_command, connection, preset_type] + name_bytes,
-        [report_id, band_command, connection] + payload,
+        band_frame + payload,
     ]
     if commit_command is not None:
         frames.append([report_id, commit_command])

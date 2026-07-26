@@ -1646,9 +1646,17 @@ class CoreEngine:
                 self.logger.error("Unknown hardware EQ format %r for %s",
                                   eq_format, self.device_config.name)
                 return False
+            options = dict(self.device_config.hardware_eq_options)
+            # Some families need the device to breathe between the name frame
+            # and the bands: GG raises its inter-command delay to 600 ms there
+            # (and its USB timeout to 1200 ms) for the Nova 5 and the GameBuds.
+            # Sending both back to back risks the curve not landing.
+            frame_delay = options.pop('frame_delay_ms', 0) / 1000
             frames = encoder(bands_from_gains([(b - 20) / 2 for b in bands]),
-                             **self.device_config.hardware_eq_options)
-            for frame in frames:
+                             **options)
+            for index, frame in enumerate(frames):
+                if index and frame_delay:
+                    time.sleep(frame_delay)
                 self.send_command(frame, endpoint)
             return True
 

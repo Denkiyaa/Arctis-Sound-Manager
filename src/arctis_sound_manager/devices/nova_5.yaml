@@ -58,6 +58,12 @@ device:
     format: parametric
     name_command: 0xa5
     band_command: 0x33
+    # Unlike the Nova 7 Gen 2, the band frame does not repeat the connection
+    # byte — including it would shift the whole curve by one byte.
+    bands_carry_connection: false
+    # GG raises its inter-command delay to 600 ms between the name and the
+    # bands for this family, and its USB timeout with it.
+    frame_delay_ms: 600
 
   online_status:
     status_variable: headset_power_status

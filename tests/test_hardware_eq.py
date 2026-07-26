@@ -47,6 +47,7 @@ PARAMETRIC_PROFILES = {
     "nova_7p_perc_battery.yaml": [0xA7, 0x33, 0x27],
     # The Nova 5 declares no commit opcode: it applies on the band frame.
     "nova_5.yaml": [0xA5, 0x33],
+    "gamebuds.yaml": [0x19, 0x33],
 }
 
 
@@ -155,3 +156,28 @@ def test_bands_are_appended_verbatim():
     engine.send_eq_command(bands)
 
     engine.send_command.assert_called_once_with([0x06, 0x33] + bands, 0)
+
+
+def test_families_needing_a_pause_get_one_between_frames(monkeypatch):
+    """GG raises its inter-command delay to 600 ms for these before the bands."""
+    import arctis_sound_manager.core as core_mod
+
+    slept: list[float] = []
+    monkeypatch.setattr(core_mod.time, "sleep", slept.append)
+
+    engine = _engine(_config("nova_5.yaml"))
+    engine.send_eq_command([20] * 10)
+
+    assert slept == [0.6], "the band frame must not follow the name immediately"
+
+
+def test_families_without_a_declared_pause_do_not_wait(monkeypatch):
+    import arctis_sound_manager.core as core_mod
+
+    slept: list[float] = []
+    monkeypatch.setattr(core_mod.time, "sleep", slept.append)
+
+    engine = _engine(_config("nova_7_perc_battery.yaml"))
+    engine.send_eq_command([20] * 10)
+
+    assert slept == []

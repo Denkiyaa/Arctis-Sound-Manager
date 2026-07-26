@@ -129,3 +129,16 @@ def test_wrong_band_count_is_rejected():
 def test_non_ascii_name_does_not_break_the_frame():
     frames = encode_parametric_eq(bands_from_gains([0.0] * 10), name="Café ✨")
     assert all(0 <= b <= 255 for b in frames[0])
+
+
+def test_band_frame_omits_the_connection_when_the_family_does():
+    """Nova 5 / GameBuds: an extra byte here shifts the whole curve."""
+    with_conn = encode_parametric_eq(bands_from_gains([0.0] * 10))
+    without = encode_parametric_eq(bands_from_gains([0.0] * 10),
+                                   bands_carry_connection=False)
+
+    assert len(with_conn[1]) - len(without[1]) == 1
+    assert without[1][:2] == [0x00, 0x33]
+    assert with_conn[1][:3] == [0x00, 0x33, CONNECTION_WIRELESS]
+    # The bands themselves are identical, only their offset differs.
+    assert without[1][2:] == with_conn[1][3:]

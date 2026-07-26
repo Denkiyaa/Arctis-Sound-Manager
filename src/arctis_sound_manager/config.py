@@ -239,8 +239,12 @@ class DeviceConfiguration:
         self.hardware_eq_format = hardware_eq.get('format', None)
         self.hardware_eq_options = {
             key: int(value) for key, value in hardware_eq.items()
-            if key.endswith('_command') and value is not None
+            if (key.endswith('_command') or key == 'frame_delay_ms')
+            and value is not None
         }
+        if 'bands_carry_connection' in hardware_eq:
+            self.hardware_eq_options['bands_carry_connection'] = bool(
+                hardware_eq['bands_carry_connection'])
         # Firmware value standing for 0 dB. GG derives the byte as
         # 2 * (zero_db_offset + gain), so this is that offset doubled: 20 for
         # the ±10 dB families, 24 for the ±12 dB ones (Nova 4). ASM's sliders
