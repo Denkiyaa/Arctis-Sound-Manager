@@ -34,6 +34,12 @@ EXPECTED_EQ_COMMANDS = {
     "arctis_nova_pro_wired.yaml": [0x06, 0x33],
 }
 
+# Profiles whose EQ takes a parametric payload instead (see hardware_eq.py).
+PARAMETRIC_PROFILES = {
+    "nova_7_perc_battery.yaml",
+    "nova_7p_perc_battery.yaml",
+}
+
 
 def _config(name: str) -> DeviceConfiguration:
     return DeviceConfiguration(YAML(typ="safe").load(DEVICES / name))
@@ -62,7 +68,7 @@ def test_declared_profiles_send_their_own_command(profile, expected):
 
 @pytest.mark.parametrize("profile", [
     p.name for p in sorted(DEVICES.glob("*.yaml"))
-    if p.name not in EXPECTED_EQ_COMMANDS
+    if p.name not in EXPECTED_EQ_COMMANDS and p.name not in PARAMETRIC_PROFILES
 ])
 def test_other_profiles_send_nothing(profile):
     """No command at all beats a command the headset cannot understand."""
@@ -71,6 +77,38 @@ def test_other_profiles_send_nothing(profile):
     assert engine.send_eq_command([20] * 10) is False
     engine.send_command.assert_not_called()
     assert engine.has_hardware_eq() is False
+
+
+@pytest.mark.parametrize("profile", sorted(PARAMETRIC_PROFILES))
+def test_parametric_profiles_send_three_frames(profile):
+    engine = _engine(_config(profile))
+
+    assert engine.send_eq_command([20] * 10) is True
+    assert engine.has_hardware_eq() is True
+    opcodes = [call.args[0][1] for call in engine.send_command.call_args_list]
+    assert opcodes == [0xA7, 0x33, 0x27]
+
+
+def test_slider_scale_maps_onto_decibels():
+    """ASM's 0-40 sliders are -10..+10 dB in half-decibel steps."""
+    engine = _engine(_config("nova_7_perc_battery.yaml"))
+
+    engine.send_eq_command([0, 20, 40] + [20] * 7)
+
+    band_frame = engine.send_command.call_args_list[1].args[0]
+    gains = [band_frame[3 + i * 6 + 3] for i in range(3)]
+    # -10 dB → -100 decidecibels → 0x9C, 0 dB → 0x00, +10 dB → 100 → 0x64
+    assert gains == [0x9C, 0x00, 0x64]
+
+
+def test_unknown_format_is_refused_not_guessed(monkeypatch):
+    config = _config("nova_7_perc_battery.yaml")
+    object.__setattr__(config, "hardware_eq_format", "does_not_exist")
+    engine = _engine(config)
+
+    assert engine.send_eq_command([20] * 10) is False
+    engine.send_command.assert_not_called()
+    assert engine.logger.error.called
 
 
 def test_no_device_connected_is_not_an_error():

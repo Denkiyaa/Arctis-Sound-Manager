@@ -1615,6 +1615,26 @@ class CoreEngine:
         if self.device_config is None:
             return False
 
+        endpoint = self.get_command_endpoint_address()
+
+        eq_format = self.device_config.hardware_eq_format
+        if eq_format:
+            # Parametric families (Nova 7 Gen 2 and friends): the curve is
+            # described band by band and sent over three frames, the last of
+            # which commits it. ASM's sliders are 0-40 with 20 = 0 dB, half a
+            # decibel per step, which is the -10..+10 dB the hardware takes.
+            from arctis_sound_manager.hardware_eq import ENCODERS, bands_from_gains
+
+            encoder = ENCODERS.get(eq_format)
+            if encoder is None:
+                self.logger.error("Unknown hardware EQ format %r for %s",
+                                  eq_format, self.device_config.name)
+                return False
+            frames = encoder(bands_from_gains([(b - 20) / 2 for b in bands]))
+            for frame in frames:
+                self.send_command(frame, endpoint)
+            return True
+
         command = self.device_config.hardware_eq_command
         if not command:
             self.logger.info(
@@ -1623,13 +1643,13 @@ class CoreEngine:
             )
             return False
 
-        endpoint = self.get_command_endpoint_address()
         self.send_command(list(command) + bands, endpoint)
         return True
 
     def has_hardware_eq(self) -> bool:
         """True when this headset exposes an EQ the custom band sliders drive."""
-        return bool(self.device_config and self.device_config.hardware_eq_command)
+        return bool(self.device_config and (self.device_config.hardware_eq_command
+                                            or self.device_config.hardware_eq_format))
     
     def is_device_online(self) -> bool:
         if self.device_status is None or self.device_config is None:

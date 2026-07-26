@@ -52,6 +52,13 @@ device:
         - bluetooth_auto_mute
         - bluetooth_connection
 
+  # On-device parametric EQ (parametric_eq, opcode 0xA7). Unlike the Nova Pro
+  # families this is not a run of gain bytes: each band carries a frequency,
+  # filter type, gain in decidecibels and Q, sent over three frames the last of
+  # which commits the curve. See hardware_eq.py.
+  hardware_eq:
+    format: parametric_a7
+
   online_status:
     status_variable: headset_power_status
     online_value: online

@@ -176,6 +176,9 @@ class DeviceConfiguration:
     # Wireless' report id and opcode and was sent to every device, where it was
     # silently ignored (#146).
     hardware_eq_command: list[int] | None
+    # Name of an encoder in hardware_eq.ENCODERS for devices whose EQ takes a
+    # parametric payload over several frames instead of plain gain bytes.
+    hardware_eq_format: str | None
 
     def __init__(self, raw_configuration: dict[str, Any]):
         raw_config: dict[str, Any] | None = raw_configuration.get('device', None)
@@ -196,10 +199,14 @@ class DeviceConfiguration:
         online_status = raw_config.get('online_status', None)
         self.online_status = OnlineStatusConfig(**online_status) if online_status else None
 
-        hardware_eq = raw_config.get('hardware_eq', None)
+        hardware_eq = raw_config.get('hardware_eq', None) or {}
         self.hardware_eq_command = (
-            [int(b) for b in hardware_eq['command']] if hardware_eq else None
+            [int(b) for b in hardware_eq['command']]
+            if 'command' in hardware_eq else None
         )
+        # Families whose EQ takes a full parametric description rather than a
+        # flat run of gains name an encoder from hardware_eq.py here.
+        self.hardware_eq_format = hardware_eq.get('format', None)
 
         if not self.name:
             raise ValueError("Invalid configuration: 'device.name' must be specified and non-empty")
