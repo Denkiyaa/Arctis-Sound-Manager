@@ -36,12 +36,12 @@ device:
     - [0x06, 0xc1, 'settings.pm_shutdown']        # Set inactive time (to 30 minutes, see INACTIVE_TIME_MINUTES)
     - [0x06, 0xb9, 'settings.transparent_level']
     - [0x06, 0x37, 'settings.mic_volume']         # Mic volume 100% (01 (mute) - a0 (100%))
-    - [0x06, 0xb2]
+    - [0x06, 0xb2, 'settings.bluetooth_power_status'] # BT on at power-up
     - [0x06, 0x47, 'settings.line_out_stream_main_left_volume', 'settings.line_out_stream_main_right_volume', 'settings.line_out_stream_aux_volume']
     - [0x06, 0x83, 0x01]
     - [0x06, 0xbd, 'settings.noise_cancelling']
     - [0x06, 0x27, 'settings.gain']               # Audio Gain (0x01: low, 0x02: high)
-    - [0x06, 0xb3, 0x00]
+    - [0x06, 0xb3, 'settings.bluetooth_auto_mute'] # what an incoming call does to game audio
     - [0x06, 0x39, 'settings.mic_side_tone']      # Set the sidetone to 0 (off) -> possible values: 0 (off 1 (low 2 (medium 3 (high)
     - [0x06, 0xbf, 'settings.mic_led_brightness'] # Mute mic led brightness (out of 10)
     - [0x06, 0x43, 'settings.line_out']
@@ -221,6 +221,29 @@ device:
           on_label: range
         default: 0x00 # speed
         update_sequence: [0x06, 0xc3, 'value']
+    bluetooth:
+      # Both plain writes per the spec, and both already read back in the
+      # 0x01b0 status frame — so the controls and the readout agree from the
+      # first poll. bt_call_default used to be forced to "do nothing" by a
+      # hardcoded byte at every init, silently undoing whatever the user had
+      # set from GG or the DAC itself.
+      bluetooth_power_status:
+        type: toggle
+        values:
+          off: 0x00
+          on: 0x01
+          off_label: off
+          on_label: on
+        default: 0x00
+        update_sequence: [0x06, 0xb2, 'value']
+      bluetooth_auto_mute:
+        type: button_group
+        values_mapping:
+          0x00: none
+          0x01: -12_db
+          0x02: mute
+        default: 0x00
+        update_sequence: [0x06, 0xb3, 'value']
     station:
       line_out:
         type: button_group

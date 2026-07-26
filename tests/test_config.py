@@ -68,13 +68,18 @@ def test_config_parse():
 
     assert config.settings is not None
 
-    assert len(config.settings) == 6
+    assert len(config.settings) == 7
     assert 'headset' in config.settings
     assert 'microphone' in config.settings
     assert 'power_management' in config.settings
     assert 'wireless' in config.settings
+    assert 'bluetooth' in config.settings
     assert 'station' in config.settings
     assert 'audio' in config.settings
+
+    # The DAC's two Bluetooth preferences, previously written with hardcoded
+    # bytes at init instead of being offered as controls.
+    assert len(config.settings['bluetooth']) == 2
 
     assert len(config.settings['headset']) == 1
     assert len(config.settings['microphone']) == 3
