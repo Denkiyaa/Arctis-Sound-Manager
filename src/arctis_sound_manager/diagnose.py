@@ -76,8 +76,14 @@ def _redact_settings(payload: dict) -> dict:
 
 
 def _section_versions() -> str:
+    from arctis_sound_manager.bug_reporter import _owning_package
+
     info = {
         'asm_version': project_version(),
+        # Which distro package owns the running code, and who built it. ASM is
+        # repackaged elsewhere under other names, with dependencies that don't
+        # always match ours — worth knowing before chasing a bug in the code.
+        'package':     _owning_package() or '(not from a distro package)',
         'python':      platform.python_version(),
         'platform':    platform.platform(),
         'distro':      _run(['cat', '/etc/os-release']) or '(no /etc/os-release)',

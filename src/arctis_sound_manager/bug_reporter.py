@@ -48,6 +48,35 @@ def _python_lib_versions() -> dict[str, str]:
     return out
 
 
+def _owning_package() -> str | None:
+    """Name, version and vendor of the distro package owning this module.
+
+    Answers "is this our build?" in one line of a bug report. ASM is
+    repackaged elsewhere under other names, and those builds don't
+    necessarily declare the same dependencies — a crash on a missing pactl
+    or a silent HeSuVi can come from the packaging rather than the code.
+    """
+    module_path = str(Path(__file__).resolve())
+    queries = (
+        ('rpm', ['rpm', '-qf', '--qf', '%{NAME} %{VERSION}-%{RELEASE} vendor=%{VENDOR}',
+                 module_path]),
+        ('pacman', ['pacman', '-Qoq', module_path]),
+        ('dpkg', ['dpkg', '-S', module_path]),
+    )
+    for manager, cmd in queries:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+        except Exception:
+            continue
+        if r.returncode != 0 or not r.stdout.strip():
+            continue
+        out = r.stdout.strip().splitlines()[0]
+        if manager == 'dpkg':
+            out = out.split(':', 1)[0]
+        return f'owned-by[{manager}]={out}'
+    return None
+
+
 def _detect_install_methods() -> list[str]:
     """Surface every install method present on this system at once.
 
@@ -84,6 +113,15 @@ def _detect_install_methods() -> list[str]:
             methods.append(f'{name}={ver}')
         except Exception:
             pass
+
+    # Which package actually owns the running code, and who built it. ASM is
+    # redistributed under other names — Fedora's Terra ships it as
+    # python3-arctis-sound-manager — and those builds can carry different
+    # dependencies from ours, so a report describing behaviour we can't
+    # reproduce may simply be describing a different package (#146, #140).
+    owner = _owning_package()
+    if owner:
+        methods.append(owner)
 
     # Every asm-daemon binary in PATH (catches pip --user installs that
     # don't show up in any package manager). Canonicalise each hit before
