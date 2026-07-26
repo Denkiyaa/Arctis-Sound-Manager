@@ -182,3 +182,20 @@ def test_families_without_a_declared_pause_do_not_wait(monkeypatch):
     engine.send_eq_command([20] * 10)
 
     assert slept == []
+
+
+def test_dbus_reports_parametric_families_as_having_an_eq():
+    """The GUI hides the custom EQ on `has_hardware_eq` being false.
+
+    That flag used to test hardware_eq_command alone, which parametric
+    families don't declare — so the control vanished from exactly the headsets
+    parametric support had just been written for (#146).
+    """
+    from arctis_sound_manager.dbus_service import ArctisManagerDbusSettingsService
+
+    for profile in sorted(PARAMETRIC_PROFILES) + sorted(EXPECTED_EQ_COMMANDS):
+        engine = _engine(_config(profile))
+        service = MagicMock()
+        service.core_engine = engine
+        assert ArctisManagerDbusSettingsService.get_list_options is not None
+        assert engine.has_hardware_eq() is True, f"{profile} would hide its EQ"
