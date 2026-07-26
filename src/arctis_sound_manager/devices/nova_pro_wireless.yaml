@@ -318,14 +318,20 @@ device:
         0x00: off
         0x01: connected
         0x02: disconnected
+    # The firmware reports nine battery levels, not a percentage: GG's own
+    # translate_headset_battery_level maps 0-8 onto 0/12/25/37/50/62/75/87/100.
+    # Showing "62 %" implies a precision the hardware never measured — each
+    # step covers about 12 points — so the value is snapped to a round number.
     headset_battery_charge:
       type: percentage
       perc_min: 0
       perc_max: 8
+      round_to: 10
     charge_slot_battery_charge:
       type: percentage
       perc_min: 0
       perc_max: 8
+      round_to: 10
     transparent_noise_cancelling_level:
       type: percentage
       perc_min: 0
