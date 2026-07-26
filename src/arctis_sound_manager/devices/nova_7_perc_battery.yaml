@@ -8,6 +8,7 @@ device:
     - 0x229e # Arctis Nova 7X v2 (variant)
     - 0x22a9 # Arctis Nova 7 Diablo IV Gen 2
     - 0x22a5 # Arctis Nova 7X Gen 2
+    - 0x22ad # Arctis Nova 7X White (upgrade revision)
   command_padding:
     length: 64
     position: end
