@@ -45,6 +45,30 @@ device:
   status:
     request: 0xb0
     response_mapping:
+      # ── Push events. This dongle leans on them heavily; the spec even notes
+      # that the connection event is "crucial for Nova 3 wireless devices to
+      # ensure accurate data retrieval". Unlike the Nova 7 family these are not
+      # prefixed 0x07 — the opcode itself leads the frame.
+      - starts_with: 0x45        # ChatMix dial moved
+        media_mix: 0x02
+        chat_mix: 0x03
+
+      - starts_with: 0x52        # mic jack + mute state
+        mic_status: 0x03
+
+      - starts_with: 0xb7        # battery level
+        headset_battery_charge: 0x02
+
+      - starts_with: 0xb9        # connection state
+        headset_power_status: 0x02
+
+      - starts_with: 0xbb        # charging state
+        cable_charging: 0x02
+
+      # ── Polled status (0xB0). Byte 0x02 is declared unused by the spec and
+      # is deliberately not read: a variable pointing at padding shows
+      # plausible noise rather than nothing — reading the battery there is
+      # exactly why a hand-written profile had it pinned at 100 % (#149).
       - starts_with: 0xb0
         headset_power_status: 0x01
         headset_battery_charge: 0x03
@@ -52,14 +76,13 @@ device:
         media_mix: 0x05
         chat_mix: 0x06
 
-    # Byte 0x02 of the frame is declared unused by the specification and is
-    # deliberately not read: a variable pointing at padding shows plausible
-    # noise rather than nothing.
     representation:
       headset:
         - headset_power_status
         - headset_battery_charge
         - cable_charging
+      mic:
+        - mic_status
 
   online_status:
     status_variable: headset_power_status
@@ -161,3 +184,9 @@ device:
       type: percentage
       perc_min: 0
       perc_max: 100
+    # Spec: [0] mute off, [1] mute on, [255] unknown.
+    mic_status:
+      type: int_str_mapping
+      values:
+        0x00: unmuted
+        0x01: muted
