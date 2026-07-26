@@ -386,6 +386,12 @@ class QMainApp(QBaseDesktopApp):
         if not has_dac and self._stack.currentIndex() == 3:
             self._switch_page(0)
 
+        # Headsets with no on-device equaliser can't do anything with the
+        # custom band sliders; only offer the switch to those that can (#146).
+        if 'has_hardware_eq' in settings:
+            self._equalizer_page.set_hardware_eq_available(
+                bool(settings['has_hardware_eq']))
+
         # Daemon flagged a USB EACCES on the currently-attached device. The
         # rules file might be valid (so the startup dialog at gui.py:142
         # didn't fire) but they weren't applied to this device because it

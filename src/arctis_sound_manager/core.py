@@ -1602,9 +1602,34 @@ class CoreEngine:
         except Exception as e:
             self.logger.warning(f"Failed to apply stored EQ: {e}")
 
-    def send_eq_command(self, bands: list[int]) -> None:
+    def send_eq_command(self, bands: list[int]) -> bool:
+        """Push the 10-band EQ to the headset. Returns False if it has none.
+
+        The command bytes come from the device profile: they used to be
+        hardcoded to [0x06, 0x33] — the Nova Pro Wireless' report id and
+        opcode — and sent to whatever was connected. On every other family
+        that is not a valid command, so the headset discarded it without a
+        word and the custom EQ silently did nothing (#146). Sending it anyway
+        is worse than not sending it: it makes a dead control look alive.
+        """
+        if self.device_config is None:
+            return False
+
+        command = self.device_config.hardware_eq_command
+        if not command:
+            self.logger.info(
+                "%s has no on-device equaliser ASM can drive — custom EQ not sent.",
+                self.device_config.name,
+            )
+            return False
+
         endpoint = self.get_command_endpoint_address()
-        self.send_command([0x06, 0x33] + bands, endpoint)
+        self.send_command(list(command) + bands, endpoint)
+        return True
+
+    def has_hardware_eq(self) -> bool:
+        """True when this headset exposes an EQ the custom band sliders drive."""
+        return bool(self.device_config and self.device_config.hardware_eq_command)
     
     def is_device_online(self) -> bool:
         if self.device_status is None or self.device_config is None:

@@ -254,6 +254,12 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
                 self.core_engine.device_config.status is not None
                 and 'gamedac' in self.core_engine.device_config.status.representation
             )
+            # Whether the custom 10-band EQ has anything to write to. Headsets
+            # without an on-device EQ must not be offered those sliders — the
+            # command simply doesn't exist for them (#146).
+            settings['has_hardware_eq'] = bool(
+                self.core_engine.device_config.hardware_eq_command
+            )
 
         return json.dumps(settings)
     

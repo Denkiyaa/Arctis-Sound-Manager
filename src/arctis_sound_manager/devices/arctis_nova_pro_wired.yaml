@@ -64,6 +64,12 @@ device:
   audio:
     spatial_engine: hesuvi
 
+  # On-device 10-band EQ (custom_eq): report id 0x06, opcode 0x33, then one
+  # byte per band on a 0-40 scale with 20 = 0 dB. Same base protocol as the
+  # Nova Pro Wireless.
+  hardware_eq:
+    command: [0x06, 0x33]
+
   # OLED screen transport parameters — explicit values keep the config
   # self-documenting and let oled_manager.py fall back cleanly for devices
   # that omit this section.

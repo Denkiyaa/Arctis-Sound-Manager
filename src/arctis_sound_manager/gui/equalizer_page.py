@@ -834,8 +834,28 @@ class EqualizerPage(QWidget):
 
     # ── Toggle ───────────────────────────────────────────────────────────────
 
+    def set_hardware_eq_available(self, available: bool) -> None:
+        """Offer the custom EQ only to headsets that have one.
+
+        The custom band sliders write straight to the headset. A model with no
+        on-device equaliser has no command to receive them, so the sliders
+        moved and nothing happened — reported on an Arctis Nova 7P (#146).
+        Those headsets keep the Sonar EQ, which runs in PipeWire and works on
+        everything.
+        """
+        if getattr(self, '_hardware_eq_available', None) == available:
+            return
+        self._hardware_eq_available = available
+        self._button.setVisible(available)
+        if not available and _current_mode() != "sonar":
+            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            STATE_FILE.write_text("sonar")
+        self._refresh()
+
     def _refresh(self):
         mode = _current_mode()
+        if getattr(self, '_hardware_eq_available', True) is False:
+            mode = "sonar"
         root = self.layout()
         stretch_item = root.itemAt(self._custom_stretch)
         if mode == "sonar":

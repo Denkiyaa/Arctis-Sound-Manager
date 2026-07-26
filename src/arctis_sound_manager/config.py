@@ -170,6 +170,12 @@ class DeviceConfiguration:
     oled: OledConfig | None  # None for screenless devices
     spatial_engine: str
     alsa_headroom: int | None  # None unless the device YAML declares a quirk (issue #105)
+    # Leading bytes of the on-device 10-band EQ command, e.g. [0x06, 0x33].
+    # None ⇒ this headset has no EQ ASM knows how to drive, and the custom EQ
+    # must not be offered: the command used to be hardcoded to the Nova Pro
+    # Wireless' report id and opcode and was sent to every device, where it was
+    # silently ignored (#146).
+    hardware_eq_command: list[int] | None
 
     def __init__(self, raw_configuration: dict[str, Any]):
         raw_config: dict[str, Any] | None = raw_configuration.get('device', None)
@@ -189,6 +195,11 @@ class DeviceConfiguration:
 
         online_status = raw_config.get('online_status', None)
         self.online_status = OnlineStatusConfig(**online_status) if online_status else None
+
+        hardware_eq = raw_config.get('hardware_eq', None)
+        self.hardware_eq_command = (
+            [int(b) for b in hardware_eq['command']] if hardware_eq else None
+        )
 
         if not self.name:
             raise ValueError("Invalid configuration: 'device.name' must be specified and non-empty")

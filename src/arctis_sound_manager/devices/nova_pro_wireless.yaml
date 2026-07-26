@@ -123,6 +123,13 @@ device:
         - wireless_mode
         - wireless_pairing
   
+  # On-device 10-band EQ (custom_eq): report id 0x06, opcode 0x33, then one
+  # byte per band. GG works in dB and converts with 2 * (10 + gain), so the
+  # wire values run 0-40 with 20 = 0 dB — which is the scale ASM's sliders
+  # already use.
+  hardware_eq:
+    command: [0x06, 0x33]
+
   online_status:
     status_variable: headset_power_status
     online_value: online
