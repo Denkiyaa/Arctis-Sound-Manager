@@ -6,6 +6,13 @@ if [ "$1" = "configure" ]; then
     udevadm control --reload-rules 2>/dev/null || true
     udevadm trigger --action=add --subsystem-match=usb 2>/dev/null || true
 
+    # Upgrade ($2 holds the previous version): apt replaced the files, but the
+    # running asm-daemon still holds the old code in memory and would keep
+    # serving it until the next reboot.
+    if [ -n "${2:-}" ] && [ -x /usr/lib/arctis-sound-manager/restart-user-services.sh ]; then
+        /usr/lib/arctis-sound-manager/restart-user-services.sh || true
+    fi
+
     REAL_USER="${SUDO_USER:-}"
 
     # If PySide6 is not available as a system package (e.g. Ubuntu 22.04),

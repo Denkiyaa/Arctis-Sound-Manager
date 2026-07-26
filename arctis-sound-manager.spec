@@ -111,6 +111,9 @@ install -Dm644 dinit/arctis-video-router %{buildroot}%{_datadir}/%{name}/dinit/a
 install -Dm644 dinit/arctis-gui %{buildroot}%{_datadir}/%{name}/dinit/arctis-gui
 install -Dm644 dinit/pipewire-filter-chain %{buildroot}%{_datadir}/%{name}/dinit/pipewire-filter-chain
 install -Dm755 scripts/asm-diag-dinit.py %{buildroot}%{_bindir}/asm-diag-dinit
+%{_prefix}/lib/%{name}/restart-user-services.sh
+# Post-upgrade helper (packaging machinery, not a user-facing command)
+install -Dm755 scripts/restart-user-services.sh %{buildroot}%{_prefix}/lib/%{name}/restart-user-services.sh
 
 # Desktop entry
 install -Dm644 src/arctis_sound_manager/desktop/ArctisManager.desktop \
@@ -151,6 +154,13 @@ install -Dm644 debian/asm-first-run.desktop \
 %systemd_user_post arctis-manager.service arctis-video-router.service arctis-gui.service
 udevadm control --reload-rules || :
 udevadm trigger --action=add --subsystem-match=usb || :
+
+# On upgrade ($1 >= 2), restart the user services: dnf replaced the files, but
+# the running asm-daemon still holds the previous version in memory.
+if [ "$1" -ge 2 ]; then
+    [ -x %{_prefix}/lib/%{name}/restart-user-services.sh ] && \
+        %{_prefix}/lib/%{name}/restart-user-services.sh || :
+fi
 
 # ── ClearCast / rnnoise COPR (Fedora/Nobara) ─────────────────────────────────
 # noise-suppression-for-voice lives in the lkiesow/noise-suppression-for-voice

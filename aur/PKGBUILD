@@ -104,6 +104,12 @@ package() {
     install -Dm755 scripts/asm-diag-dinit.py \
         "$pkgdir/usr/bin/asm-diag-dinit"
 
+    # Post-upgrade helper: restarts the user services so the new code is the
+    # code that runs. Not in /usr/bin — it is packaging machinery, not a
+    # command users are meant to invoke.
+    install -Dm755 scripts/restart-user-services.sh \
+        "$pkgdir/usr/lib/$pkgname/restart-user-services.sh"
+
     # PipeWire configs (shared, copied to user dir on first run by asm-setup)
     install -Dm644 scripts/pipewire/10-arctis-virtual-sinks.conf \
         "$pkgdir/usr/share/$pkgname/pipewire/10-arctis-virtual-sinks.conf"

@@ -1111,6 +1111,44 @@ class HomePage(QWidget):
         self._update_install_btn.clicked.connect(self._do_install_update)
         self._update_banner.show()
 
+    @Slot(str)
+    def on_restart_required(self, version: str):
+        """The package was upgraded while this window stayed open.
+
+        Takes precedence over "an update is available": the update is no longer
+        available, it is installed — what is missing is a restart. Leaving the
+        old banner up would invite an upgrade that has already happened.
+        """
+        if not version:
+            return
+
+        self._update_label.setText(
+            I18n.translate("ui", "restart_required").replace("{version}", version)
+        )
+        self._update_link_btn.hide()
+
+        # The banner's action button is reused rather than added to: a second
+        # button next to "Update now" would be two ways to do different things
+        # under one message.
+        try:
+            self._update_install_btn.clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        self._update_install_btn.setText(I18n.translate("ui", "restart_now"))
+        self._update_install_btn.clicked.connect(self._do_restart)
+        self._update_install_btn.show()
+        self._update_banner.show()
+
+    def _do_restart(self):
+        from arctis_sound_manager.runtime_staleness import (
+            restart_gui, restart_user_services,
+        )
+
+        # Services first: the daemon owns the USB device and the PipeWire links,
+        # so it must be the new code before the GUI reconnects to it.
+        restart_user_services()
+        restart_gui()
+
     def _do_install_update(self):
         from arctis_sound_manager.update_checker import (
             InstallMethod, UpdateInstallWorker, detect_all_install_methods,

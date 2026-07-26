@@ -130,6 +130,16 @@ class QMainApp(QBaseDesktopApp):
         self._update_worker.start()
         self._device_page.sig_update_result.connect(self._home_page.on_update_available)
 
+        # Watch for the package being upgraded underneath this window. Files on
+        # disk change during a `pacman -Syu`; this process keeps running the
+        # code it loaded at startup, and would otherwise go on doing so until
+        # the next reboot — reporting a version it is not executing.
+        from PySide6.QtCore import QTimer
+        self._staleness_timer = QTimer(self)
+        self._staleness_timer.setInterval(5 * 60 * 1000)
+        self._staleness_timer.timeout.connect(self._check_upgraded_under_us)
+        self._staleness_timer.start()
+
         # Check for new/updated translation files (non-blocking)
         from arctis_sound_manager.lang_updater import LangUpdateWorker
         self._lang_worker = LangUpdateWorker()
@@ -337,6 +347,17 @@ class QMainApp(QBaseDesktopApp):
         active_idx = 4 if index == 6 else index
         for i, btn in enumerate(self._sidebar_buttons):
             btn.set_active(i == active_idx)
+
+    def _check_upgraded_under_us(self) -> None:
+        """Surface an upgrade that landed while this window was open."""
+        from arctis_sound_manager.runtime_staleness import upgraded_under_us
+        new_version = upgraded_under_us()
+        if not new_version:
+            return
+        # Stop polling: the answer cannot change back, and the banner is now
+        # the only thing that matters until the user acts on it.
+        self._staleness_timer.stop()
+        self._home_page.on_restart_required(new_version)
 
     # ── Theme editor ──────────────────────────────────────────────────────────
 

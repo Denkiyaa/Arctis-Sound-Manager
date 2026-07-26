@@ -65,6 +65,10 @@ override_dh_auto_install:
 	install -Dm644 systemd/arctis-gui.service \
 	    $(DEST)/usr/lib/systemd/user/arctis-gui.service
 
+	# ── Post-upgrade helper (packaging machinery, not in /usr/bin) ──
+	install -Dm755 scripts/restart-user-services.sh \
+	    $(DEST)/usr/lib/arctis-sound-manager/restart-user-services.sh
+
 	# ── Desktop entry ───────────────────────────────────────
 	install -Dm644 src/arctis_sound_manager/desktop/ArctisManager.desktop \
 	    $(DEST)/usr/share/applications/ArctisManager.desktop
