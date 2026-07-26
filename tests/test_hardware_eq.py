@@ -48,6 +48,7 @@ PARAMETRIC_PROFILES = {
     # The Nova 5 declares no commit opcode: it applies on the band frame.
     "nova_5.yaml": [0xA5, 0x33],
     "gamebuds.yaml": [0x19, 0x33],
+    "nova_3_wireless.yaml": [0xA5, 0x33],
 }
 
 

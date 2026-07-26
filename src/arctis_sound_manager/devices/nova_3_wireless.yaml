@@ -1,0 +1,163 @@
+# ── Arctis Nova 3P / 3X Wireless (0x2269 / 0x226d) ────────────────────────────
+#
+# These dongles used to share a profile with the WIRED Nova 3 (0x12ec) and were
+# driven as if they were one: report id 0x06 over control-feature transfers on
+# interface 4, and no status polling at all because "the connection is always-on
+# via USB" — true of the wired model, not of a dongle with a headset at the
+# other end of a radio link.
+#
+# Rewritten from SteelSeries' own specification (base_arctis_nova_3_wireless_tx)
+# with the USB layout confirmed on real hardware by @rhavinx in #149: interface
+# 3 carries the 64-byte interrupt endpoint, interface 4 is a 4-byte consumer
+# endpoint and interface 5 a second 64-byte one. Commands take report id 0x00,
+# like every other recent Arctis dongle.
+#
+# Gains over the old shared profile: battery level, powered on/off detection and
+# the routing that follows from it, ChatMix, a 10-step sidetone instead of 4,
+# plus the volume limiter, sleep timer and range/quality switch. The mic LED
+# brightness is gone — this dongle has no such command, ASM was writing into
+# the void.
+# ──────────────────────────────────────────────────────────────────────────────
+device:
+  name: SteelSeries Arctis Nova 3 Wireless
+  vendor_id: 0x1038
+  product_ids:
+    - 0x2269 # Arctis Nova 3P Wireless
+    - 0x226d # Arctis Nova 3X Wireless
+  command_padding:
+    length: 64
+    position: end
+    filler: 0x00
+
+  command_transport: ctrl_output  # HID SET_REPORT, report id 0x00
+  command_interface_index: [3, 0]
+  listen_interface_indexes: [3]
+
+  device_init:
+    - ['status.request']
+    - [0xa3, 'settings.pm_shutdown']
+    - [0x37, 'settings.mic_volume']
+    - [0x39, 'settings.mic_side_tone']
+    - [0x27, 'settings.volume_limiter']
+    - [0x35, 'settings.range_extend']
+    - ['status.request']
+
+  status:
+    request: 0xb0
+    response_mapping:
+      - starts_with: 0xb0
+        headset_power_status: 0x01
+        headset_battery_charge: 0x03
+        cable_charging: 0x04
+        media_mix: 0x05
+        chat_mix: 0x06
+
+    # Byte 0x02 of the frame is declared unused by the specification and is
+    # deliberately not read: a variable pointing at padding shows plausible
+    # noise rather than nothing.
+    representation:
+      headset:
+        - headset_power_status
+        - headset_battery_charge
+        - cable_charging
+
+  online_status:
+    status_variable: headset_power_status
+    online_value: on
+
+  audio:
+    spatial_engine: hesuvi
+
+  # On-device parametric EQ, same shape as the Nova 5: name opcode 0xA5, no
+  # commit frame, and a 600 ms pause before the bands.
+  hardware_eq:
+    format: parametric
+    name_command: 0xa5
+    band_command: 0x33
+    bands_carry_connection: false
+    frame_delay_ms: 600
+
+  settings:
+    headset:
+      volume_limiter:
+        type: toggle
+        values:
+          off: 0x00
+          on: 0x01
+          off_label: off
+          on_label: on
+        default: 0x00
+        update_sequence: [0x27, 'value']
+    microphone:
+      mic_volume:
+        # 0-15 on this family, not the 0-10 the wired profile declared.
+        type: slider
+        min: 0x00
+        max: 0x0f
+        step: 1
+        min_label: mic_muted
+        max_label: perc_100
+        default: 0x0f
+        update_sequence: [0x37, 'value']
+      mic_side_tone:
+        # Ten steps, where the shared wired profile offered four.
+        type: slider
+        min: 0x00
+        max: 0x0a
+        step: 1
+        min_label: off
+        max_label: perc_100
+        default: 0x00
+        update_sequence: [0x39, 'value']
+    wireless:
+      range_extend:
+        # Trades sample rate for radio range.
+        type: toggle
+        values:
+          off: 0x00
+          on: 0x01
+          off_label: speed
+          on_label: range
+        default: 0x00
+        update_sequence: [0x35, 'value']
+    power_management:
+      pm_shutdown:
+        type: button_group
+        values_mapping:
+          0x00: never
+          0x01: 1_minute
+          0x05: 5_minutes
+          0x0a: 10_minutes
+          0x0f: 15_minutes
+          0x1e: 30_minutes
+          0x2d: 45_minutes
+          0x3c: 60_minutes
+        default: 0x1e
+        update_sequence: [0xa3, 'value']
+
+  status_parse:
+    # connection_status: 0 not paired / 1 searching / 2 paired-not-connected /
+    # 3 paired-connected. Only 3 means the headset is reachable.
+    headset_power_status:
+      type: on_off
+      off: 0x02
+      on: 0x03
+    headset_battery_charge:
+      type: percentage
+      perc_min: 0
+      perc_max: 100
+    cable_charging:
+      type: int_str_mapping
+      values:
+        0x00: unknown
+        0x01: on
+        0x02: plugged_not_charging
+        0x03: off
+    media_mix:
+      type: percentage
+      perc_min: 0
+      perc_max: 100
+    chat_mix:
+      type: percentage
+      perc_min: 0
+      perc_max: 100

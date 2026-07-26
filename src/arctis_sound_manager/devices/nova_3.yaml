@@ -2,9 +2,10 @@ device:
   name: SteelSeries Arctis Nova 3
   vendor_id: 0x1038
   product_ids:
-    - 0x12ec # Arctis Nova 3
-    - 0x2269 # Arctis Nova 3P Wireless
-    - 0x226d # Arctis Nova 3X Wireless
+    - 0x12ec # Arctis Nova 3 (wired)
+  # The 3P / 3X Wireless dongles (0x2269 / 0x226d) used to be listed here and
+  # driven with this wired model's report id and transport, which they do not
+  # speak. They have their own profile now — see nova_3_wireless.yaml.
   command_padding:
     length: 64
     position: end
