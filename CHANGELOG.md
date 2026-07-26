@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.12] - 26 July 2026
+
+### Added
+
+- **The Arctis Nova 3P and 3X Wireless have their own profile at last.** They were sharing one with the *wired* Nova 3 and being driven as if they were that model — a different report id, a different transport, and on a USB interface whose endpoint is physically too small to carry their commands. Which is why several of their controls did nothing, and why they had no battery reading at all. Owners now get the **battery level** and **powered on/off detection** — and with it the automatic audio switching that depends on knowing whether the headset is on — plus **ChatMix**, a **sidetone with ten steps** where the shared profile offered four, the **volume limiter**, the **sleep timer**, the **range/quality switch**, and the **on-device equaliser**. One control disappears: the microphone LED brightness, which these dongles have no command for — ASM was sending it into the void. Huge thanks to **@rhavinx** ([#149](https://github.com/loteran/Arctis-Sound-Manager/issues/149)), whose hardware listing supplied the one detail SteelSeries' protocol documentation does not contain.
+
 ## [1.2.11] - 26 July 2026
 
 ### Added
