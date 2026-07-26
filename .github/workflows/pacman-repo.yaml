@@ -84,14 +84,32 @@ jobs:
           cp ./*.pkg.tar.zst /repo/
 
       - name: Build AUR-only dependencies
+        # Not fatal: on CachyOS both packages come from its own repositories, so
+        # a missing one costs nothing there. Only an Arch install that lacks them
+        # would notice, and a broken upstream build must not hold back the
+        # release of ASM itself.
+        continue-on-error: true
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          # noise-suppression-for-voice 0.91 uses int32_t without including
+          # <cstdint>, which GCC 13+ rejects. Forcing the include is enough, and
+          # leaves the package's own sources untouched — patching them here would
+          # be a fork we then have to maintain. C is unaffected: CXXFLAGS only.
+          printf 'CXXFLAGS+=" -include cstdint"\n' > /home/builder/.makepkg.conf
+          chown builder:builder /home/builder/.makepkg.conf
+
+          failed=""
           for pkg in python-pulsectl noise-suppression-for-voice; do
             sudo -u builder git clone --depth 1 \
-              "https://aur.archlinux.org/${pkg}.git" "/tmp/${pkg}"
-            ( cd "/tmp/${pkg}" && sudo -u builder makepkg -scf --noconfirm --nosign )
-            cp "/tmp/${pkg}"/*.pkg.tar.zst /repo/
+              "https://aur.archlinux.org/${pkg}.git" "/tmp/${pkg}" || { failed="$failed $pkg"; continue; }
+            if ( cd "/tmp/${pkg}" && sudo -u builder makepkg -scf --noconfirm --nosign ); then
+              cp "/tmp/${pkg}"/*.pkg.tar.zst /repo/
+            else
+              failed="$failed $pkg"
+              echo "::warning::Could not build $pkg — the repository will ship without it."
+            fi
           done
+          [ -z "$failed" ] || echo "AUR dependencies not built:$failed" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Import signing key
         env:
