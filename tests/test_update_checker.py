@@ -7,6 +7,7 @@ import subprocess
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -242,3 +243,64 @@ def test_detect_rpm_plus_pip_shadow_returns_both(tmp_path):
     assert InstallMethod.RPM in result
     assert InstallMethod.PIP in result
     assert len(result) == 2
+
+
+# ── Packages that don't go by our name (discussion #140) ─────────────────────
+
+def test_owning_package_is_looked_up_when_the_name_differs(monkeypatch):
+    """Fedora's Terra ships ASM as python3-arctis-sound-manager."""
+    from arctis_sound_manager import update_checker as uc
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["rpm", "-qf"]:
+            return SimpleNamespace(returncode=0, stdout="python3-arctis-sound-manager\n")
+        return SimpleNamespace(returncode=1, stdout="")
+
+    monkeypatch.setattr(uc.subprocess, "run", fake_run)
+
+    assert uc.installed_package_name(uc.InstallMethod.RPM) == "python3-arctis-sound-manager"
+
+
+def test_upgrade_command_targets_the_installed_package(monkeypatch):
+    """Upgrading the wrong package name reports success and changes nothing."""
+    from arctis_sound_manager import update_checker as uc
+
+    monkeypatch.setattr(uc, "installed_package_name",
+                        lambda method: "python3-arctis-sound-manager")
+
+    cmd = uc.package_manager_command(uc.InstallMethod.RPM)
+
+    assert "python3-arctis-sound-manager" in cmd
+    assert "--refresh" in cmd
+
+
+def test_upgrade_command_falls_back_to_the_default_name(monkeypatch):
+    from arctis_sound_manager import update_checker as uc
+
+    monkeypatch.setattr(uc, "installed_package_name", lambda method: None)
+
+    assert "arctis-sound-manager" in uc.package_manager_command(uc.InstallMethod.RPM)
+
+
+def test_dpkg_output_is_reduced_to_the_package_name(monkeypatch):
+    """dpkg -S answers "package: /path"."""
+    from arctis_sound_manager import update_checker as uc
+
+    monkeypatch.setattr(uc.subprocess, "run", lambda cmd, **kw: SimpleNamespace(
+        returncode=0, stdout="arctis-sound-manager: /usr/lib/python3/dist-packages/x.py\n"))
+
+    assert uc.installed_package_name(uc.InstallMethod.APT) == "arctis-sound-manager"
+
+
+def test_a_renamed_package_is_still_detected_as_a_system_install(monkeypatch):
+    """Otherwise the app offers a pip update to someone running an RPM."""
+    from arctis_sound_manager import update_checker as uc
+
+    monkeypatch.setattr(uc.subprocess, "run", lambda cmd, **kw: SimpleNamespace(
+        returncode=1, stdout=""))
+    monkeypatch.setattr(uc.shutil, "which", lambda name: None)
+    monkeypatch.setattr(uc, "installed_package_name",
+                        lambda method: "python3-arctis-sound-manager"
+                        if method is uc.InstallMethod.RPM else None)
+
+    assert uc.InstallMethod.RPM in uc.detect_all_install_methods()

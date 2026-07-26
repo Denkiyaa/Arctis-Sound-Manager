@@ -1113,8 +1113,8 @@ class HomePage(QWidget):
 
     def _do_install_update(self):
         from arctis_sound_manager.update_checker import (
-            InstallMethod, PACKAGE_MANAGER_COMMANDS,
-            UpdateInstallWorker, detect_all_install_methods,
+            InstallMethod, UpdateInstallWorker, detect_all_install_methods,
+            package_manager_command,
         )
         from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
@@ -1129,7 +1129,7 @@ class HomePage(QWidget):
             return
 
         method = all_methods[0] if all_methods else InstallMethod.PIP
-        cmd = PACKAGE_MANAGER_COMMANDS.get(method)
+        cmd = package_manager_command(method)
 
         if cmd:
             # Package manager install — open a terminal with the command, or copy to clipboard

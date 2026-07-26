@@ -667,8 +667,8 @@ class DevicePage(QWidget):
 
     def _do_install_update(self) -> None:
         from arctis_sound_manager.update_checker import (
-            InstallMethod, PACKAGE_MANAGER_COMMANDS, UpdateInstallWorker,
-            build_terminal_cmd, detect_all_install_methods,
+            InstallMethod, UpdateInstallWorker, build_terminal_cmd,
+            detect_all_install_methods, package_manager_command,
         )
         from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import (
@@ -683,7 +683,7 @@ class DevicePage(QWidget):
             return
 
         method = all_methods[0] if all_methods else InstallMethod.PIP
-        cmd = PACKAGE_MANAGER_COMMANDS.get(method)
+        cmd = package_manager_command(method)
 
         if cmd:
             terminal_args = build_terminal_cmd(cmd)

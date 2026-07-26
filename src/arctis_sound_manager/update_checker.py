@@ -27,6 +27,42 @@ class InstallMethod(Enum):
     UNKNOWN = auto()
 
 
+#: Queries that name the distro package owning an arbitrary file, per manager.
+_OWNER_QUERIES: dict[InstallMethod, list[str]] = {
+    InstallMethod.RPM:    ["rpm", "-qf", "--qf", "%{NAME}"],
+    InstallMethod.PACMAN: ["pacman", "-Qoq"],
+    InstallMethod.APT:    ["dpkg", "-S"],
+}
+
+
+def installed_package_name(method: InstallMethod) -> str | None:
+    """Name of the distro package ASM is actually running from, or None.
+
+    Not always "arctis-sound-manager": third-party repackagers pick their own
+    name — Fedora's Terra ships it as `python3-arctis-sound-manager`. Looking
+    up the package that owns this very module works whatever it is called,
+    where a hardcoded name silently reports "not installed" and sends the user
+    down the pip path for a system package (discussion #140).
+    """
+    query = _OWNER_QUERIES.get(method)
+    if query is None:
+        return None
+    module_path = str(Path(__file__).resolve())
+    try:
+        r = subprocess.run(query + [module_path],
+                           capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+
+    out = r.stdout.strip().splitlines()[0]
+    if method == InstallMethod.APT:
+        # dpkg -S answers "package: /path"
+        out = out.split(":", 1)[0]
+    return out.strip() or None
+
+
 def detect_all_install_methods() -> list[InstallMethod]:
     """Detect EVERY install method that currently has arctis-sound-manager installed.
 
@@ -46,8 +82,13 @@ def detect_all_install_methods() -> list[InstallMethod]:
             r = subprocess.run(cmd + args, capture_output=True, text=True, timeout=5)
             if r.returncode == 0:
                 found.append(method)
+                continue
         except FileNotFoundError:
-            pass
+            continue
+        # The package may carry another name — a third-party repackage, or a
+        # distro convention. Ask which package owns this module instead.
+        if installed_package_name(method):
+            found.append(method)
 
     if shutil.which("pipx"):
         try:
@@ -112,12 +153,35 @@ def detect_install_method() -> InstallMethod:
     return methods[0] if methods else InstallMethod.PIP
 
 
-PACKAGE_MANAGER_COMMANDS: dict[InstallMethod, str] = {
+#: Upgrade command per manager, with {pkg} filled in by package_manager_command().
+_PACKAGE_MANAGER_TEMPLATES: dict[InstallMethod, str] = {
     # --refresh forces dnf to re-sync COPR metadata; without it a stale cache
     # can report "nothing to upgrade" even when a newer package exists.
-    InstallMethod.RPM:    "sudo dnf upgrade --refresh arctis-sound-manager && asm-setup",
-    InstallMethod.PACMAN: "paru -S arctis-sound-manager && asm-setup",
-    InstallMethod.APT:    "sudo apt update && sudo apt upgrade arctis-sound-manager && asm-setup",
+    InstallMethod.RPM:    "sudo dnf upgrade --refresh {pkg} && asm-setup",
+    InstallMethod.PACMAN: "paru -S {pkg} && asm-setup",
+    InstallMethod.APT:    "sudo apt update && sudo apt upgrade {pkg} && asm-setup",
+}
+
+
+def package_manager_command(method: InstallMethod) -> str | None:
+    """Upgrade command naming the package actually installed.
+
+    Upgrading a hardcoded "arctis-sound-manager" is a no-op when the installed
+    package goes by another name: the manager reports success, nothing changes,
+    and the app keeps offering the same update. Two users hit exactly that with
+    Fedora's Terra build, which is named python3-arctis-sound-manager
+    (discussion #140).
+    """
+    template = _PACKAGE_MANAGER_TEMPLATES.get(method)
+    if template is None:
+        return None
+    return template.format(pkg=installed_package_name(method) or "arctis-sound-manager")
+
+
+#: Back-compat view for callers that only need the default package name.
+PACKAGE_MANAGER_COMMANDS: dict[InstallMethod, str] = {
+    method: template.format(pkg="arctis-sound-manager")
+    for method, template in _PACKAGE_MANAGER_TEMPLATES.items()
 }
 
 log = logging.getLogger(__name__)
