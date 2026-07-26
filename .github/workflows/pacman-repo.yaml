@@ -102,6 +102,13 @@ jobs:
           for pkg in python-pulsectl noise-suppression-for-voice; do
             sudo -u builder git clone --depth 1 \
               "https://aur.archlinux.org/${pkg}.git" "/tmp/${pkg}" || { failed="$failed $pkg"; continue; }
+            # An epoch puts a colon in the package filename, and GitHub rewrites
+            # colons in release asset names — pacman would then request a file
+            # that does not exist under that name and fail with 404. Dropping it
+            # is safe here: this repository has no version history to preserve,
+            # and where the AUR build is already installed its epoch keeps it
+            # winning, so nothing is downgraded behind the user's back.
+            sudo -u builder sed -i '/^epoch=/d' "/tmp/${pkg}/PKGBUILD"
             if ( cd "/tmp/${pkg}" && sudo -u builder makepkg -scf --noconfirm --nosign ); then
               cp "/tmp/${pkg}"/*.pkg.tar.zst /repo/
             else
