@@ -26,6 +26,7 @@ set -euo pipefail
 REPO_URL="https://github.com/loteran/Arctis-Sound-Manager"
 COPR="loteran/arctis-sound-manager"
 PPA="ppa:loteran/arctis-sound-manager"
+PACMAN_REPO="https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo"
 PKG="arctis-sound-manager"
 
 DRY_RUN=0
@@ -94,6 +95,34 @@ detect() {
 }
 
 # ── install paths ─────────────────────────────────────────────────────────────
+# Preferred on Arch: a signed binary repository. It needs no AUR helper and no
+# compilation — and, unlike the AUR, PackageKit can see it, which is what puts
+# ASM in Discover and GNOME Software.
+pacman_repo_install() {
+    command -v pacman >/dev/null 2>&1 || die "pacman not found — is this really an Arch-family system?"
+    local key="/tmp/asm-repo.key" fpr=""
+
+    run curl -fsSL "$PACMAN_REPO/arctis-sound-manager.key" -o "$key"
+    if [ "$DRY_RUN" -eq 0 ]; then
+        fpr="$(gpg --show-keys --with-colons "$key" 2>/dev/null | awk -F: '/^fpr/ {print $10; exit}')"
+        [ -n "$fpr" ] || return 1
+    fi
+    run sudo pacman-key --add "$key"
+    run sudo pacman-key --lsign-key "${fpr:-<fingerprint>}"
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '    \033[2m$ append [%s] to /etc/pacman.conf\033[0m\n' "$PKG"
+    elif ! grep -q "^\[$PKG\]" /etc/pacman.conf; then
+        printf '\n[%s]\nServer = %s\n' "$PKG" "$PACMAN_REPO" \
+            | sudo tee -a /etc/pacman.conf >/dev/null
+        say "Added [$PKG] to /etc/pacman.conf"
+    else
+        say "[$PKG] already in /etc/pacman.conf"
+    fi
+
+    run sudo pacman -Sy --needed --noconfirm "$PKG"
+}
+
 aur_install() {
     [ "$(id -u)" -eq 0 ] && die "Don't run this as root on Arch — AUR helpers refuse to run as root. Re-run as your normal user."
     local helper=""
@@ -162,7 +191,7 @@ fi
 
 case "$flavor" in
     bazzite|silverblue|steamos) say "Plan: install inside a Distrobox container." ;;
-    arch)   say "Plan: install '$PKG' from the AUR." ;;
+    arch)   say "Plan: add the signed '$PKG' pacman repository, then install '$PKG' (falls back to the AUR)." ;;
     fedora) say "Plan: enable COPR '$COPR', then install '$PKG'." ;;
     debian) say "Plan: add PPA '$PPA', then install '$PKG'." ;;
     unknown) die "Couldn't recognise this distribution. Install manually — see $REPO_URL#installation" ;;
@@ -172,7 +201,16 @@ confirm
 
 case "$flavor" in
     bazzite|silverblue|steamos) immutable_install "$flavor" ;;
-    arch)   aur_install;  post_setup ;;
+    arch)
+        # The binary repository is the path that also makes ASM appear in
+        # Discover. If it is unreachable — no network to the release assets, a
+        # key that will not verify — the AUR still works, so fall back rather
+        # than fail.
+        if ! pacman_repo_install; then
+            warn "Binary repository unavailable — falling back to the AUR."
+            aur_install
+        fi
+        post_setup ;;
     fedora) copr_install; post_setup ;;
     debian) ppa_install;  post_setup ;;
 esac

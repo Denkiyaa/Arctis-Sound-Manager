@@ -1,0 +1,187 @@
+name: Publish pacman repository
+
+# Builds the Arch package from aur/PKGBUILD and publishes it, signed, as a
+# binary pacman repository hosted on a fixed GitHub release (tag: pacman-repo).
+#
+# Why this exists alongside the AUR package: Discover, GNOME Software and every
+# other AppStream front-end talk to PackageKit, and PackageKit's alpm backend
+# only ever sees repositories listed in /etc/pacman.conf. The AUR is invisible
+# to it. A binary repository is the only way an Arch/CachyOS user can find and
+# install ASM from a graphical software centre.
+#
+# Two dependencies live in the AUR rather than the official repositories
+# (python-pulsectl, noise-suppression-for-voice), so pacman could not satisfy
+# them from extra/ alone. They are rebuilt here and shipped in the same
+# repository, otherwise installing from Discover fails on an unresolvable
+# dependency. CachyOS carries both in its own repositories; ours are only used
+# where they are missing.
+
+# Called by release.yaml at the end of a release, exactly like pypi-publish.
+# It is NOT triggered by `on: release` — the GitHub release is created with the
+# default GITHUB_TOKEN, and events raised by that token deliberately do not
+# start further workflows, so an `on: release` trigger here would never fire.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v1.2.14)"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. v1.2.14)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install build tooling
+        run: |
+          pacman -Syu --noconfirm --needed git python-installer uv github-cli openssh
+
+      - name: Resolve tag and version
+        id: ver
+        run: |
+          TAG="${{ inputs.tag }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ver.outputs.tag }}
+
+      - name: Create build user
+        run: |
+          # makepkg refuses to run as root, by design.
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Build arctis-sound-manager
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p /repo && chown builder:builder /repo
+          cd aur
+          # The PKGBUILD in the repository still carries the previous version
+          # until sync-packaging-version regenerates it, and it may run after
+          # this workflow. Pin it to the tag being released.
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
+          # -d skips the dependency check: every runtime dependency is resolved
+          # on the user's machine at install time, and two of them are not in
+          # the official repositories anyway. The package is arch=any pure
+          # Python, so nothing in the build itself needs them.
+          sudo -u builder makepkg -dcf --noconfirm --nosign
+          cp ./*.pkg.tar.zst /repo/
+
+      - name: Build AUR-only dependencies
+        run: |
+          set -euo pipefail
+          for pkg in python-pulsectl noise-suppression-for-voice; do
+            sudo -u builder git clone --depth 1 \
+              "https://aur.archlinux.org/${pkg}.git" "/tmp/${pkg}"
+            ( cd "/tmp/${pkg}" && sudo -u builder makepkg -scf --noconfirm --nosign )
+            cp "/tmp/${pkg}"/*.pkg.tar.zst /repo/
+          done
+
+      - name: Import signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          KEY_ID=$(gpg --list-secret-keys --keyid-format long \
+                   | awk '/^sec/ {print $2}' | cut -d/ -f2 | head -1)
+          echo "GPG_KEY_ID=$KEY_ID" >> "$GITHUB_ENV"
+          # Published alongside the repository so users can verify it without
+          # depending on a keyserver being reachable.
+          gpg --armor --export "$KEY_ID" > /repo/arctis-sound-manager.key
+
+      - name: Sign packages and build the database
+        run: |
+          set -euo pipefail
+          cd /repo
+          for f in *.pkg.tar.zst; do
+            gpg --batch --yes --detach-sign --no-armor --local-user "$GPG_KEY_ID" "$f"
+          done
+          repo-add --sign --key "$GPG_KEY_ID" \
+            arctis-sound-manager.db.tar.gz ./*.pkg.tar.zst
+          # repo-add leaves .db and .files as symlinks to the .tar.gz archives.
+          # A GitHub release stores plain files, and pacman fetches the
+          # extension-less names, so materialise them.
+          for l in arctis-sound-manager.db arctis-sound-manager.files; do
+            cp -L "$l.tar.gz" "$l"
+            cp -L "$l.tar.gz.sig" "$l.sig"
+          done
+          ls -la
+
+      - name: Publish to the pacman-repo release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd /repo
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          cat > /tmp/notes.md <<'NOTES'
+          Binary pacman repository for Arch Linux, CachyOS, EndeavourOS and other
+          Arch derivatives — the one form of the package a graphical software
+          centre (Discover, GNOME Software) can see, since PackageKit cannot read
+          the AUR.
+
+          Setup is handled by the installer:
+
+              curl -fsSL https://loteran.github.io/Arctis-Sound-Manager/install.sh | bash
+
+          Or by hand — trust the signing key, add the repository, install:
+
+              curl -fsSL https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo/arctis-sound-manager.key -o /tmp/asm.key
+              sudo pacman-key --add /tmp/asm.key
+              sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/asm.key | awk -F: '/^fpr/ {print $10; exit}')"
+              sudo tee -a /etc/pacman.conf <<'EOF'
+
+              [arctis-sound-manager]
+              Server = https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo
+              EOF
+              sudo pacman -Sy arctis-sound-manager
+
+          This release is a moving target: its assets are replaced on every
+          version so the Server URL never changes. Do not delete it, and do not
+          expect its tag to describe the version it holds.
+          NOTES
+          sed -i 's/^          //' /tmp/notes.md
+
+          if ! gh release view pacman-repo --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create pacman-repo \
+              --repo "$GITHUB_REPOSITORY" \
+              --target main \
+              --latest=false \
+              --title "pacman repository" \
+              --notes-file /tmp/notes.md
+          else
+            gh release edit pacman-repo --repo "$GITHUB_REPOSITORY" \
+              --notes-file /tmp/notes.md
+          fi
+
+          # --clobber: one asset set at a time, replaced in place, so a user's
+          # Server line keeps working across every release.
+          gh release upload pacman-repo ./* \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Summary
+        run: |
+          echo "Published pacman repository for ${{ steps.ver.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```ini' >> "$GITHUB_STEP_SUMMARY"
+          echo '[arctis-sound-manager]' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Server = https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

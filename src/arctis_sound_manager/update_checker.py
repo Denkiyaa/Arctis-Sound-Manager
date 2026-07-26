@@ -163,6 +163,36 @@ _PACKAGE_MANAGER_TEMPLATES: dict[InstallMethod, str] = {
 }
 
 
+def _pacman_upgrade_command(pkg: str) -> str:
+    """Upgrade command for an Arch-family install.
+
+    ASM reaches Arch systems two ways, and they do not upgrade alike:
+
+    - the signed binary repository (also what makes ASM visible to PackageKit,
+      and therefore to Discover) — plain ``pacman`` upgrades it, no AUR helper
+      involved, and the system's own updater picks it up unprompted;
+    - the AUR package, which pacman cannot upgrade at all and which needs paru
+      or yay to rebuild.
+
+    Offering ``paru -S`` to someone who installed from the repository asks them
+    to install an AUR helper for no reason — and offering ``pacman -Syu`` to an
+    AUR user reports "nothing to do" forever. So ask pacman whether the package
+    exists in a sync database: if it does, it is ours to upgrade.
+    """
+    try:
+        r = subprocess.run(["pacman", "-Si", pkg],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            return f"sudo pacman -Syu {pkg} && asm-setup"
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        pass
+
+    for helper in ("paru", "yay"):
+        if shutil.which(helper):
+            return f"{helper} -S {pkg} && asm-setup"
+    return f"paru -S {pkg} && asm-setup"
+
+
 def package_manager_command(method: InstallMethod) -> str | None:
     """Upgrade command naming the package actually installed.
 
@@ -175,7 +205,10 @@ def package_manager_command(method: InstallMethod) -> str | None:
     template = _PACKAGE_MANAGER_TEMPLATES.get(method)
     if template is None:
         return None
-    return template.format(pkg=installed_package_name(method) or "arctis-sound-manager")
+    pkg = installed_package_name(method) or "arctis-sound-manager"
+    if method is InstallMethod.PACMAN:
+        return _pacman_upgrade_command(pkg)
+    return template.format(pkg=pkg)
 
 
 #: Back-compat view for callers that only need the default package name.

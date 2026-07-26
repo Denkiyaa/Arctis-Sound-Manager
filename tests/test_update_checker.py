@@ -304,3 +304,50 @@ def test_a_renamed_package_is_still_detected_as_a_system_install(monkeypatch):
                         if method is uc.InstallMethod.RPM else None)
 
     assert uc.InstallMethod.RPM in uc.detect_all_install_methods()
+
+
+# ── Arch: binary repository vs AUR ───────────────────────────────────────────
+
+def test_pacman_upgrade_uses_pacman_when_the_package_is_in_a_repository(monkeypatch):
+    """Installed from our signed repository — no AUR helper should be needed."""
+    from arctis_sound_manager import update_checker as uc
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:2] == ["pacman", "-Si"]:
+            return SimpleNamespace(returncode=0, stdout="Repository : arctis-sound-manager\n")
+        return SimpleNamespace(returncode=1, stdout="")
+
+    monkeypatch.setattr(uc.subprocess, "run", fake_run)
+    monkeypatch.setattr(uc, "installed_package_name", lambda method: "arctis-sound-manager")
+
+    cmd = uc.package_manager_command(uc.InstallMethod.PACMAN)
+
+    assert cmd.startswith("sudo pacman -Syu arctis-sound-manager")
+    assert "paru" not in cmd and "yay" not in cmd
+
+
+def test_pacman_upgrade_falls_back_to_an_aur_helper(monkeypatch):
+    """Installed from the AUR — pacman cannot upgrade it, and would say so forever."""
+    from arctis_sound_manager import update_checker as uc
+
+    monkeypatch.setattr(uc.subprocess, "run",
+                        lambda cmd, **kw: SimpleNamespace(returncode=1, stdout=""))
+    monkeypatch.setattr(uc.shutil, "which", lambda name: "/usr/bin/yay" if name == "yay" else None)
+    monkeypatch.setattr(uc, "installed_package_name", lambda method: "arctis-sound-manager")
+
+    assert uc.package_manager_command(uc.InstallMethod.PACMAN) == \
+        "yay -S arctis-sound-manager && asm-setup"
+
+
+def test_pacman_upgrade_survives_pacman_being_absent(monkeypatch):
+    """Never raise out of a command-string builder."""
+    from arctis_sound_manager import update_checker as uc
+
+    def boom(cmd, **kwargs):
+        raise FileNotFoundError("pacman")
+
+    monkeypatch.setattr(uc.subprocess, "run", boom)
+    monkeypatch.setattr(uc.shutil, "which", lambda name: None)
+    monkeypatch.setattr(uc, "installed_package_name", lambda method: "arctis-sound-manager")
+
+    assert "arctis-sound-manager" in uc.package_manager_command(uc.InstallMethod.PACMAN)

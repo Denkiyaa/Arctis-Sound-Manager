@@ -312,3 +312,18 @@ jobs:
     uses: ./.github/workflows/pypi-publish.yaml
     with:
       tag: ${{ github.event.inputs.tag || github.ref_name }}
+
+  # Rebuild and republish the binary pacman repository, so Arch/CachyOS users
+  # installing from Discover get the same version as everyone else. Called
+  # rather than triggered: a release created with the default GITHUB_TOKEN
+  # raises no events that start other workflows.
+  pacman-repo:
+    needs: release
+    # Skip beta/pre-release tags, like aur-update and copr-build.
+    if: "!contains(github.event.inputs.tag || github.ref_name, 'b')"
+    permissions:
+      contents: write   # uploads the repository assets to the pacman-repo release
+    uses: ./.github/workflows/pacman-repo.yaml
+    with:
+      tag: ${{ github.event.inputs.tag || github.ref_name }}
+    secrets: inherit
