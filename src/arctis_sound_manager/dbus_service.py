@@ -154,6 +154,48 @@ class ArctisManagerDbusStatusService(ServiceInterface):
         return json.dumps(result)
 
 
+def build_sink_options(sinks, list_name: str) -> list[dict[str, str]]:
+    """Build the {id, name} options for the device pickers.
+
+    `node.nick` and `node.description` are both optional PipeWire properties.
+    A sink missing them used to fall through the `if id and name` guard and
+    disappear from the list without a word — which is how an ordinary output
+    ends up "not in the list" (Bluetooth speakers in #134, desktop speakers in
+    #146). Both now fall back to `node.name`, which always exists, then to
+    pulsectl's own description for the label.
+
+    The id stays whatever the resolvers already understand: home_page,
+    sonar_page, pactl and systray all match `node.nick` OR `node.name`, so an
+    id stored as a node.name round-trips. Sinks that already declare their
+    metadata keep the exact same id as before — saved settings are unaffected.
+
+    For `external_audio_devices` only physical sinks are listed, ALSA and
+    Bluetooth alike. The headset itself is included: pointing the Output
+    channel at it is a deliberate, supported setup (#139). ASM still never
+    auto-selects it — that stays gated by is_external_output_sink()'s default.
+    """
+    from arctis_sound_manager.pw_utils import is_external_output_sink
+
+    result: list[dict[str, str]] = []
+    for sink in sinks:
+        node_name = sink.proplist.get('node.name', '')
+
+        if list_name == 'external_audio_devices' and not is_external_output_sink(
+            SimpleNamespace(name=node_name, proplist=sink.proplist),
+            allow_headset=True,
+        ):
+            continue
+
+        nick = sink.proplist.get('node.nick', '')
+        identifier = nick or node_name
+        name = (sink.proplist.get('node.description', '') or nick
+                or getattr(sink, 'description', '') or node_name)
+
+        if identifier and name and not any(r['id'] == identifier for r in result):
+            result.append({'id': identifier, 'name': name})
+    return result
+
+
 class ArctisManagerDbusSettingsService(ServiceInterface):
     def __init__(self, core: CoreEngine):
         super().__init__(DBUS_SETTINGS_INTERFACE_NAME)
@@ -403,41 +445,8 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
     def get_list_options(self, list_name: 's') -> 's': # type: ignore
         result = []
         if list_name in ('pulse_audio_devices', 'external_audio_devices'):
-            sinks: list[TypedPulseSinkInfo] = self.core_engine.pa_audio_manager.sink_list_wrapper()
-            for sink in sinks:
-                node_name = sink.proplist.get('node.name', '')
-                # For external_audio_devices, only show physical sinks — ALSA and
-                # Bluetooth (bluez_output.*, issue #134). The headset itself is
-                # listed too: pointing the Output channel at it is a deliberate,
-                # supported setup that gives a second path to the headset with a
-                # flat EQ and no spatial processing (issue #139). ASM still never
-                # auto-selects it — that stays gated by
-                # pw_utils.is_external_output_sink()'s default.
-                if list_name == 'external_audio_devices':
-                    from arctis_sound_manager.pw_utils import is_external_output_sink
-                    # Match on node.name (the PipeWire name this list has always
-                    # keyed on) rather than sink.name, via a tiny view over the
-                    # same shape the predicate expects.
-                    if not is_external_output_sink(
-                        SimpleNamespace(name=node_name, proplist=sink.proplist),
-                        allow_headset=True,
-                    ):
-                        continue
-
-                id = sink.proplist.get('node.nick', '')
-                name = sink.proplist.get('node.description', sink.proplist.get('node.nick', ''))
-
-                if list_name == 'external_audio_devices':
-                    # Bluetooth sinks don't reliably expose node.nick; fall back
-                    # to the always-present node.name so they are still listed and
-                    # get a stable id (issue #134). The resolvers in home_page /
-                    # sonar_page / pactl / systray all match node.nick OR
-                    # node.name, so an id stored as a node.name round-trips.
-                    id = id or node_name
-                    name = name or node_name
-
-                if id and name and not any(r['id'] == id for r in result):
-                    result.append({ 'id': id, 'name': name })
+            result = build_sink_options(
+                self.core_engine.pa_audio_manager.sink_list_wrapper(), list_name)
         elif list_name == 'hrir_files':
             from arctis_sound_manager.hrir_catalog import list_hrir_options
             result = list_hrir_options()

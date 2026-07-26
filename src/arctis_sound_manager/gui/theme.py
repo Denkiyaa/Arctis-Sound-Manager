@@ -319,6 +319,20 @@ QLabel {{
     color: {TEXT_PRIMARY_};
 }}
 
+/* ── Tooltips ── */
+/* Without an explicit rule, a tooltip inherits the QWidget background above
+   but takes its text colour from the platform palette. On a dark theme under
+   GNOME/Wayland that lands as dark-on-dark: the mixer help popup showed up as
+   a plain black rectangle with nothing readable in it (#146). */
+QToolTip {{
+    background-color: {BG_CARD_};
+    color: {TEXT_PRIMARY_};
+    border: 1px solid {BORDER_};
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 10pt;
+}}
+
 /* ── Regular push buttons ── */
 QPushButton {{
     background-color: {BG_BUTTON_};
