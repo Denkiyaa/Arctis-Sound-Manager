@@ -29,15 +29,24 @@ DEVICES = Path(__file__).parent.parent / "src" / "arctis_sound_manager" / "devic
 
 # Profiles whose protocol we know drives an on-device EQ, and the exact bytes
 # that must lead the command.
+# profile → (leading command bytes, firmware value meaning 0 dB)
 EXPECTED_EQ_COMMANDS = {
-    "nova_pro_wireless.yaml": [0x06, 0x33],
-    "arctis_nova_pro_wired.yaml": [0x06, 0x33],
+    "nova_pro_wireless.yaml": ([0x06, 0x33], 20),
+    "arctis_nova_pro_wired.yaml": ([0x06, 0x33], 20),
+    # Plain gain bytes, no report id prefix, on ASM's own 0-40 scale.
+    "nova_7_discrete_battery.yaml": ([0x33], 20),
+    "nova_7p_discrete_battery.yaml": ([0x33], 20),
+    # Same opcode, but a ±12 dB scale: 0 dB is 24 here.
+    "nova_4.yaml": ([0x33], 24),
 }
 
 # Profiles whose EQ takes a parametric payload instead (see hardware_eq.py).
 PARAMETRIC_PROFILES = {
-    "nova_7_perc_battery.yaml",
-    "nova_7p_perc_battery.yaml",
+    # profile → the opcodes its frames must carry, in order
+    "nova_7_perc_battery.yaml": [0xA7, 0x33, 0x27],
+    "nova_7p_perc_battery.yaml": [0xA7, 0x33, 0x27],
+    # The Nova 5 declares no commit opcode: it applies on the band frame.
+    "nova_5.yaml": [0xA5, 0x33],
 }
 
 
@@ -58,11 +67,11 @@ def _engine(config: DeviceConfiguration | None) -> MagicMock:
 
 @pytest.mark.parametrize("profile,expected", sorted(EXPECTED_EQ_COMMANDS.items()))
 def test_declared_profiles_send_their_own_command(profile, expected):
+    command, zero_at = expected
     engine = _engine(_config(profile))
-    bands = [20] * 10
 
-    assert engine.send_eq_command(bands) is True
-    engine.send_command.assert_called_once_with(expected + bands, 0)
+    assert engine.send_eq_command([20] * 10) is True
+    engine.send_command.assert_called_once_with(command + [zero_at] * 10, 0)
     assert engine.has_hardware_eq() is True
 
 
@@ -79,14 +88,34 @@ def test_other_profiles_send_nothing(profile):
     assert engine.has_hardware_eq() is False
 
 
-@pytest.mark.parametrize("profile", sorted(PARAMETRIC_PROFILES))
-def test_parametric_profiles_send_three_frames(profile):
+@pytest.mark.parametrize("profile,expected_opcodes",
+                         sorted(PARAMETRIC_PROFILES.items()))
+def test_parametric_profiles_send_their_own_frames(profile, expected_opcodes):
+    """Each family's frame sequence comes from its own spec, not a default."""
     engine = _engine(_config(profile))
 
     assert engine.send_eq_command([20] * 10) is True
     assert engine.has_hardware_eq() is True
     opcodes = [call.args[0][1] for call in engine.send_command.call_args_list]
-    assert opcodes == [0xA7, 0x33, 0x27]
+    assert opcodes == expected_opcodes
+
+
+def test_nova_4_shifts_onto_its_own_zero():
+    """This family calls 0 dB 24, not 20 — a flat curve must not sit 2 dB low."""
+    engine = _engine(_config("nova_4.yaml"))
+
+    engine.send_eq_command([20] * 10)
+
+    frame = engine.send_command.call_args_list[0].args[0]
+    assert frame == [0x33] + [24] * 10
+
+
+def test_families_on_asm_scale_are_not_shifted():
+    engine = _engine(_config("nova_7_discrete_battery.yaml"))
+
+    engine.send_eq_command([20] * 10)
+
+    assert engine.send_command.call_args_list[0].args[0] == [0x33] + [20] * 10
 
 
 def test_slider_scale_maps_onto_decibels():

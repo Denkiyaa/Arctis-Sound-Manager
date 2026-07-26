@@ -177,8 +177,11 @@ class DeviceConfiguration:
     # silently ignored (#146).
     hardware_eq_command: list[int] | None
     # Name of an encoder in hardware_eq.ENCODERS for devices whose EQ takes a
-    # parametric payload over several frames instead of plain gain bytes.
+    # parametric payload over several frames instead of plain gain bytes,
+    # the opcodes that encoder needs, and the firmware value meaning 0 dB.
     hardware_eq_format: str | None
+    hardware_eq_options: dict[str, int]
+    hardware_eq_zero: int
 
     def __init__(self, raw_configuration: dict[str, Any]):
         raw_config: dict[str, Any] | None = raw_configuration.get('device', None)
@@ -205,8 +208,19 @@ class DeviceConfiguration:
             if 'command' in hardware_eq else None
         )
         # Families whose EQ takes a full parametric description rather than a
-        # flat run of gains name an encoder from hardware_eq.py here.
+        # flat run of gains name an encoder from hardware_eq.py here, plus the
+        # opcodes that encoder needs.
         self.hardware_eq_format = hardware_eq.get('format', None)
+        self.hardware_eq_options = {
+            key: int(value) for key, value in hardware_eq.items()
+            if key.endswith('_command') and value is not None
+        }
+        # Firmware value standing for 0 dB. GG derives the byte as
+        # 2 * (zero_db_offset + gain), so this is that offset doubled: 20 for
+        # the ±10 dB families, 24 for the ±12 dB ones (Nova 4). ASM's sliders
+        # are always 0-40 with 20 = 0 dB, and get shifted onto the device's own
+        # scale — without this a Nova 4 would sit 2 dB low across the board.
+        self.hardware_eq_zero = int(hardware_eq.get('zero_at', 20))
 
         if not self.name:
             raise ValueError("Invalid configuration: 'device.name' must be specified and non-empty")

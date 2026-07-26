@@ -1630,7 +1630,8 @@ class CoreEngine:
                 self.logger.error("Unknown hardware EQ format %r for %s",
                                   eq_format, self.device_config.name)
                 return False
-            frames = encoder(bands_from_gains([(b - 20) / 2 for b in bands]))
+            frames = encoder(bands_from_gains([(b - 20) / 2 for b in bands]),
+                             **self.device_config.hardware_eq_options)
             for frame in frames:
                 self.send_command(frame, endpoint)
             return True
@@ -1643,7 +1644,9 @@ class CoreEngine:
             )
             return False
 
-        self.send_command(list(command) + bands, endpoint)
+        # Shift ASM's 0-40 sliders onto whatever this family calls 0 dB.
+        shift = self.device_config.hardware_eq_zero - 20
+        self.send_command(list(command) + [b + shift for b in bands], endpoint)
         return True
 
     def has_hardware_eq(self) -> bool:

@@ -61,6 +61,13 @@ device:
         - headset_battery_charge
         - cable_charging
 
+  # On-device 10-band EQ (eq, opcode 0x33). Careful: this family runs on
+  # 2 * (12 + gain_dB), so the wire scale is 0-48 with 24 = 0 dB, not the 0-40
+  # of the Nova 7 / Nova Pro. zero_at shifts ASM's sliders onto it.
+  hardware_eq:
+    command: [0x33]
+    zero_at: 24
+
   online_status:
     status_variable: headset_power_status
     online_value: on

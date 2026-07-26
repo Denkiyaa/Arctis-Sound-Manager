@@ -51,6 +51,14 @@ device:
       wireless:
         - wireless_mode
 
+  # On-device parametric EQ (parametric_eq, opcode 0xA5). Same shape as the
+  # Nova 7 Gen 2 but with no commit frame: the spec declares no
+  # update_complete opcode, so the curve applies with the bands.
+  hardware_eq:
+    format: parametric
+    name_command: 0xa5
+    band_command: 0x33
+
   online_status:
     status_variable: headset_power_status
     online_value: online

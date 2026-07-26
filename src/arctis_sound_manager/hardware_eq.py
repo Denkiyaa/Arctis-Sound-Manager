@@ -81,16 +81,22 @@ def bands_from_gains(gains_db: list[float],
 def encode_parametric_eq(bands: list[EqBand], name: str = "Custom",
                          connection: int = CONNECTION_WIRELESS,
                          preset_type: int = PRESET_CUSTOM,
-                         report_id: int = 0x00) -> list[list[int]]:
-    """Frames for the Nova 7 Gen 2 / 7P Gen 2 parametric EQ (opcode 0xA7).
+                         report_id: int = 0x00,
+                         name_command: int = 0xA7,
+                         band_command: int = 0x33,
+                         commit_command: int | None = None) -> list[list[int]]:
+    """Frames for the parametric families (Nova 7 Gen 2: 0xA7, Nova 5: 0xA5).
 
-    GG sends three writes in order, and the device only applies the curve on
-    the third:
+    GG sends the curve in order:
 
-      1. 0xA7 — connection, preset slot, then the preset name, which is what
-         the headset reports back and what shows on a DAC screen;
-      2. 0x33 — the ten encoded bands;
-      3. 0x27 — commit.
+      1. `name_command` — connection, preset slot, then the preset name, which
+         the headset reports back and shows on a DAC screen;
+      2. `band_command` — the ten encoded bands;
+      3. `commit_command` — apply. The Nova 7 Gen 2 needs this third write and
+         changes nothing before it; the Nova 5 declares no such opcode and
+         applies on the second. It therefore defaults to absent: a profile that
+         needs the commit says so, and a profile that doesn't can't grow a
+         stray frame by omission.
 
     Returned as byte lists ready for CoreEngine.send_command(), which pads
     each one to the profile's frame length.
@@ -103,14 +109,16 @@ def encode_parametric_eq(bands: list[EqBand], name: str = "Custom",
     for band in bands:
         payload += list(encode_band(band))
 
-    return [
-        [report_id, 0xA7, connection, preset_type] + name_bytes,
-        [report_id, 0x33, connection] + payload,
-        [report_id, 0x27],
+    frames = [
+        [report_id, name_command, connection, preset_type] + name_bytes,
+        [report_id, band_command, connection] + payload,
     ]
+    if commit_command is not None:
+        frames.append([report_id, commit_command])
+    return frames
 
 
 #: Encoders a device profile can name in `hardware_eq.format`.
 ENCODERS = {
-    "parametric_a7": encode_parametric_eq,
+    "parametric": encode_parametric_eq,
 }

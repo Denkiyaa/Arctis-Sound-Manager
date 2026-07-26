@@ -69,7 +69,10 @@ device:
   # filter type, gain in decidecibels and Q, sent over three frames the last of
   # which commits the curve. See hardware_eq.py.
   hardware_eq:
-    format: parametric_a7
+    format: parametric
+    name_command: 0xa7
+    band_command: 0x33
+    commit_command: 0x27
 
   online_status:
     status_variable: headset_power_status

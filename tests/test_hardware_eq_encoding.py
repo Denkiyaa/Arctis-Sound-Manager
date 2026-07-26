@@ -64,13 +64,23 @@ def test_values_are_clamped_to_what_the_field_holds():
 
 # ── Frame sequence ───────────────────────────────────────────────────────────
 
-def test_three_frames_in_the_order_the_device_expects():
-    frames = encode_parametric_eq(bands_from_gains([0.0] * 10), name="Flat")
+def test_frames_come_in_the_order_the_device_expects():
+    frames = encode_parametric_eq(bands_from_gains([0.0] * 10), name="Flat",
+                                  commit_command=0x27)
 
     assert len(frames) == 3
     assert frames[0][1] == 0xA7, "first frame carries the name"
     assert frames[1][1] == 0x33, "second frame carries the bands"
     assert frames[2][1] == 0x27, "third frame commits"
+
+
+def test_commit_frame_is_absent_unless_asked_for():
+    """The Nova 5 declares no commit opcode; omission must not invent one."""
+    frames = encode_parametric_eq(bands_from_gains([0.0] * 10),
+                                  name_command=0xA5)
+
+    assert len(frames) == 2
+    assert [f[1] for f in frames] == [0xA5, 0x33]
 
 
 def test_name_frame_carries_connection_slot_and_ascii_name():

@@ -65,6 +65,11 @@ device:
         - bluetooth_auto_mute
         - bluetooth_connection
 
+  # On-device 10-band EQ (eq, opcode 0x33): one gain byte per band. GG derives
+  # it as 2 * (10 + gain_dB), which is exactly ASM's 0-40 slider scale.
+  hardware_eq:
+    command: [0x33]
+
   online_status:
     status_variable: headset_power_status
     online_value: online
