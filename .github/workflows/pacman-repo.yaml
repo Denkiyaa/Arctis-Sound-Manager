@@ -9,12 +9,11 @@ name: Publish pacman repository
 # to it. A binary repository is the only way an Arch/CachyOS user can find and
 # install ASM from a graphical software centre.
 #
-# Two dependencies live in the AUR rather than the official repositories
-# (python-pulsectl, noise-suppression-for-voice), so pacman could not satisfy
-# them from extra/ alone. They are rebuilt here and shipped in the same
-# repository, otherwise installing from Discover fails on an unresolvable
-# dependency. CachyOS carries both in its own repositories; ours are only used
-# where they are missing.
+# One dependency lives in the AUR rather than the official repositories
+# (python-pulsectl), so pacman could not satisfy it from extra/ alone. It is
+# rebuilt here and shipped in the same repository, otherwise installing on plain
+# Arch fails on an unresolvable dependency. Distributions carrying their own
+# copy (CachyOS does) keep it: ours is only used where it is missing.
 
 # Called by release.yaml at the end of a release, exactly like pypi-publish.
 # It is NOT triggered by `on: release` — the GitHub release is created with the
@@ -77,29 +76,21 @@ jobs:
           # this workflow. Pin it to the tag being released.
           sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
           # -d skips the dependency check: every runtime dependency is resolved
-          # on the user's machine at install time, and two of them are not in
-          # the official repositories anyway. The package is arch=any pure
-          # Python, so nothing in the build itself needs them.
+          # on the user's machine at install time, and one of them is not in the
+          # official repositories anyway. The package is arch=any pure Python, so
+          # nothing in the build itself needs them.
           sudo -u builder makepkg -dcf --noconfirm --nosign
           cp ./*.pkg.tar.zst /repo/
 
       - name: Build AUR-only dependencies
-        # Not fatal: on CachyOS both packages come from its own repositories, so
-        # a missing one costs nothing there. Only an Arch install that lacks them
-        # would notice, and a broken upstream build must not hold back the
-        # release of ASM itself.
+        # Not fatal: where the distribution ships its own copy, a missing one
+        # costs nothing. Only a plain Arch install would notice, and a broken
+        # upstream build must not hold back the release of ASM itself.
         continue-on-error: true
         run: |
           set -uo pipefail
-          # noise-suppression-for-voice 0.91 uses int32_t without including
-          # <cstdint>, which GCC 13+ rejects. Forcing the include is enough, and
-          # leaves the package's own sources untouched — patching them here would
-          # be a fork we then have to maintain. C is unaffected: CXXFLAGS only.
-          printf 'CXXFLAGS+=" -include cstdint"\n' > /home/builder/.makepkg.conf
-          chown builder:builder /home/builder/.makepkg.conf
-
           failed=""
-          for pkg in python-pulsectl noise-suppression-for-voice; do
+          for pkg in python-pulsectl; do
             sudo -u builder git clone --depth 1 \
               "https://aur.archlinux.org/${pkg}.git" "/tmp/${pkg}" || { failed="$failed $pkg"; continue; }
             # An epoch puts a colon in the package filename, and GitHub rewrites
