@@ -1,3 +1,36 @@
+arctis-sound-manager (1.2.15-1) noble; urgency=medium
+
+  * An update now actually takes effect, instead of waiting for your next
+    reboot. A package manager replaces files on disk; it does not touch what
+    is already running. ASM went on executing the version it had loaded at
+    startup — so someone who updated *because* of a fix still saw the bug,
+    and reported it against a version number they were not running. The
+    background services are now restarted at the end of the update, on Arch,
+    Fedora and Debian alike. The window, which your desktop starts rather
+    than the system, notices on its own and offers a restart: "Version X is
+    installed — restart ASM to run it". Nothing of the sort appears for
+    anyone running from a source checkout.
+  * The in-app update no longer insists on an AUR helper on Arch, CachyOS
+    and derivatives. It proposed paru -S whatever the origin of the package;
+    installed from a repository, a plain pacman -Syu does the job and your
+    system's own updater picks it up unprompted. ASM now asks pacman which
+    of the two situations it is in.
+  * ASM can be installed from a signed binary repository on Arch, CachyOS,
+    EndeavourOS and other Arch derivatives — no AUR helper, no compilation,
+    and updates arriving with the rest of the system. Packages and database
+    are signed with the project's key, and the repository is rebuilt on
+    every release.
+  * ASM can appear in graphical software centres — Discover, GNOME Software
+    and other AppStream front-ends. The file describing the application
+    named no package, which is what those tools match on, so the entry
+    existed and connected to nothing: a search returned an empty list even
+    where the package was perfectly installable. The packaging now ships
+    that link, on all three distributions. (Arch users also need packagekit,
+    and packagekit-qt6 on KDE — neither is installed by default, and the
+    README says so.)
+
+ -- loteran <axel.valadon@gmail.com>  Mon, 27 Jul 2026 00:00:00 +0000
+
 arctis-sound-manager (1.2.14-1) noble; urgency=medium
 
   * The in-app update no longer reports success while updating nothing, on
