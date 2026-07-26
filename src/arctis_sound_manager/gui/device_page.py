@@ -288,19 +288,30 @@ class DevicePage(QWidget):
         content_layout.addSpacing(12)
 
         # ── ANC / Transparent section ─────────────────────────────────────────
-        anc_title = SectionTitle(I18n.translate("ui", "noise_cancelling"))
-        content_layout.addWidget(anc_title)
-        content_layout.addSpacing(4)
+        # Grouped in one container so it can be hidden wholesale: plenty of
+        # headsets have no noise cancelling at all (the Nova 7P, for one), and
+        # showing them dead controls reads as a broken app rather than as an
+        # absent feature. Shown only once the daemon reports the setting.
+        self._anc_section = QWidget(content)
+        anc_layout = QVBoxLayout(self._anc_section)
+        anc_layout.setContentsMargins(0, 0, 0, 0)
+        anc_layout.setSpacing(0)
 
-        self._anc_widget = QAncWidget(content)
+        anc_layout.addWidget(SectionTitle(I18n.translate("ui", "noise_cancelling")))
+        anc_layout.addSpacing(4)
+
+        self._anc_widget = QAncWidget(self._anc_section)
         self._anc_widget.setStyleSheet(f"""
             QWidget {{ background-color: {BG_MAIN}; color: {TEXT_PRIMARY}; }}
             QLabel  {{ background-color: transparent; color: {TEXT_PRIMARY}; font-size: 11pt; }}
         """)
-        content_layout.addWidget(self._anc_widget)
-        content_layout.addSpacing(6)
-        content_layout.addWidget(DividerLine())
-        content_layout.addSpacing(6)
+        anc_layout.addWidget(self._anc_widget)
+        anc_layout.addSpacing(6)
+        anc_layout.addWidget(DividerLine())
+        anc_layout.addSpacing(6)
+
+        self._anc_section.setVisible(False)
+        content_layout.addWidget(self._anc_section)
 
         # ── Device Settings section ────────────────────────────────────────────
         device_settings_title = SectionTitle(I18n.translate("ui", "device_settings"))
@@ -566,6 +577,20 @@ class DevicePage(QWidget):
     def update_settings(self, settings: dict):
         self._general_widget.update_settings(settings)
         self._device_widget.update_settings(settings)
+        self._update_anc_visibility(settings)
+
+    def _update_anc_visibility(self, settings: dict) -> None:
+        """Show the ANC section only for headsets that actually have it.
+
+        The device profile is the authority: a headset without noise
+        cancelling simply doesn't declare the setting, so its controls could
+        never do anything. An empty config means "no device yet" — keep the
+        section as it is rather than flashing it away on a transient update.
+        """
+        config = settings.get('settings_config') or {}
+        if not config:
+            return
+        self._anc_section.setVisible('noise_cancelling' in config)
 
     # ── Language ───────────────────────────────────────────────────────────────
 
