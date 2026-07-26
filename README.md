@@ -226,9 +226,37 @@ If the device controls respond, it works. If the daemon log shows `Failed to fin
 curl -fsSL https://loteran.github.io/Arctis-Sound-Manager/install.sh | bash
 ```
 
-It detects your distribution, installs the matching native package (AUR / COPR / PPA — or a Distrobox container on Bazzite / Silverblue / SteamOS), and runs `asm-setup` for you. Prefer to read it first? `curl … -o asm-install.sh`, inspect it, then `bash asm-install.sh`.
+It detects your distribution, installs the matching native package (pacman repository / COPR / PPA — or a Distrobox container on Bazzite / Silverblue / SteamOS), and runs `asm-setup` for you. Prefer to read it first? `curl … -o asm-install.sh`, inspect it, then `bash asm-install.sh`.
 
 Or install manually for your distribution below. All native packages (AUR / COPR / PPA) pull in every dependency automatically. After installing, run `asm-setup` once — it configures udev rules, systemd services, PipeWire and downloads the HRIR file.
+
+<details>
+<summary><strong>Arch Linux / CachyOS / Manjaro (signed repository, recommended)</strong></summary>
+
+Needs no AUR helper, compiles nothing, and — unlike the AUR — is visible to
+Discover and GNOME Software, so ASM can be installed and updated from your
+software centre like any other application.
+
+```bash
+curl -fsSL https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo/arctis-sound-manager.key -o /tmp/asm.key
+sudo pacman-key --add /tmp/asm.key
+sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/asm.key | awk -F: '/^fpr/ {print $10; exit}')"
+
+sudo tee -a /etc/pacman.conf <<'EOF'
+
+[arctis-sound-manager]
+Server = https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo
+EOF
+
+sudo pacman -Sy arctis-sound-manager
+asm-setup
+```
+
+Updates then arrive with `sudo pacman -Syu`, or through your desktop's update
+notifier. The repository also carries `python-pulsectl` and
+`noise-suppression-for-voice`, which are AUR-only on plain Arch; if your distro
+already provides them (CachyOS does), its own versions keep priority.
+</details>
 
 <details>
 <summary><strong>Arch Linux / CachyOS / Manjaro (AUR)</strong></summary>

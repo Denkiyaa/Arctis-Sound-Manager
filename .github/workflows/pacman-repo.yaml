@@ -208,6 +208,15 @@ jobs:
           gh release upload pacman-repo ./* \
             --repo "$GITHUB_REPOSITORY" --clobber
 
+          # --clobber only replaces same-named assets, so last version's
+          # packages would pile up forever — and a filename GitHub rewrote (it
+          # strips colons) would linger unreferenced by any database.
+          gh release view pacman-repo --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name' | while read -r asset; do
+            [ -f "$asset" ] || gh release delete-asset pacman-repo "$asset" \
+              --repo "$GITHUB_REPOSITORY" -y
+          done
+
       - name: Summary
         run: |
           echo "Published pacman repository for ${{ steps.ver.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
