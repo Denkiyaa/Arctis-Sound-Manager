@@ -253,7 +253,18 @@ asm-setup
 ```
 
 Updates then arrive with `sudo pacman -Syu`, or through your desktop's update
-notifier. The repository also carries `python-pulsectl` and
+notifier.
+
+For ASM to actually show up in Discover or GNOME Software, those need a
+PackageKit backend — which most Arch-family installs do not ship by default.
+On KDE:
+
+```bash
+sudo pacman -S --needed packagekit packagekit-qt6   # GNOME: packagekit only
+```
+
+Without `packagekit-qt6`, Discover loads no pacman backend at all and searching
+for "arctis" returns nothing, however well the repository is configured. The repository also carries `python-pulsectl` and
 `noise-suppression-for-voice`, which are AUR-only on plain Arch; if your distro
 already provides them (CachyOS does), its own versions keep priority.
 </details>
