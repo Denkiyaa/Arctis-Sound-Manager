@@ -49,12 +49,19 @@ device:
       # that the connection event is "crucial for Nova 3 wireless devices to
       # ensure accurate data retrieval". Unlike the Nova 7 family these are not
       # prefixed 0x07 — the opcode itself leads the frame.
+      # Byte offsets corrected from @rhavinx's usbhid-dump capture on real
+      # hardware (#149): the spec-derived guess (media_mix 0x02 / chat_mix 0x03)
+      # was one byte too far — the opcode leads the frame with no extra header,
+      # so the two mix levels sit at 0x01 / 0x02. Same off-by-one class as the
+      # battery byte, only on the push frame instead of 0xb0.
       - starts_with: 0x45        # ChatMix dial moved
-        media_mix: 0x02
-        chat_mix: 0x03
+        media_mix: 0x01
+        chat_mix: 0x02
 
+      # Capture shows only byte 0x02 toggles 0x00/0x01 on each mute press (#149);
+      # the spec-derived 0x03 read a neighbouring byte that never changed.
       - starts_with: 0x52        # mic jack + mute state
-        mic_status: 0x03
+        mic_status: 0x02
 
       - starts_with: 0xb7        # battery level
         headset_battery_charge: 0x02
@@ -69,12 +76,16 @@ device:
       # is deliberately not read: a variable pointing at padding shows
       # plausible noise rather than nothing — reading the battery there is
       # exactly why a hand-written profile had it pinned at 100 % (#149).
+      #
+      # media_mix / chat_mix are NOT read here: the dial reports live via the
+      # 0x45 push frame, and reading them from 0xb0 too made every poll clobber
+      # the pushed value with a stale byte — @rhavinx captured this as forcing
+      # Sonar Game volume to ~3 % on init (#149). With them gone the mix defaults
+      # to the neutral 100/100 in core until the first 0x45 arrives.
       - starts_with: 0xb0
         headset_power_status: 0x01
         headset_battery_charge: 0x03
         cable_charging: 0x04
-        media_mix: 0x05
-        chat_mix: 0x06
 
     representation:
       headset:
