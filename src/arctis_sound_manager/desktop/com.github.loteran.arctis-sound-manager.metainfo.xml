@@ -56,6 +56,11 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="1.2.16" date="2026-07-27">
+      <description>
+        <p>Arctis Nova 3P / 3X Wireless: the ChatMix dial and the mic-mute button now do something in the app. The new profile shipped in 1.2.14 read both of the headset's live events one byte too far, so turning the dial never moved the Game/Chat balance — it felt like plain system volume — and pressing mute was never reflected anywhere, with the Microphone section staying blank. Both are read from the right place now: the dial moves the Game/Chat sliders, and the mute state shows in the app. As a side effect the profile no longer forces Sonar Game volume down to a sliver on start-up. Thanks to @rhavinx, who captured the real hardware traffic that pinned it down. Battery, charging and connection state — already working — are unchanged.</p>
+      </description>
+    </release>
     <release version="1.2.15" date="2026-07-27">
       <description>
         <p>An update now actually takes effect, instead of waiting for your next reboot. A package manager replaces files on disk; it does not touch what is already running. ASM went on executing the version it had loaded at startup — so someone who updated *because* of a fix still saw the bug, and reported it against a version number they were not running. The background services are now restarted at the end of the update, on Arch, Fedora and Debian alike. The window, which your desktop starts rather than the system, notices on its own and offers a restart: "Version X is installed — restart ASM to run it". Nothing of the sort appears for anyone running from a source checkout. The in-app update no longer insists on an AUR helper on Arch, CachyOS and derivatives. It proposed paru -S whatever the origin of the package; installed from a repository, a plain pacman -Syu does the job and your system's own updater picks it up unprompted. ASM now asks pacman which of the two situations it is in. ASM can be installed from a signed binary repository on Arch, CachyOS, EndeavourOS and other Arch derivatives — no AUR helper, no compilation, and updates arriving with the rest of the system. Packages and database are signed with the project's key, and the repository is rebuilt on every release.</p>
@@ -199,11 +204,6 @@
     <release version="1.1.87" date="2026-06-30">
       <description>
         <p>Sonar devices (e.g. Arctis Nova Elite) went silent when Spatial Audio was enabled — with surround on, the loopback watchdog mistook a single-cycle transient (the Sonar EQ → HeSuVi surround chain rebuilding) for a mis-routed loopback and killed/recreated the pw-loopback, which churned the graph and fed a self-sustaining loop that muted the channel (and spammed the OLED with Resource busy). The watchdog now waits for the mismatch to persist before acting, and corrects a genuine mislink with a non-destructive pw-metadata relink instead of tearing the loopback down. (#100)</p>
-      </description>
-    </release>
-    <release version="1.1.86" date="2026-06-28">
-      <description>
-        <p>"Redirect Audio on Disconnect" did nothing even with a device selected (especially USB outputs) — the settings dropdown only saved your choice when the selected *index changed*, so picking the device that was already displayed (or re-selecting it) saved nothing, and the daemon kept reading an empty value. On top of that, when the stored value didn't match any current device the dropdown silently showed the first device as if it were selected, so the option *looked* configured while nothing was actually persisted. Dropdowns now persist on every pick (including re-selecting the current item) and show an unset state instead of faking a selection (#97). Fedora: the ClearCast / rnnoise noise-suppression plugin couldn't be installed — the install instructions (system-deps dialog, RPM %post, README) pointed at the uriesk/noise-suppression-for-voice COPR + package noise-suppression-for-voice, but that COPR only ships a source package, so dnf install failed with "matches only source packages". Switched to the lkiesow/noise-suppression-for-voice COPR and the ladspa-realtime-noise-suppression-plugin binary package (verified on Fedora 44).</p>
       </description>
     </release>
   </releases>

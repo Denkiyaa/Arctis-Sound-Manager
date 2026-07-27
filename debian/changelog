@@ -1,3 +1,19 @@
+arctis-sound-manager (1.2.16-1) noble; urgency=medium
+
+  * Arctis Nova 3P / 3X Wireless: the ChatMix dial and the mic-mute button
+    now do something in the app. The new profile shipped in 1.2.14 read both
+    of the headset's live events one byte too far, so turning the dial never
+    moved the Game/Chat balance — it felt like plain system volume — and
+    pressing mute was never reflected anywhere, with the Microphone section
+    staying blank. Both are read from the right place now: the dial moves
+    the Game/Chat sliders, and the mute state shows in the app. As a side
+    effect the profile no longer forces Sonar Game volume down to a sliver
+    on start-up. Thanks to @rhavinx, who captured the real hardware traffic
+    that pinned it down. Battery, charging and connection state — already
+    working — are unchanged.
+
+ -- loteran <axel.valadon@gmail.com>  Mon, 27 Jul 2026 00:00:00 +0000
+
 arctis-sound-manager (1.2.15-1) noble; urgency=medium
 
   * An update now actually takes effect, instead of waiting for your next
