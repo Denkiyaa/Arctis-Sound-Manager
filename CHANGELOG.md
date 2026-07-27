@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.16] - 27 July 2026
+
+### Fixed
+
+- **Arctis Nova 3P / 3X Wireless: the ChatMix dial and the mic-mute button now do something in the app.** The new profile shipped in 1.2.14 read both of the headset's live events one byte too far, so turning the dial never moved the Game/Chat balance — it felt like plain system volume — and pressing mute was never reflected anywhere, with the Microphone section staying blank. Both are read from the right place now: the dial moves the Game/Chat sliders, and the mute state shows in the app. As a side effect the profile no longer forces Sonar Game volume down to a sliver on start-up. Thanks to @rhavinx, who captured the real hardware traffic that pinned it down. Battery, charging and connection state — already working — are unchanged.
+
 ## [1.2.15] - 27 July 2026
 
 ### Fixed
