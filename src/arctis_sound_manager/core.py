@@ -1606,15 +1606,24 @@ class CoreEngine:
         self._apply_stored_eq()
 
     def _apply_stored_eq(self) -> None:
+        """Replay the saved custom curve at init, the way the sliders send it.
+
+        This used to write [0x06, 0x33] + gains itself — the Nova Pro Wireless'
+        report id and opcode, hardcoded. send_eq_command() stopped doing that
+        for #146, but this path kept its own copy: on a parametric family the
+        restored curve went out as a frame the headset doesn't recognise and
+        was discarded, so the EQ only ever took effect if the user touched a
+        slider after the daemon started. Going through send_eq_command() means
+        one encoder for both paths.
+        """
         eq_file = Path.home() / '.config' / 'arctis_manager' / 'eq_bands.json'
         if not eq_file.exists():
             return
         try:
             bands = json.loads(eq_file.read_text())
             if isinstance(bands, list) and len(bands) == 10:
-                endpoint = self.get_command_endpoint_address()
-                self.send_command([0x06, 0x33] + bands, endpoint)
-                self.logger.info("Custom EQ applied from eq_bands.json")
+                if self.send_eq_command([int(b) for b in bands]):
+                    self.logger.info("Custom EQ applied from eq_bands.json")
         except Exception as e:
             self.logger.warning(f"Failed to apply stored EQ: {e}")
 

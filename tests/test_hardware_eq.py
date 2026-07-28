@@ -15,6 +15,7 @@ scale, 20 being 0 dB — GG computes it as 2 * (10 + gain_in_dB).
 """
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -182,6 +183,44 @@ def test_families_without_a_declared_pause_do_not_wait(monkeypatch):
     engine.send_eq_command([20] * 10)
 
     assert slept == []
+
+
+def _stored_curve(monkeypatch, tmp_path, bands):
+    """Put an eq_bands.json where _apply_stored_eq() will look for it."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    eq_file = tmp_path / ".config" / "arctis_manager" / "eq_bands.json"
+    eq_file.parent.mkdir(parents=True)
+    eq_file.write_text(json.dumps(bands))
+
+
+@pytest.mark.parametrize("profile,expected_opcodes",
+                         sorted(PARAMETRIC_PROFILES.items()))
+def test_stored_curve_is_restored_in_the_family_s_own_format(
+        profile, expected_opcodes, monkeypatch, tmp_path):
+    """Init replays the saved curve through the same encoder as the sliders.
+
+    _apply_stored_eq() kept its own hardcoded [0x06, 0x33] long after
+    send_eq_command() stopped guessing (#146): on a parametric family the
+    restored curve went out as a frame the headset discards, so the custom EQ
+    was silent until the user moved a slider by hand.
+    """
+    _stored_curve(monkeypatch, tmp_path, [20] * 10)
+    engine = _engine(_config(profile))
+
+    CoreEngine._apply_stored_eq(engine)
+
+    opcodes = [call.args[0][1] for call in engine.send_command.call_args_list]
+    assert opcodes == expected_opcodes
+
+
+def test_stored_curve_is_not_restored_to_a_headset_without_an_eq(
+        monkeypatch, tmp_path):
+    _stored_curve(monkeypatch, tmp_path, [20] * 10)
+    engine = _engine(_config("arctis_9.yaml"))
+
+    CoreEngine._apply_stored_eq(engine)
+
+    engine.send_command.assert_not_called()
 
 
 def test_dbus_reports_parametric_families_as_having_an_eq():
