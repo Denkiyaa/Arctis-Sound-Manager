@@ -9,6 +9,7 @@ Interactions:
   - Click on empty canvas → create new band
   - Drag dot              → move freq (horizontal) / gain (vertical)
   - Double-click dot      → delete band
+  - Del / Backspace       → delete the selected band
   - Scroll on selected    → adjust Q
 """
 from __future__ import annotations
@@ -185,6 +186,9 @@ class EqCurveWidget(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.CrossCursor)
+        # StrongFocus so a clicked band can be removed with Del/Backspace: click
+        # focus lets the widget receive key events without stealing tab order.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self._inspector = _BandInspector(self)
         self._inspector.hide()
@@ -384,11 +388,28 @@ class EqCurveWidget(QWidget):
         pos = event.position()
         hit = self._hit_band(pos.x(), pos.y())
         if hit is not None:
-            self._bands.pop(hit)
-            self._selected = None
-            self._inspector.hide()
-            self.bands_changed.emit(self.get_bands())
-            self.update()
+            self._delete_band(hit)
+
+    def keyPressEvent(self, event):
+        # Del / Backspace removes the currently-selected band — a discoverable
+        # alternative to the double-click (#152). Requires a prior selection.
+        if (event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+                and self._selected is not None):
+            self._delete_band(self._selected)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _delete_band(self, idx: int) -> None:
+        """Remove band *idx*, clear selection, and notify listeners."""
+        if idx is None or not (0 <= idx < len(self._bands)):
+            return
+        self._bands.pop(idx)
+        self._selected = None
+        self._drag_band = None
+        self._inspector.hide()
+        self.bands_changed.emit(self.get_bands())
+        self.update()
 
     def wheelEvent(self, event: QWheelEvent):
         if self._selected is None or self._selected >= len(self._bands):

@@ -1078,7 +1078,8 @@ class _SavePresetDialog(QDialog):
 
 class _PresetBar(QWidget):
     preset_selected = Signal(str, list)         # name, list[EqBand]
-    save_requested  = Signal()
+    save_requested  = Signal()                  # quick save (overwrite active)
+    save_as_requested = Signal()                # save as a new named preset
     macros_loaded   = Signal(float, float, float)  # basses, voix, aigus
     settings_loaded = Signal(dict)
 
@@ -1108,12 +1109,21 @@ class _PresetBar(QWidget):
 
         save_btn = QPushButton()
         save_btn.setFixedSize(32, 32)
-        save_btn.setToolTip(_t("save_custom_preset"))
+        save_btn.setToolTip(_t("save_overwrite"))
         save_btn.setIcon(_svg_icon("save_icon.svg", TEXT_PRIMARY))
         save_btn.setIconSize(save_btn.size() * 0.55)
         save_btn.setStyleSheet(self._icon_btn_ss())
         save_btn.clicked.connect(self._on_save_custom)
         row1.addWidget(save_btn)
+
+        save_as_btn = QPushButton()
+        save_as_btn.setFixedSize(32, 32)
+        save_as_btn.setToolTip(_t("save_as"))
+        save_as_btn.setIcon(_svg_icon("save_as_icon.svg", TEXT_PRIMARY))
+        save_as_btn.setIconSize(save_as_btn.size() * 0.55)
+        save_as_btn.setStyleSheet(self._icon_btn_ss())
+        save_as_btn.clicked.connect(self._on_save_as)
+        row1.addWidget(save_as_btn)
 
         star_btn = QPushButton()
         star_btn.setFixedSize(32, 32)
@@ -1294,6 +1304,9 @@ class _PresetBar(QWidget):
 
     def _on_save_custom(self):
         self.save_requested.emit()
+
+    def _on_save_as(self):
+        self.save_as_requested.emit()
 
     def notify_saved(self, name: str) -> None:
         """Called by SonarChannelWidget after the preset file has been written."""
@@ -1511,6 +1524,7 @@ class SonarChannelWidget(QWidget):
         self._preset_bar = _PresetBar(channel, preset_card)
         self._preset_bar.preset_selected.connect(self._on_preset_selected)
         self._preset_bar.save_requested.connect(self._on_save_custom_preset)
+        self._preset_bar.save_as_requested.connect(self._on_save_as_preset)
         self._preset_bar.macros_loaded.connect(
             lambda b, v, a: self._macros.set_values(b, v, a, emit=False)
         )
@@ -1540,6 +1554,13 @@ class SonarChannelWidget(QWidget):
         eq_header = QHBoxLayout()
         eq_header.addWidget(QLabel(_t("equalizer")))
         eq_header.addStretch(1)
+
+        self._revert_btn = QPushButton(_t("revert"))
+        self._revert_btn.setVisible(False)
+        self._revert_btn.setToolTip(_t("revert_hint"))
+        self._revert_btn.setStyleSheet(self._revert_btn_ss())
+        self._revert_btn.clicked.connect(self._on_revert_eq)
+        eq_header.addWidget(self._revert_btn)
 
         self._apply_btn = QPushButton(_t("apply_eq"))
         self._apply_btn.setVisible(False)
@@ -1671,6 +1692,21 @@ class SonarChannelWidget(QWidget):
         """)
         return w
 
+    def _revert_btn_ss(self) -> str:
+        """Secondary (outline) style for the Revert button — visually quieter
+        than the accent-filled Apply button next to it."""
+        return f"""
+            QPushButton {{
+                background: transparent;
+                color: {_theme.c('TEXT_SECONDARY')};
+                border: 1px solid {_theme.c('BORDER')};
+                border-radius: 6px;
+                padding: 4px 14px;
+                font-size: 10pt;
+            }}
+            QPushButton:hover {{ border-color: {_theme.c('ACCENT')}; color: {_theme.c('TEXT_PRIMARY')}; }}
+        """
+
     def apply_theme(self, t=None) -> None:
         """Restyle this channel widget for the active theme."""
         self.setStyleSheet(f"background-color: {_theme.c('BG_MAIN')};")
@@ -1727,6 +1763,10 @@ class SonarChannelWidget(QWidget):
                 QPushButton:hover {{ background: {_theme.c('BG_BUTTON_HOVER')}; }}
             """)
 
+        # Revert button (outline, secondary)
+        if hasattr(self, "_revert_btn"):
+            self._revert_btn.setStyleSheet(self._revert_btn_ss())
+
         # Status label
         if hasattr(self, "_status_lbl"):
             self._status_lbl.setStyleSheet(
@@ -1754,22 +1794,31 @@ class SonarChannelWidget(QWidget):
         self._eq_widget.set_bands(bands)
         self._update_macro_curve()
         self._apply_btn.setVisible(False)
+        self._revert_btn.setVisible(False)
         self._schedule_apply()
 
     def _on_bands_changed(self, bands: list):
         self._cur_bands = bands
         self._apply_btn.setVisible(True)
+        self._revert_btn.setVisible(True)
         self._status_lbl.setText(_t("eq_pending"))
 
     def _on_apply_eq(self):
         self._committed_bands = list(self._cur_bands)
         self._apply_btn.setVisible(False)
+        self._revert_btn.setVisible(False)
         self._do_apply()
 
-    def _on_save_custom_preset(self) -> None:
-        dlg = _SavePresetDialog(self)
-        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.name:
-            return
+    def _on_revert_eq(self):
+        """Discard unapplied curve edits, restoring the last-applied bands (#152)."""
+        self._cur_bands = list(self._committed_bands)
+        self._eq_widget.set_bands(self._committed_bands)
+        self._apply_btn.setVisible(False)
+        self._revert_btn.setVisible(False)
+        self._status_lbl.setText("")
+
+    def _write_preset(self, name: str) -> None:
+        """Persist the current EQ curve + macros + settings under *name*."""
         bands = self._eq_widget.get_bands()
         basses, voix, aigus = self._macros.get_values()
         settings: dict = {}
@@ -1780,13 +1829,31 @@ class SonarChannelWidget(QWidget):
         if hasattr(self, "_smart"):
             settings["smart_volume"] = self._smart.get_state()
         _save_custom_preset(
-            self._channel, dlg.name, bands,
+            self._channel, name, bands,
             macros={"basses": basses, "voix": voix, "aigus": aigus},
             settings=settings or None,
         )
         self._committed_bands = list(bands)
         self._apply_btn.setVisible(False)
-        self._preset_bar.notify_saved(dlg.name)
+        self._revert_btn.setVisible(False)
+        self._preset_bar.notify_saved(name)
+
+    def _on_save_custom_preset(self) -> None:
+        """Quick save (#152): overwrite the active preset when it is a user
+        preset; built-in presets can't be overwritten, so fall back to Save As."""
+        name = _active_preset_name(self._channel)
+        if name and _is_custom_preset(self._channel, name):
+            self._write_preset(name)
+            self._status_lbl.setText(_t("preset_saved"))
+            QTimer.singleShot(2000, self, lambda: self._status_lbl.setText(""))
+        else:
+            self._on_save_as_preset()
+
+    def _on_save_as_preset(self) -> None:
+        dlg = _SavePresetDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.name:
+            return
+        self._write_preset(dlg.name)
 
     def _on_settings_loaded(self, settings: dict) -> None:
         # Called when a preset is loaded; _on_preset_selected already scheduled
