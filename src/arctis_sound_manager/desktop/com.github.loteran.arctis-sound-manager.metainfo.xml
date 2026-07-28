@@ -56,6 +56,11 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="1.2.17" date="2026-07-28">
+      <description>
+        <p>Sonar equaliser: delete a point with a keypress, quick-save, and revert. From user feedback (#152). Select a point on the EQ curve and press Del (or Backspace) to remove it, alongside the existing double-click. The preset Save button now overwrites the active preset directly — updating a custom preset is one click, no retyping its name — while a new Save as… button creates a new one. And a Revert button appears next to Apply whenever there are unapplied curve edits, so a set of changes can be dropped back to the last-applied state without hunting for the previous values. Arctis Nova 3P / 3X Wireless: the microphone mute state now shows in the app. Pressing mute did nothing visible, because the headset sends that event (and its battery, connection and charging pushes) on a USB interface ASM wasn't listening to — a raw HID capture from @rhavinx pinned it down. ASM now listens on that interface too, so the Microphone section tracks mute live, and battery/connection/charging update the moment they change instead of only on the next poll. (ChatMix on the dial is still being investigated — on this hardware the wheel doesn't report a mix level over USB at all, which is a different problem from the mute one.).</p>
+      </description>
+    </release>
     <release version="1.2.16" date="2026-07-27">
       <description>
         <p>Arctis Nova 3P / 3X Wireless: the ChatMix dial and the mic-mute button now do something in the app. The new profile shipped in 1.2.14 read both of the headset's live events one byte too far, so turning the dial never moved the Game/Chat balance — it felt like plain system volume — and pressing mute was never reflected anywhere, with the Microphone section staying blank. Both are read from the right place now: the dial moves the Game/Chat sliders, and the mute state shows in the app. As a side effect the profile no longer forces Sonar Game volume down to a sliver on start-up. Thanks to @rhavinx, who captured the real hardware traffic that pinned it down. Battery, charging and connection state — already working — are unchanged.</p>
@@ -199,11 +204,6 @@
     <release version="1.1.88" date="2026-07-02">
       <description>
         <p>Apps did not stay in their assigned channel on WirePlumber 0.5.x (Nova Pro Wireless) — the Game and Chat pw-loopback playback nodes only set node.target, whose string-name fallback in WirePlumber 0.5.x is unreliable and sometimes linked the loopback to the physical ALSA output instead of the Sonar EQ node. They now set target.object (the reliable object lookup honoured first by WirePlumber ≥ 0.5) while keeping node.target for 0.4.x compatibility. (#102). The routing override daemon did not restart after being killed — arctis-video-router.service used Restart=on-failure, which systemd never triggers when a process is terminated by SIGTERM (treated as a clean exit), so the router stayed dead and channel assignments were no longer enforced. The router units now use Restart=always. (#102). WirePlumber-induced sink flips were saved as manual overrides — when a stream bounced between the virtual channels, video_router recorded each move as a user choice and overwrote routing_overrides.json with the last random target. A debounce now ignores moves that repeat too rapidly (WirePlumber-induced) so the user's actual channel choice is preserved. (#102).</p>
-      </description>
-    </release>
-    <release version="1.1.87" date="2026-06-30">
-      <description>
-        <p>Sonar devices (e.g. Arctis Nova Elite) went silent when Spatial Audio was enabled — with surround on, the loopback watchdog mistook a single-cycle transient (the Sonar EQ → HeSuVi surround chain rebuilding) for a mis-routed loopback and killed/recreated the pw-loopback, which churned the graph and fed a self-sustaining loop that muted the channel (and spammed the OLED with Resource busy). The watchdog now waits for the mismatch to persist before acting, and corrects a genuine mislink with a non-destructive pw-metadata relink instead of tearing the loopback down. (#100)</p>
       </description>
     </release>
   </releases>
