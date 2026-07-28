@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.17] - 28 July 2026
+
+### Added
+
+- **Sonar equaliser: delete a point with a keypress, quick-save, and revert.** From user feedback (#152). Select a point on the EQ curve and press **Del** (or Backspace) to remove it, alongside the existing double-click. The preset **Save** button now overwrites the active preset directly — updating a custom preset is one click, no retyping its name — while a new **Save as…** button creates a new one. And a **Revert** button appears next to Apply whenever there are unapplied curve edits, so a set of changes can be dropped back to the last-applied state without hunting for the previous values.
+
+### Fixed
+
+- **Arctis Nova 3P / 3X Wireless: the microphone mute state now shows in the app.** Pressing mute did nothing visible, because the headset sends that event (and its battery, connection and charging pushes) on a USB interface ASM wasn't listening to — a raw HID capture from @rhavinx pinned it down. ASM now listens on that interface too, so the Microphone section tracks mute live, and battery/connection/charging update the moment they change instead of only on the next poll. (ChatMix on the dial is still being investigated — on this hardware the wheel doesn't report a mix level over USB at all, which is a different problem from the mute one.)
+
 ## [1.2.16] - 27 July 2026
 
 ### Fixed
