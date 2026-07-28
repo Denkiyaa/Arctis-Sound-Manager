@@ -31,7 +31,14 @@ device:
 
   command_transport: ctrl_output  # HID SET_REPORT, report id 0x00
   command_interface_index: [3, 0]
-  listen_interface_indexes: [3]
+  # Listen on BOTH 3 and 5. @rhavinx's usbhid-dump on real hardware (#149)
+  # showed the async push frames (0x52 mic mute, 0xB7 battery, 0xB9 connection,
+  # 0xBB charging) all arrive on interface 5 — only the polled 0xB0 reply lands
+  # on interface 3. With interface 3 alone the mic-mute state never surfaced
+  # (0x52 was never heard); battery/charging still worked because they are also
+  # read from the polled 0xB0. Adding interface 5 lets the mute event through
+  # and makes battery/connection/charging update live instead of poll-only.
+  listen_interface_indexes: [3, 5]
 
   device_init:
     - ['status.request']
