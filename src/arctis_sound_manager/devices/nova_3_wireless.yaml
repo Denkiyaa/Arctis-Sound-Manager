@@ -42,6 +42,17 @@ device:
 
   device_init:
     - ['status.request']
+    # ChatMix on this dongle is software-based and starts disabled (#149):
+    # `(struct software_chatmix_status)` in the spec (command 0x49, status
+    # 0/1) gates it, and `base_supported_features` lists
+    # MM_DEVICE_FEATURE_SOFTWARE_CHATMIX_INFINITE. With it left at its
+    # power-on default, @rhavinx's capture showed turning the dial produces
+    # zero USB traffic on every interface — it behaves as a plain local
+    # volume knob and ASM has nothing to read. `(enable-chatmix)` in the spec
+    # writes exactly [0x49, 0x01]; this is that write. It is a mode switch,
+    # not a user-adjustable setting, so replaying it at every init does not
+    # fall under the "never replay a user setting" rule.
+    - [0x49, 0x01]
     - [0xa3, 'settings.pm_shutdown']
     - [0x37, 'settings.mic_volume']
     - [0x39, 'settings.mic_side_tone']
@@ -61,7 +72,16 @@ device:
       # was one byte too far — the opcode leads the frame with no extra header,
       # so the two mix levels sit at 0x01 / 0x02. Same off-by-one class as the
       # battery byte, only on the push frame instead of 0xb0.
-      - starts_with: 0x45        # ChatMix dial moved
+      #
+      # This frame was never actually observed in @rhavinx's capture — ChatMix
+      # was disabled at the time (device_init did not yet send [0x49, 0x01]),
+      # so the dial produced no traffic at all on any interface. The spec's
+      # own `software_chatmix_status`/`enable-chatmix` machinery doesn't
+      # define an async push for the dial either; the documented read path is
+      # polling `headset_status` (0xB0), handled below. Kept here in case the
+      # firmware does push 0x45 once ChatMix is enabled — harmless no-op if it
+      # never arrives, and 0xB0 is the mapping actually relied upon.
+      - starts_with: 0x45        # ChatMix dial moved (unconfirmed on this device)
         media_mix: 0x01
         chat_mix: 0x02
 
@@ -84,11 +104,21 @@ device:
       # plausible noise rather than nothing — reading the battery there is
       # exactly why a hand-written profile had it pinned at 100 % (#149).
       #
-      # media_mix / chat_mix are NOT read here: the dial reports live via the
-      # 0x45 push frame, and reading them from 0xb0 too made every poll clobber
-      # the pushed value with a stale byte — @rhavinx captured this as forcing
-      # Sonar Game volume to ~3 % on init (#149). With them gone the mix defaults
-      # to the neutral 100/100 in core until the first 0x45 arrives.
+      # media_mix / chat_mix (spec fields chatmix_game / chatmix_chat) sit at
+      # 0x05 / 0x06 here — the spec's headset_status struct has chatmix_game=6
+      # and chatmix_chat=7 counting from report_id, and every field this
+      # profile shares with the spec is off by exactly -1 from its spec offset
+      # (connection_status 2→0x01, battery_status 4→0x03, charging_status
+      # 5→0x04, all three confirmed by @rhavinx's capture).
+      #
+      # They are still NOT read, on purpose. e830e66 removed them because
+      # polling those bytes pinned Sonar's Game channel to ~3 % on init: with
+      # ChatMix disabled they carry no mix level, just whatever the firmware
+      # leaves there. Enabling the mode above should make them live — but an
+      # out-of-range write is swallowed by the headset without a word, so we
+      # have no evidence yet that 0x49 took. Reading them back before that is
+      # confirmed on hardware would restore the volume bug for every owner of
+      # this headset. They go back in once @rhavinx reports the dial working.
       - starts_with: 0xb0
         headset_power_status: 0x01
         headset_battery_charge: 0x03
