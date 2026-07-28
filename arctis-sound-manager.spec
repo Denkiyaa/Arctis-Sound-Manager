@@ -111,8 +111,6 @@ install -Dm644 dinit/arctis-video-router %{buildroot}%{_datadir}/%{name}/dinit/a
 install -Dm644 dinit/arctis-gui %{buildroot}%{_datadir}/%{name}/dinit/arctis-gui
 install -Dm644 dinit/pipewire-filter-chain %{buildroot}%{_datadir}/%{name}/dinit/pipewire-filter-chain
 install -Dm755 scripts/asm-diag-dinit.py %{buildroot}%{_bindir}/asm-diag-dinit
-%{_prefix}/lib/%{name}/restart-user-services.sh
-%{_datadir}/swcatalog/xml/%{name}.xml.gz
 # Post-upgrade helper (packaging machinery, not a user-facing command)
 install -Dm755 scripts/restart-user-services.sh %{buildroot}%{_prefix}/lib/%{name}/restart-user-services.sh
 # AppStream catalog entry — ties the component to a package name, without which
@@ -282,6 +280,8 @@ fi
 %{_userunitdir}/arctis-gui.service
 %{_datadir}/%{name}/dinit/
 %{_bindir}/asm-diag-dinit
+%{_prefix}/lib/%{name}/restart-user-services.sh
+%{_datadir}/swcatalog/xml/%{name}.xml.gz
 %{_datadir}/applications/ArctisManager.desktop
 %{_datadir}/icons/hicolor/scalable/apps/arctis-manager.svg
 %{_metainfodir}/com.github.loteran.arctis-sound-manager.metainfo.xml
