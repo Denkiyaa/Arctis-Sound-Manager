@@ -218,6 +218,11 @@ class DeviceConfiguration:
     hardware_eq_format: str | None
     hardware_eq_options: dict[str, int]
     hardware_eq_zero: int
+    # Command selecting which stored preset the headset actually applies, for
+    # families where writing the curve does not activate it, and the id of
+    # their Custom slot. None ⇒ writing the curve is enough.
+    hardware_eq_preset_select: list[int] | None
+    hardware_eq_custom_preset_id: int
     # Opcodes to read the stored curve back from the headset, for diagnosing
     # "the sliders don't seem to do anything" reports (#146): None unless the
     # profile declares `hardware_eq.readback`, which only happens for
@@ -256,6 +261,24 @@ class DeviceConfiguration:
             [int(b) for b in hardware_eq['command']]
             if 'command' in hardware_eq else None
         )
+        # Writing the curve and *activating* it are two different commands on
+        # some families. The Nova Pro Wireless and the Nova Pro Wired GameDAC
+        # declare `selected_eq_preset` (0x2E) alongside `custom_eq` (0x33):
+        # [0] Flat [1] Bass Boost [2] Focus [3] Smiley [4] Custom, then the game
+        # presets. Writing gains fills the Custom slot — and the DAC screen
+        # duly draws them — but the headset keeps applying whichever preset is
+        # selected, which ASM sets to Flat at init. The sliders moved, the
+        # screen followed, the sound did not.
+        #
+        # `preset_select` is deliberately not named `*_command`: keys ending
+        # that way are forwarded as keyword arguments to the parametric
+        # encoders below.
+        self.hardware_eq_preset_select = (
+            [int(b) for b in hardware_eq['preset_select']]
+            if 'preset_select' in hardware_eq else None
+        )
+        self.hardware_eq_custom_preset_id = int(
+            hardware_eq.get('custom_preset_id', 0x04))
         # Families whose EQ takes a full parametric description rather than a
         # flat run of gains name an encoder from hardware_eq.py here, plus the
         # opcodes that encoder needs.

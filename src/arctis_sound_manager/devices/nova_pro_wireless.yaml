@@ -129,6 +129,15 @@ device:
   # already use.
   hardware_eq:
     command: [0x06, 0x33]
+    # `custom_eq` (0x33) only fills the Custom slot — the base station draws
+    # the curve on its screen, and keeps applying whichever preset is
+    # *selected*. `selected_eq_preset` (0x2E) is that choice: [0] Flat
+    # [1] Bass Boost [2] Focus [3] Smiley [4] Custom, then the game presets.
+    # device_init sets Flat above so the hardware stays neutral behind the
+    # Sonar EQ; ASM now switches to Custom whenever it writes a curve, which
+    # is what makes these sliders audible instead of merely visible.
+    preset_select: [0x06, 0x2e]
+    custom_preset_id: 0x04
 
   online_status:
     status_variable: headset_power_status

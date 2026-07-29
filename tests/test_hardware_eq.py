@@ -41,6 +41,17 @@ EXPECTED_EQ_COMMANDS = {
     "nova_4.yaml": ([0x33], 24),
 }
 
+# Families where writing the curve does not activate it: the gains land in the
+# Custom slot and the headset keeps applying whichever preset is selected.
+# profile → the frame that must follow the gains.
+# Across all 127 SteelSeries specs, only these two families declare
+# `selected_eq_preset` (0x2E) — the parametric ones carry `preset_type` in the
+# curve frame itself, and every other flat-gain family has no such command.
+EXPECTED_PRESET_SELECT = {
+    "nova_pro_wireless.yaml": [0x06, 0x2E, 0x04],   # [4] = Custom
+    "arctis_nova_pro_wired.yaml": [0x06, 0x2E, 0x04],
+}
+
 # Profiles whose EQ takes a parametric payload instead (see hardware_eq.py).
 PARAMETRIC_PROFILES = {
     # profile → the opcodes its frames must carry, in order
@@ -65,6 +76,8 @@ def _engine(config: DeviceConfiguration | None) -> MagicMock:
     engine.get_command_endpoint_address.return_value = 0
     engine.send_eq_command = lambda bands: CoreEngine.send_eq_command(engine, bands)
     engine.has_hardware_eq = lambda: CoreEngine.has_hardware_eq(engine)
+    engine._select_custom_eq_preset = (
+        lambda endpoint: CoreEngine._select_custom_eq_preset(engine, endpoint))
     return engine
 
 
@@ -74,8 +87,45 @@ def test_declared_profiles_send_their_own_command(profile, expected):
     engine = _engine(_config(profile))
 
     assert engine.send_eq_command([20] * 10) is True
-    engine.send_command.assert_called_once_with(command + [zero_at] * 10, 0)
+    engine.send_command.assert_any_call(command + [zero_at] * 10, 0)
+    assert engine.send_command.call_args_list[0].args[0] == command + [zero_at] * 10
     assert engine.has_hardware_eq() is True
+
+
+@pytest.mark.parametrize("profile,expected", sorted(EXPECTED_PRESET_SELECT.items()))
+def test_the_written_curve_is_made_the_active_preset(profile, expected):
+    """Writing the gains fills the Custom slot; it does not select it.
+
+    On these two families the base station drew the curve on its screen as the
+    sliders moved while the sound never changed, because `device_init` selects
+    Flat and nothing ever switched away from it — a custom EQ you could see and
+    not hear.
+    """
+    engine = _engine(_config(profile))
+
+    assert engine.send_eq_command([20] * 10) is True
+
+    frames = [call.args[0] for call in engine.send_command.call_args_list]
+    assert frames[-1] == expected, "the preset switch must follow the gains"
+    assert len(frames) == 2
+
+
+@pytest.mark.parametrize("profile", sorted(
+    set(EXPECTED_EQ_COMMANDS) - set(EXPECTED_PRESET_SELECT)))
+def test_families_without_a_preset_command_send_only_the_gains(profile):
+    """No opcode may be invented for a family whose spec declares none."""
+    engine = _engine(_config(profile))
+
+    engine.send_eq_command([20] * 10)
+
+    assert len(engine.send_command.call_args_list) == 1
+    assert _config(profile).hardware_eq_preset_select is None
+
+
+@pytest.mark.parametrize("profile", sorted(PARAMETRIC_PROFILES))
+def test_parametric_families_do_not_grow_a_preset_frame(profile):
+    """They carry `preset_type` inside the curve frame; 0x2E is not theirs."""
+    assert _config(profile).hardware_eq_preset_select is None
 
 
 @pytest.mark.parametrize("profile", [
@@ -158,7 +208,7 @@ def test_bands_are_appended_verbatim():
 
     engine.send_eq_command(bands)
 
-    engine.send_command.assert_called_once_with([0x06, 0x33] + bands, 0)
+    assert engine.send_command.call_args_list[0].args[0] == [0x06, 0x33] + bands
 
 
 def test_families_needing_a_pause_get_one_between_frames(monkeypatch):

@@ -69,6 +69,14 @@ device:
   # Nova Pro Wireless.
   hardware_eq:
     command: [0x06, 0x33]
+    # Writing the gains fills the Custom slot; the GameDAC keeps applying the
+    # preset that is *selected*, which device_init sets to Flat above.
+    # `selected_eq_preset` (0x2E) is that choice — [0] Flat [1] Bass Boost
+    # [2] Focus [3] Smiley [4] Custom — declared by this family's own spec
+    # (base_arctis_nova_pro.device, device_report_id 0x06), not inherited from
+    # the wireless one by analogy.
+    preset_select: [0x06, 0x2e]
+    custom_preset_id: 0x04
 
   # OLED screen transport parameters — explicit values keep the config
   # self-documenting and let oled_manager.py fall back cleanly for devices

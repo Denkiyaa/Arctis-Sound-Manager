@@ -1678,6 +1678,7 @@ class CoreEngine:
                 if index and frame_delay:
                     time.sleep(frame_delay)
                 self.send_command(frame, endpoint)
+            self._select_custom_eq_preset(endpoint)
             return True
 
         command = self.device_config.hardware_eq_command
@@ -1691,7 +1692,38 @@ class CoreEngine:
         # Shift ASM's 0-40 sliders onto whatever this family calls 0 dB.
         shift = self.device_config.hardware_eq_zero - 20
         self.send_command(list(command) + [b + shift for b in bands], endpoint)
+        self._select_custom_eq_preset(endpoint)
         return True
+
+    def _select_custom_eq_preset(self, endpoint: int) -> None:
+        """Make the curve just written the one the headset actually applies.
+
+        On the Nova Pro Wireless and the Nova Pro Wired GameDAC, writing the
+        ten gains only fills the Custom slot: the headset keeps applying
+        whichever preset is *selected*, and ASM selects Flat during
+        `device_init` so its own Sonar EQ is the only thing colouring the
+        sound. The result was a custom EQ that could be seen and not heard —
+        the DAC screen drew the curve as the sliders moved while nothing
+        changed audibly, because Flat was still the active preset.
+
+        Selecting Custom here rather than in `device_init` keeps the neutral
+        default for anyone who never touches these sliders: with no
+        eq_bands.json, `_apply_stored_eq()` returns before reaching this, so
+        the headset stays on Flat exactly as before.
+
+        Families whose write already activates the curve (the parametric ones
+        carry `preset_type` in the frame itself, and declare no such opcode)
+        leave `preset_select` unset and are untouched.
+        """
+        if self.device_config is None:
+            return
+        select = self.device_config.hardware_eq_preset_select
+        if not select:
+            return
+        self.send_command(
+            list(select) + [self.device_config.hardware_eq_custom_preset_id],
+            endpoint,
+        )
 
     def has_hardware_eq(self) -> bool:
         """True when this headset exposes an EQ the custom band sliders drive."""
