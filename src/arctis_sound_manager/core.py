@@ -109,6 +109,16 @@ class CoreEngine:
         # Arctis_Game / Arctis_Chat / Arctis_Media virtual sinks.
         self.loopback_manager = LoopbackManager()
 
+        # Futures waiting on a specific reply opcode from listen_endpoint_loop
+        # (e.g. read_hardware_eq()'s 0x32/0xA6 queries). Only that loop ever
+        # reads the listen endpoint, so a request/response caller must not
+        # open a second reader on it — racing the daemon's own continuous
+        # status polling for whichever packet the kernel hands out next would
+        # lose packets on both sides. Registering a future here and letting
+        # the existing reader resolve it keeps there being exactly one
+        # reader.
+        self._raw_response_waiters: dict[int, list[asyncio.Future]] = {}
+
         # Readiness tracking for the periodic re-scan (issue #76).
         # A device present at boot fires no udev 'add' event; these flags let
         # loop() retry detection until the USB/ALSA stack is fully ready.
@@ -1134,6 +1144,7 @@ class CoreEngine:
                 self.manage_mix_change()
 
             self._absorb_settings_readback(read_input)
+            self._resolve_raw_response_waiters(read_input)
 
             await asyncio.sleep(0.1)
         except usb.core.USBError as e:
@@ -2114,6 +2125,133 @@ class CoreEngine:
                     "Adopting %s=%s read back from the headset (never set here)",
                     name, value)
                 self.device_settings.settings[name] = value
+
+    def _resolve_raw_response_waiters(self, response: list[int]) -> None:
+        """Hand a raw listen-endpoint frame to whoever is awaiting its opcode.
+
+        Called from listen_endpoint_loop for every frame it reads, alongside
+        the existing status/settings-readback absorption — this is the same
+        stream, just also usable for a one-shot request/response instead of
+        only "update whatever's listening".
+        """
+        if not response or not self._raw_response_waiters:
+            return
+        futures = self._raw_response_waiters.pop(response[0], None)
+        if not futures:
+            return
+        for future in futures:
+            if not future.done():
+                future.set_result(list(response))
+
+    async def _await_raw_response(self, opcode: int, timeout: float = 2.0) -> list[int] | None:
+        """Wait up to *timeout* seconds for a listen-endpoint frame starting
+        with *opcode*. Returns None on timeout — the caller decides what that
+        means (headset didn't reply vs. reply lost vs. no headset at all)."""
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._raw_response_waiters.setdefault(opcode, []).append(future)
+        try:
+            return await asyncio.wait_for(future, timeout)
+        except asyncio.TimeoutError:
+            return None
+        finally:
+            waiters = self._raw_response_waiters.get(opcode)
+            if waiters and future in waiters:
+                waiters.remove(future)
+                if not waiters:
+                    del self._raw_response_waiters[opcode]
+
+    def has_hardware_eq_readback(self) -> bool:
+        """True when this headset's profile declares how to read the
+        parametric EQ curve back — only set for families whose spec was
+        checked directly for the 0x32/0xA6 opcodes (#146)."""
+        return bool(
+            self.device_config
+            and self.device_config.hardware_eq_format == 'parametric'
+            and self.device_config.hardware_eq_readback is not None
+        )
+
+    async def read_hardware_eq(self, connection_type: int | None = None) -> dict:
+        """Query the headset for the parametric EQ curve and preset name it
+        currently has stored (issue #146 diagnostics).
+
+        Distinguishes three outcomes a user pasting this into an issue needs
+        told apart:
+          - a conformant curve comes back matching what the sliders sent →
+            the headset received and applied it; the bug is not in the write
+            path or the firmware's application of it.
+          - a reply comes back but decodes to something else (all zero,
+            stuck at defaults, garbage) → the frame arrived but the headset
+            did not adopt it as the active curve.
+          - no reply at all (timeout) → the write likely never reached the
+            headset either — a transport/USB problem, not an EQ one.
+
+        Returns a JSON-serialisable dict; never raises for "no device" /
+        "unsupported" / "no reply", only for a programming error.
+        """
+        if self.device_config is None:
+            return {'ok': False, 'error': 'no_device'}
+        if not self.has_hardware_eq_readback():
+            return {'ok': False, 'error': 'unsupported'}
+
+        from arctis_sound_manager.hardware_eq import (decode_eq_preset_data,
+                                                       decode_eq_preset_name)
+
+        readback = self.device_config.hardware_eq_readback
+        assert readback is not None  # has_hardware_eq_readback() just checked
+        conn = readback.connection_type if connection_type is None else connection_type
+        endpoint = self.get_command_endpoint_address()
+
+        result: dict = {'ok': True, 'connection_type': conn}
+
+        try:
+            self.send_command([readback.band_query, conn], endpoint)
+        except usb.core.USBError as e:
+            return {'ok': False, 'error': f'usb_write_error: {e!r}'}
+        band_response = await self._await_raw_response(readback.band_query)
+        if band_response is None:
+            result['bands'] = None
+            result['bands_error'] = 'timeout'
+        else:
+            # Always carry the raw reply, decoded or not. Where band 1 starts
+            # in this frame is an inference — the spec's own
+            # "TODO: remove after FW fix missing byte" says the firmware drops
+            # a byte, and nobody has seen a real reply yet. If that inference
+            # is off by one, every value below is wrong in a way that still
+            # looks like a curve, and this tool exists precisely to stop us
+            # concluding from something plausible. The hex lets anyone
+            # re-derive the offsets from what the headset actually said.
+            result['bands_raw'] = ' '.join(f'{b & 0xFF:02x}' for b in band_response)
+            try:
+                result['bands'] = [
+                    {'frequency': b.frequency, 'gain_db': b.gain_db,
+                     'q': b.q, 'filter_type': b.filter_type}
+                    for b in decode_eq_preset_data(band_response)
+                ]
+            except ValueError as e:
+                result['bands'] = None
+                result['bands_error'] = f'decode_error: {e}'
+
+        try:
+            self.send_command([readback.name_query, conn], endpoint)
+        except usb.core.USBError as e:
+            result['name'] = None
+            result['name_error'] = f'usb_write_error: {e!r}'
+            return result
+        name_response = await self._await_raw_response(readback.name_query)
+        if name_response is None:
+            result['name'] = None
+            result['name_error'] = 'timeout'
+        else:
+            result['name_raw'] = ' '.join(f'{b & 0xFF:02x}' for b in name_response)
+            try:
+                name, preset_type = decode_eq_preset_name(name_response)
+                result['name'] = name
+                result['preset_type'] = preset_type
+            except ValueError as e:
+                result['name'] = None
+                result['name_error'] = f'decode_error: {e}'
+
+        return result
 
     def _schedule_usb_permission_retry(self) -> None:
         """Retry acquiring the device before blaming the udev rules.

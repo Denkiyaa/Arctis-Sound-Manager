@@ -131,3 +131,111 @@ def encode_parametric_eq(bands: list[EqBand], name: str = "Custom",
 ENCODERS = {
     "parametric": encode_parametric_eq,
 }
+
+
+# ── Reading the curve back (#146 diagnostics) ───────────────────────────────
+#
+# The write side above only proves ASM *sent* a conformant frame — it says
+# nothing about what actually landed inside the headset. The Nova 7 Gen 2
+# family's spec (base_arctis_nova_7_gen2_tx.device) declares two read-back
+# commands: `get_eq_preset_data` (0x32) returns the ten stored bands,
+# `read_eq_preset_name` (0xA6) returns the preset name and slot. Decoding
+# their replies lets a user confirm whether the curve they set with the
+# sliders is actually sitting in the headset.
+#
+# Two offset conventions collide here and both are spelled out because
+# getting either wrong silently decodes padding as a plausible-looking value:
+#
+# 1. ASM's read buffers never carry the leading `report_id` byte the spec
+#    declares as a constant field — this holds for every existing
+#    response_mapping / SettingsReadback in this codebase (see config.py's
+#    SettingsReadback docstring and the 0x20/0xA0/0xB0 replies these profiles
+#    already parse: response[0] is the opcode echo, not report_id).
+# 2. `get_eq_preset_data`'s incoming struct additionally carries
+#    "; TODO: remove after FW fix missing byte" directly on its
+#    connection_type field — the one field this struct has that none of its
+#    siblings (read_eq_preset_name, audio_settings, ux_settings,
+#    headset_status) needed a note for, all of which otherwise mirror their
+#    own outgoing shape exactly. That singles out connection_type as the
+#    byte current firmware omits: the reply is [opcode, band_1..band_10],
+#    with no connection_type echo at all. `read_eq_preset_name` carries no
+#    such note, so it keeps its full declared shape.
+
+def decode_band(data: bytes) -> EqBand:
+    """Six bytes → EqBand, the inverse of :func:`encode_band`.
+
+    The *incoming* eqBand struct uses narrower types than the outgoing one:
+    gain is a plain signed byte (not the float32 encode_band's caller
+    produces) and Q is a 16-bit unsigned value of thousandths (not float32).
+    Decoding with the outgoing widths would misread every band.
+    """
+    if len(data) < 6:
+        raise ValueError(f"eq band frame too short: {len(data)} bytes (need 6)")
+    frequency = int.from_bytes(data[0:2], "little")
+    filter_type = data[2]
+    gain_raw = int.from_bytes(data[3:4], "little", signed=True)
+    q_raw = int.from_bytes(data[4:6], "little")
+    return EqBand(
+        frequency=frequency,
+        gain_db=gain_raw / 10,
+        q=q_raw / 1000,
+        filter_type=filter_type,
+    )
+
+
+# Offset of band 1 inside a decoded get_eq_preset_data (0x32) reply, and the
+# size of each band. response[0] is the 0x32 echo; per the missing-byte note
+# above, connection_type is not echoed by current firmware, so band data
+# starts right after the opcode. If a firmware update starts sending
+# connection_type again, this becomes 2 and get_eq_preset_data replies grow
+# by one byte — decode_eq_preset_data() will raise ValueError (reply too
+# short for BAND_START=1 with the old expectation) rather than silently
+# reading the curve one byte out of phase.
+_EQ_BAND_START = 1
+_EQ_BAND_SIZE = 6
+_EQ_BAND_COUNT = 10
+
+
+def decode_eq_preset_data(response: list[int]) -> list[EqBand]:
+    """Decode a `get_eq_preset_data` (0x32) reply into its ten EqBand.
+
+    Raises ValueError if the reply is shorter than expected — deliberately,
+    rather than returning bands built from padding. See the module-level note
+    above for the offset this assumes and why.
+    """
+    needed = _EQ_BAND_START + _EQ_BAND_SIZE * _EQ_BAND_COUNT
+    if len(response) < needed:
+        raise ValueError(
+            f"get_eq_preset_data reply too short: got {len(response)} bytes, "
+            f"need {needed}."
+        )
+    data = bytes(b & 0xFF for b in response)
+    return [
+        decode_band(data[_EQ_BAND_START + i * _EQ_BAND_SIZE:
+                          _EQ_BAND_START + (i + 1) * _EQ_BAND_SIZE])
+        for i in range(_EQ_BAND_COUNT)
+    ]
+
+
+# read_eq_preset_name's incoming struct carries no missing-byte note, so it
+# mirrors its outgoing shape in full once report_id is stripped:
+# response[0] = 0xA6 echo, [1] = connection_type, [2] = preset_type,
+# [3:64] = 61-byte name.
+_NAME_CONNECTION_OFFSET = 1
+_NAME_PRESET_TYPE_OFFSET = 2
+_NAME_START = 3
+_NAME_LENGTH = 61
+
+
+def decode_eq_preset_name(response: list[int]) -> tuple[str, int]:
+    """Decode a `read_eq_preset_name` (0xA6) reply into (name, preset_type)."""
+    needed = _NAME_START + _NAME_LENGTH
+    if len(response) < needed:
+        raise ValueError(
+            f"read_eq_preset_name reply too short: got {len(response)} bytes, "
+            f"need {needed}."
+        )
+    preset_type = response[_NAME_PRESET_TYPE_OFFSET]
+    name_bytes = bytes(b & 0xFF for b in response[_NAME_START:_NAME_START + _NAME_LENGTH])
+    name = name_bytes.split(b"\x00", 1)[0].decode("utf-8", errors="replace")
+    return name, preset_type

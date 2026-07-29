@@ -280,6 +280,23 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
             self.logger.error(f'SendEqCommand error: {e}')
             return False
 
+    @method('ReadHardwareEq')
+    async def read_hardware_eq(self) -> 's': # type: ignore
+        """Read the parametric EQ curve back from the headset (issue #146).
+
+        Runs on the daemon's own event loop — the same one that already owns
+        the USB listen endpoint — via CoreEngine.read_hardware_eq(), which
+        awaits the reply instead of racing the daemon's continuous status
+        polling for it. asm-cli calls this rather than opening its own USB
+        handle, since the daemon holds the interface claimed exclusively.
+        """
+        try:
+            result = await self.core_engine.read_hardware_eq()
+        except Exception as e:
+            self.logger.error(f'ReadHardwareEq error: {e}')
+            result = {'ok': False, 'error': f'internal_error: {e!r}'}
+        return json.dumps(result)
+
     @method('GetEqBands')
     def get_eq_bands(self) -> 's': # type: ignore
         eq_file = Path.home() / '.config' / 'arctis_manager' / 'eq_bands.json'

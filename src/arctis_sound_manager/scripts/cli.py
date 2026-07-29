@@ -395,6 +395,18 @@ def main():
     arctis_devices_parser = usb_devices_subparser.add_parser('arctis-devices', help='List important Arctis device(s) information, like HID interfaces, alternate configs, etc.')
     arctis_devices_parser.add_argument('--vendor-id', default=0x1038, type=int)
 
+    # Read the on-device parametric EQ curve back (issue #146): tells apart
+    # "the curve never reached the headset" from "it arrived but the
+    # headset isn't applying it". Talks to the running asm-daemon over
+    # D-Bus — only declared for headsets whose profile confirms the
+    # read-back opcodes against their own spec.
+    read_eq_parser = usb_devices_subparser.add_parser(
+        'read-hardware-eq',
+        help="Read the parametric EQ curve currently stored in the headset "
+             "(issue #146: Custom EQ sliders move but nothing audible changes)")
+    read_eq_parser.add_argument('--json', action='store_true',
+                                help='Print the raw JSON reply instead of a table')
+
     # Diagnose — full local-only dump for bug reports.
     diagnose_parser = subparsers.add_parser('diagnose', help='Dump diagnostic info for bug reports (local-only, nothing is sent).')
     diagnose_parser.add_argument('--output', '-o', type=Path, default=None,
@@ -438,6 +450,15 @@ def main():
     elif args.command == 'tools':
         if args.action == 'arctis-devices':
             return arctis_usb_info(args.vendor_id)
+        elif args.action == 'read-hardware-eq':
+            from arctis_sound_manager.cli_tools import (
+                print_hardware_eq_readback, read_hardware_eq_via_dbus)
+            result = read_hardware_eq_via_dbus()
+            if args.json:
+                import json
+                print(json.dumps(result, indent=2))
+                sys.exit(0 if result.get('ok') and result.get('bands') is not None else 1)
+            sys.exit(print_hardware_eq_readback(result))
 
 if __name__ == '__main__':
     main()

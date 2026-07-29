@@ -60,6 +60,24 @@ class SettingsReadback:
                 if offset < len(response)}
 
 
+class HardwareEqReadback:
+    """Commands to read the on-device parametric EQ curve back (issue #146).
+
+    `band_query` is `get_eq_preset_data`'s opcode (spec 0x32), `name_query` is
+    `read_eq_preset_name`'s (spec 0xA6). Both take the same `connection_type`
+    ASM's Custom EQ writes to (0x00 / wireless by default — see
+    hardware_eq.CONNECTION_WIRELESS), so the readback targets exactly the
+    slot the sliders wrote. Only declared for families whose spec was read
+    directly and confirmed to carry these opcodes — do not add this block to
+    a profile by analogy with a sibling family.
+    """
+
+    def __init__(self, band_query: int, name_query: int, connection_type: int = 0x00):
+        self.band_query = int(band_query)
+        self.name_query = int(name_query)
+        self.connection_type = int(connection_type)
+
+
 class ConfigStatusResponseMapping:
     starts_with: int
 
@@ -200,6 +218,11 @@ class DeviceConfiguration:
     hardware_eq_format: str | None
     hardware_eq_options: dict[str, int]
     hardware_eq_zero: int
+    # Opcodes to read the stored curve back from the headset, for diagnosing
+    # "the sliders don't seem to do anything" reports (#146): None unless the
+    # profile declares `hardware_eq.readback`, which only happens for
+    # families whose spec was checked directly for these opcodes.
+    hardware_eq_readback: HardwareEqReadback | None
 
     def __init__(self, raw_configuration: dict[str, Any]):
         raw_config: dict[str, Any] | None = raw_configuration.get('device', None)
@@ -251,6 +274,8 @@ class DeviceConfiguration:
         # are always 0-40 with 20 = 0 dB, and get shifted onto the device's own
         # scale — without this a Nova 4 would sit 2 dB low across the board.
         self.hardware_eq_zero = int(hardware_eq.get('zero_at', 20))
+        readback = hardware_eq.get('readback', None)
+        self.hardware_eq_readback = HardwareEqReadback(**readback) if readback else None
 
         if not self.name:
             raise ValueError("Invalid configuration: 'device.name' must be specified and non-empty")

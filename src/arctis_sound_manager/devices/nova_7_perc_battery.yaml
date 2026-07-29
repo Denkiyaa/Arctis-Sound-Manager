@@ -92,6 +92,15 @@ device:
     name_command: 0xa7
     band_command: 0x33
     commit_command: 0x27
+    # Read the curve back from the headset (issue #146, reported on the Nova
+    # 7P Gen 2 but this family shares the same base_arctis_nova_7_gen2_tx.device
+    # spec, opcodes and all). get_eq_preset_data (0x32) and read_eq_preset_name
+    # (0xA6). connection_type defaults to 0x00 (wireless), the slot the
+    # Custom EQ sliders write to. See hardware_eq.decode_eq_preset_data() for
+    # the firmware byte-count quirk this reply has.
+    readback:
+      band_query: 0x32
+      name_query: 0xa6
 
   online_status:
     status_variable: headset_power_status
