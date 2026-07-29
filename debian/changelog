@@ -1,3 +1,38 @@
+arctis-sound-manager (1.2.18-1) noble; urgency=medium
+
+  * Custom EQ: your saved curve now reaches the headset at startup. On the
+    Nova 7 / 7P Gen 2, Nova 5, Nova 3 Wireless and GameBuds, the curve
+    stored in the app was replayed at every start in a format only the Nova
+    Pro Wireless understands, so the headset discarded it without a word.
+    The custom EQ was effectively inert after each restart and only came
+    alive if you happened to move a slider by hand.
+  * Arctis Nova 3P / 3X Wireless: the ChatMix dial should now report to the
+    app. Turning the wheel produced no USB traffic whatsoever — it was
+    acting as a plain local volume knob. On this dongle ChatMix is a mode
+    the computer has to switch on, and ASM never did; it does now. (If your
+    dial still does nothing after this update, please say so in #149 — this
+    one could not be tested on hardware here.)
+  * Bluetooth indicator no longer shows a state the headset never sent. On
+    the Nova 7 Gen 2, Nova 7P Gen 2 and Nova 5, the connection indicator
+    read a byte SteelSeries' own specification marks as unused, so what it
+    displayed was padding dressed up as a link state — on the Nova 5, a
+    headset that has no Bluetooth at all. The row is gone rather than wrong.
+  * Arctis Nova 7 WoW Edition (post-update firmware): battery percentage was
+    wildly wrong. That dongle's PID was filed with the first-generation Nova
+    7, whose battery is reported on a four-step scale. After its firmware
+    update the headset speaks the Gen 2 protocol and reports a real 0-100 %,
+    so a battery at 76 % came out as 1900 %. It is now read with the right
+    family.
+  * asm-cli tools read-hardware-eq — read the equaliser curve back out of
+    the headset. For the Nova 7 / 7P Gen 2. When the custom EQ sliders seem
+    to do nothing (#146), this tells apart the three cases that look
+    identical from the outside: the curve arrived and is stored, the curve
+    arrived and the headset ignored it, or nothing reached the headset at
+    all. It also prints the raw reply, so a decoding that turns out to be
+    off can be corrected from a real report rather than a guess.
+
+ -- loteran <axel.valadon@gmail.com>  Wed, 29 Jul 2026 00:00:00 +0000
+
 arctis-sound-manager (1.2.17-1) noble; urgency=medium
 
   * Sonar equaliser: delete a point with a keypress, quick-save, and revert.
