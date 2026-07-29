@@ -11,7 +11,28 @@ device:
 
   command_transport: ctrl_output
   command_interface_index: [3, 0]
-  listen_interface_indexes: [3]
+  # Interface 3 carries commands and their polled replies (it is the one
+  # matching the spec's `(usage-page 0xFFC0)`). Interface 5 is a second,
+  # separate one: `arctis_nova_7p_gen2_tx.device` declares
+  # `(sync-interface 0xff00 0x0001 5)`, and `translate_sync_data` in the shared
+  # base spec lists what arrives there — 0x52 mic mute, 0x45 ChatMix (both
+  # levels), 0xB7/0xB9/0xBB battery/connection/charging, 0xB5 Bluetooth, and
+  # the headset's own echo of the parametric EQ frames (0x33 / 0xA7 / 0x27).
+  # Listening on 3 alone, ASM learned all of that only from the 0xB0 poll and
+  # never saw the EQ acknowledgements at all (#146).
+  #
+  # These are two different roles, not a contradiction: that ASM writes
+  # successfully on interface 3 says nothing about interface 5. The same split
+  # was confirmed on real hardware for the Nova 3 Wireless in #149, where the
+  # pushes landed on 5 and only the polled 0xB0 came back on 3.
+  #
+  # No response_mapping is declared for those push opcodes yet, so nothing
+  # this listener reads changes any displayed value — on purpose. The offsets
+  # cannot be taken from the spec: on the Nova 3 Wireless the spec puts the
+  # 0xB7 battery byte at payload[2] (ASM offset 0x01) while the shipped,
+  # hardware-checked profile reads 0x02. Until someone's frames are seen, the
+  # listener's job is to make them visible in the daemon's debug log.
+  listen_interface_indexes: [3, 5]
 
   # Nova 7P inherits Nova 7 protocol. Sidetone has no effect on this device.
   # ChatMix dial controls sidetone physically but the setting does nothing — excluded.
@@ -80,6 +101,17 @@ device:
     name_command: 0xa7
     band_command: 0x33
     commit_command: 0x27
+    # Read the curve back from the headset (issue #146: sliders move, headset
+    # is silent — this is how to tell "the curve never arrived" from "it
+    # arrived but isn't applied"). get_eq_preset_data (0x32) and
+    # read_eq_preset_name (0xA6), both declared in the spec this family
+    # shares with the Nova 7 Gen 2 (base_arctis_nova_7_gen2_tx.device).
+    # connection_type defaults to 0x00 (wireless), the same slot the Custom
+    # EQ sliders write to. See hardware_eq.decode_eq_preset_data() for the
+    # firmware byte-count quirk this reply has.
+    readback:
+      band_query: 0x32
+      name_query: 0xa6
 
   online_status:
     status_variable: headset_power_status
