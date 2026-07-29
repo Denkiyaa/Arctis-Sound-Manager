@@ -26,13 +26,14 @@ device:
   # was confirmed on real hardware for the Nova 3 Wireless in #149, where the
   # pushes landed on 5 and only the polled 0xB0 came back on 3.
   #
-  # No response_mapping is declared for those push opcodes yet, so nothing
-  # this listener reads changes any displayed value — on purpose. The offsets
-  # cannot be taken from the spec: on the Nova 3 Wireless the spec puts the
-  # 0xB7 battery byte at payload[2] (ASM offset 0x01) while the shipped,
-  # hardware-checked profile reads 0x02. Until someone's frames are seen, the
-  # listener's job is to make them visible in the daemon's debug log.
-  listen_interface_indexes: [3, 5]
+  # Listening on 5 as well is held back until someone confirms it on real
+  # hardware. Taking a second interface means detaching it from the kernel,
+  # which can cost the dongle its media keys, and a mis-claimed interface is
+  # how the headset ends up wedged in a loop of EIO. This profile also covers
+  # PID 0x22a7, which no GG 115 spec describes at all — so there is nothing to
+  # check that one against. Worth doing, but not worth shipping blind: the
+  # frames it would expose are a diagnostic aid, not a fix anyone is waiting on.
+  listen_interface_indexes: [3]
 
   # Nova 7P inherits Nova 7 protocol. Sidetone has no effect on this device.
   # ChatMix dial controls sidetone physically but the setting does nothing — excluded.
