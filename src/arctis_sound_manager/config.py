@@ -223,6 +223,7 @@ class DeviceConfiguration:
     # their Custom slot. None ⇒ writing the curve is enough.
     hardware_eq_preset_select: list[int] | None
     hardware_eq_custom_preset_id: int
+    hardware_eq_flat_preset_id: int
     # Opcodes to read the stored curve back from the headset, for diagnosing
     # "the sliders don't seem to do anything" reports (#146): None unless the
     # profile declares `hardware_eq.readback`, which only happens for
@@ -279,6 +280,8 @@ class DeviceConfiguration:
         )
         self.hardware_eq_custom_preset_id = int(
             hardware_eq.get('custom_preset_id', 0x04))
+        self.hardware_eq_flat_preset_id = int(
+            hardware_eq.get('flat_preset_id', 0x00))
         # Families whose EQ takes a full parametric description rather than a
         # flat run of gains name an encoder from hardware_eq.py here, plus the
         # opcodes that encoder needs.

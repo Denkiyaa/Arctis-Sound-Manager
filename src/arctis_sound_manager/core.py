@@ -119,6 +119,11 @@ class CoreEngine:
         # reader.
         self._raw_response_waiters: dict[int, list[asyncio.Future]] = {}
 
+        # EQ mode the on-device equaliser was last set for ("sonar"/"custom"),
+        # so reconcile_hardware_eq_mode() writes on a change and stays quiet
+        # otherwise. None until the first reconciliation.
+        self._applied_eq_mode: str | None = None
+
         # Readiness tracking for the periodic re-scan (issue #76).
         # A device present at boot fires no udev 'add' event; these flags let
         # loop() retry detection until the USB/ALSA stack is fully ready.
@@ -1614,9 +1619,13 @@ class CoreEngine:
                             "Device may be left in a partially-configured state."
                         )
 
-        self._apply_stored_eq()
+        # Not _apply_stored_eq() directly: in Sonar mode the stored curve must
+        # not be reinstated at all, or the headset would colour the sound
+        # underneath the software EQ on every start.
+        self._applied_eq_mode = None
+        self.reconcile_hardware_eq_mode()
 
-    def _apply_stored_eq(self) -> None:
+    def _apply_stored_eq(self) -> bool:
         """Replay the saved custom curve at init, the way the sliders send it.
 
         This used to write [0x06, 0x33] + gains itself — the Nova Pro Wireless'
@@ -1629,14 +1638,16 @@ class CoreEngine:
         """
         eq_file = Path.home() / '.config' / 'arctis_manager' / 'eq_bands.json'
         if not eq_file.exists():
-            return
+            return False
         try:
             bands = json.loads(eq_file.read_text())
             if isinstance(bands, list) and len(bands) == 10:
                 if self.send_eq_command([int(b) for b in bands]):
                     self.logger.info("Custom EQ applied from eq_bands.json")
+                    return True
         except Exception as e:
             self.logger.warning(f"Failed to apply stored EQ: {e}")
+        return False
 
     def send_eq_command(self, bands: list[int]) -> bool:
         """Push the 10-band EQ to the headset. Returns False if it has none.
@@ -1720,10 +1731,72 @@ class CoreEngine:
         select = self.device_config.hardware_eq_preset_select
         if not select:
             return
+        # The two equalisers are mutually exclusive: in Sonar mode the on-device
+        # curve must stay flat whoever asked for a write, so the switch to
+        # Custom is gated on the mode rather than on the caller being polite.
+        if self._read_eq_mode_is_sonar():
+            return
         self.send_command(
             list(select) + [self.device_config.hardware_eq_custom_preset_id],
             endpoint,
         )
+
+    def _flatten_hardware_eq(self) -> bool:
+        """Take the on-device equaliser out of the signal path.
+
+        Sonar mode does its equalising in software, in the filter chain; a
+        curve still active in the headset would stack on top of it, so the
+        hardware side has to be neutral for the Sonar curve to be the only
+        thing shaping the sound.
+
+        Families with a preset command switch to their Flat preset, which
+        leaves the stored custom curve untouched in its slot. The others have
+        no such command, so they get a curve that is flat — ASM keeps
+        eq_bands.json as the source of truth and writes the real curve back
+        when the mode returns to Custom.
+        """
+        if self.device_config is None or not self.has_hardware_eq():
+            return False
+
+        select = self.device_config.hardware_eq_preset_select
+        if select:
+            self.send_command(
+                list(select) + [self.device_config.hardware_eq_flat_preset_id],
+                self.get_command_endpoint_address(),
+            )
+            return True
+
+        # 20 is 0 dB on ASM's 0-40 slider scale; send_eq_command shifts it onto
+        # whatever this family calls zero.
+        return self.send_eq_command([20] * 10)
+
+    def reconcile_hardware_eq_mode(self) -> bool:
+        """Make the on-device equaliser match the active EQ mode.
+
+        `.eq_mode` is written from four places — both mode toggles, a profile
+        being restored, and the Sonar-forcing path in equalizer_page — and
+        adding a D-Bus call to each of them would be four call sites to keep in
+        step, the drift this codebase keeps getting bitten by. Reconciling from
+        the status poll instead covers every writer, including a file edited by
+        hand, and sends nothing while the mode is unchanged.
+
+        Returns True when a write was issued.
+        """
+        if self.device_config is None or not self.has_hardware_eq():
+            return False
+
+        mode = 'sonar' if self._read_eq_mode_is_sonar() else 'custom'
+        if mode == self._applied_eq_mode:
+            return False
+
+        applied = (self._flatten_hardware_eq() if mode == 'sonar'
+                   else self._apply_stored_eq())
+        # Remember the mode either way: a family with no stored curve has
+        # nothing to apply, and retrying every two seconds would be pointless.
+        self._applied_eq_mode = mode
+        if applied:
+            self.logger.info("On-device EQ set for %s mode", mode)
+        return applied
 
     def has_hardware_eq(self) -> bool:
         """True when this headset exposes an EQ the custom band sliders drive."""
@@ -2449,6 +2522,12 @@ class CoreEngine:
                             self.logger.warning(f"Status poll USB error: {e!r}")
                     except Exception as e:
                         self.logger.warning(f"Status poll failed: {e!r}")
+                    # Keep the on-device EQ exclusive with the Sonar one. A
+                    # no-op unless the mode changed since the last pass.
+                    try:
+                        self.reconcile_hardware_eq_mode()
+                    except Exception as e:
+                        self.logger.warning(f"EQ mode reconcile failed: {e!r}")
         except asyncio.CancelledError:
             raise
 

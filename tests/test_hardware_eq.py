@@ -68,6 +68,21 @@ def _config(name: str) -> DeviceConfiguration:
     return DeviceConfiguration(YAML(typ="safe").load(DEVICES / name))
 
 
+@pytest.fixture(autouse=True)
+def _custom_eq_mode(tmp_path, monkeypatch):
+    """Run these tests in Custom EQ mode, whatever the developer's own mode is.
+
+    `_select_custom_eq_preset` reads `~/.config/arctis_manager/.eq_mode` to keep
+    the two equalisers exclusive (see test_eq_mode_exclusivity.py), so without
+    this every expectation here would depend on the machine running them.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = tmp_path / ".config" / "arctis_manager"
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / ".eq_mode").write_text("custom")
+    return tmp_path
+
+
 def _engine(config: DeviceConfiguration | None) -> MagicMock:
     engine = MagicMock()
     engine._device_lock = threading.RLock()
@@ -76,6 +91,7 @@ def _engine(config: DeviceConfiguration | None) -> MagicMock:
     engine.get_command_endpoint_address.return_value = 0
     engine.send_eq_command = lambda bands: CoreEngine.send_eq_command(engine, bands)
     engine.has_hardware_eq = lambda: CoreEngine.has_hardware_eq(engine)
+    engine._read_eq_mode_is_sonar = CoreEngine._read_eq_mode_is_sonar
     engine._select_custom_eq_preset = (
         lambda endpoint: CoreEngine._select_custom_eq_preset(engine, endpoint))
     return engine
@@ -240,7 +256,7 @@ def _stored_curve(monkeypatch, tmp_path, bands):
     """Put an eq_bands.json where _apply_stored_eq() will look for it."""
     monkeypatch.setenv("HOME", str(tmp_path))
     eq_file = tmp_path / ".config" / "arctis_manager" / "eq_bands.json"
-    eq_file.parent.mkdir(parents=True)
+    eq_file.parent.mkdir(parents=True, exist_ok=True)
     eq_file.write_text(json.dumps(bands))
 
 
