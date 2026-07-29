@@ -5,14 +5,19 @@
 test_hardware_eq_readback.py — reading the parametric EQ curve back (#146).
 
 The user reports moving the Custom EQ sliders on an Arctis Nova 7P Gen 2 and
-hearing no difference. ASM's write path was already checked byte-for-byte
-against the spec, so the open question is whether the curve ever reaches the
-headset at all, or reaches it and is simply not applied. Both `get_eq_preset_
-data` (0x32) and `read_eq_preset_name` (0xA6) let the headset answer that
-question directly — this file covers decoding their replies, the profile
-gating that keeps the feature off headsets nobody has confirmed it for, and
-CoreEngine.read_hardware_eq()'s three possible outcomes (curve back, reply
-but wrong, no reply at all).
+hearing no difference. ASM's write path had been checked field by field against
+the spec and looked conformant, so the open question was whether the curve ever
+reaches the headset at all, or reaches it and is simply not applied. Both
+`get_eq_preset_data` (0x32) and `read_eq_preset_name` (0xA6) let the headset
+answer that question directly, and it did: it was holding its factory preset,
+so the curve never arrived. What the spec reading had missed was the leading
+`report_id` byte — the HID report number, which belongs in the SET_REPORT
+wValue and not in the payload.
+
+This file covers decoding those replies (including the real ones the headset
+sent, pinned as fixtures), the profile gating that keeps the feature off
+headsets nobody has confirmed it for, and CoreEngine.read_hardware_eq()'s three
+possible outcomes (curve back, reply but wrong, no reply at all).
 """
 from __future__ import annotations
 
@@ -33,9 +38,8 @@ from arctis_sound_manager.hardware_eq import (decode_band,
 DEVICES = Path(__file__).parent.parent / "src" / "arctis_sound_manager" / "devices"
 
 # A known get_eq_preset_data (0x32) reply: response[0] is the opcode echo,
-# no connection_type byte (current firmware's missing-byte quirk — see
-# hardware_eq.py), then 10 bands of 6 bytes each: freq LE u16, filter_type
-# u8, gain int8 decidecibels, q_factor LE u16 thousandths.
+# response[1] the connection_type echo, then 10 bands of 6 bytes each: freq
+# LE u16, filter_type u8, gain int8 decidecibels, q_factor LE u16 thousandths.
 _KNOWN_BANDS = [
     # (frequency, filter_type, gain_db, q)
     (31,    1, -3.5,  1.41),
@@ -53,7 +57,7 @@ _KNOWN_BANDS = [
 # Hand-computed once (see decode task notes) and pinned here so a change to
 # the encoding is caught even if the encoder used to build it also changes.
 _KNOWN_0x32_RESPONSE = [
-    0x32,
+    0x32, 0x00,
     31, 0, 1, 221, 130, 5,
     62, 0, 1, 0, 130, 5,
     125, 0, 1, 60, 130, 5,
@@ -67,9 +71,69 @@ _KNOWN_0x32_RESPONSE = [
 ]
 
 
+# ── What a real headset actually said ───────────────────────────────────────
+#
+# Captured on @camperotactico's Arctis Nova 7P Gen 2 (#146) with
+# `asm-cli tools read-hardware-eq`, after setting an extreme curve in the GUI.
+# Two things are settled by these 128 bytes and nothing else needs to infer
+# them again:
+#
+#  - connection_type IS echoed (byte 1 of both replies), so band 1 starts at
+#    offset 2. Read from offset 1 — as this module first did, from the spec's
+#    "TODO: remove after FW fix missing byte" note — the same bytes decode to
+#    ten plausible bands at 8192/16389/32005 Hz with Q 34.30.
+#  - the headset was holding its factory `Flat` preset (preset_type 0, gains
+#    all 0, the canonical 32…16000 Hz grid at Q 1.414) while the user's curve
+#    was set. Nothing ASM wrote had landed: the write frames carried a leading
+#    report_id byte that shifted the opcode out of position.
+_REAL_0x32_REPLY = [
+    0x32, 0x00,
+    0x20, 0x00, 0x01, 0x00, 0x86, 0x05,   #    32 Hz
+    0x40, 0x00, 0x01, 0x00, 0x86, 0x05,   #    64 Hz
+    0x7d, 0x00, 0x01, 0x00, 0x86, 0x05,   #   125 Hz
+    0xfa, 0x00, 0x01, 0x00, 0x86, 0x05,   #   250 Hz
+    0xf4, 0x01, 0x01, 0x00, 0x86, 0x05,   #   500 Hz
+    0xe8, 0x03, 0x01, 0x00, 0x86, 0x05,   #  1000 Hz
+    0xd0, 0x07, 0x01, 0x00, 0x86, 0x05,   #  2000 Hz
+    0xa0, 0x0f, 0x01, 0x00, 0x86, 0x05,   #  4000 Hz
+    0x40, 0x1f, 0x01, 0x00, 0x86, 0x05,   #  8000 Hz
+    0x80, 0x3e, 0x01, 0x00, 0x86, 0x05,   # 16000 Hz
+    0x00, 0x00,                            # padding to 64
+]
+
+_REAL_0xA6_REPLY = [0xa6, 0x00, 0x00, *b"Flat", *([0x00] * 57)]
+
+_FACTORY_FLAT_FREQUENCIES = (32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000)
+
+
 def test_pinned_known_response_matches_hand_encoding():
     """Guard against the fixture above and the hand-rolled bytes drifting apart."""
-    assert len(_KNOWN_0x32_RESPONSE) == 61
+    assert len(_KNOWN_0x32_RESPONSE) == 62
+
+
+def test_real_reply_fixtures_are_full_64_byte_reports():
+    assert len(_REAL_0x32_REPLY) == 64
+    assert len(_REAL_0xA6_REPLY) == 64
+
+
+def test_real_headset_reply_decodes_to_the_canonical_frequency_grid():
+    """The offset is observed, not inferred: 32 Hz at offset 2, 8192 at 1."""
+    bands = decode_eq_preset_data(_REAL_0x32_REPLY)
+
+    assert tuple(b.frequency for b in bands) == _FACTORY_FLAT_FREQUENCIES
+    assert all(b.gain_db == 0.0 for b in bands)
+    assert all(b.filter_type == 1 for b in bands)
+    assert all(b.q == pytest.approx(1.414) for b in bands)
+
+
+def test_real_headset_name_reply_decodes_to_the_factory_preset():
+    """`Flat` / preset_type 0 while a custom curve was set — the write never
+    landed, which is what sent us looking at the frames rather than the
+    firmware."""
+    name, preset_type = decode_eq_preset_name(_REAL_0xA6_REPLY)
+
+    assert name == "Flat"
+    assert preset_type == 0
 
 
 # ── decode_band / decode_eq_preset_data ─────────────────────────────────────
@@ -99,10 +163,13 @@ def test_decode_eq_preset_data_known_response_matches_expected_db_values():
         assert band.q == pytest.approx(q)
 
 
-def test_decode_eq_preset_data_offset_skips_the_opcode_echo_only():
-    """response[0] must never be read as data — it's the 0x32 echo."""
+def test_decode_eq_preset_data_skips_the_opcode_and_connection_echoes():
+    """response[0] is the 0x32 echo and response[1] the connection_type echo.
+
+    Both are confirmed by `_REAL_0x32_REPLY`; neither may be read as curve data.
+    """
     bands = decode_eq_preset_data(_KNOWN_0x32_RESPONSE)
-    assert bands[0].frequency == 31, "band 1 must start right after the opcode byte"
+    assert bands[0].frequency == 31, "band 1 starts after opcode + connection_type"
 
 
 def test_decode_eq_preset_data_too_short_raises_rather_than_guessing():
@@ -284,13 +351,13 @@ def test_read_hardware_eq_reports_no_reply_as_timeout_not_a_crash():
 
 
 def test_the_raw_reply_is_always_carried_alongside_the_decoding():
-    """Where band 1 starts is inferred, never observed — so the bytes ship too.
+    """The raw hex ships alongside the decoding, and it is what saved this.
 
-    The offset comes from the spec's own "TODO: remove after FW fix missing
-    byte" note, not from a captured frame. If it is off by one, every decoded
-    figure is wrong and still looks like a curve. A diagnostic tool that can
-    only be believed is worse than none: the raw hex is what lets the
-    decoding be checked, and fixed from a report rather than another guess.
+    Where band 1 starts was originally inferred from the spec's "TODO: remove
+    after FW fix missing byte" note, and it was off by one: the reply still
+    decoded into ten plausible-looking bands (8192 Hz, Q 34.30). A diagnostic
+    tool that can only be believed is worse than none — the hex in the user's
+    report is what let the offset be corrected instead of trusted.
     """
     engine = _parametric_engine()
     responses = {0x32: _KNOWN_0x32_RESPONSE, 0xA6: _name_response("Custom", 1)}

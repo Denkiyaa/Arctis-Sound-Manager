@@ -64,14 +64,30 @@ def test_values_are_clamped_to_what_the_field_holds():
 
 # ── Frame sequence ───────────────────────────────────────────────────────────
 
+def test_frames_start_with_the_opcode_not_a_report_id():
+    """The `report_id` field the specs declare is the HID report number.
+
+    It travels in the SET_REPORT wValue (CoreEngine.send_command, from the
+    profile's `command_report_id`), never as payload. Emitting it shifted every
+    frame one byte right, the headset read opcode 0x00 and dropped the curve in
+    silence on every parametric family (#146). A real Nova 7P Gen 2 replies to
+    the readback queries, which have never carried the byte.
+    """
+    frames = encode_parametric_eq(bands_from_gains([0.0] * 10), name="Flat",
+                                  commit_command=0x27)
+
+    assert [frame[0] for frame in frames] == [0xA7, 0x33, 0x27]
+    assert all(frame[0] != 0x00 for frame in frames)
+
+
 def test_frames_come_in_the_order_the_device_expects():
     frames = encode_parametric_eq(bands_from_gains([0.0] * 10), name="Flat",
                                   commit_command=0x27)
 
     assert len(frames) == 3
-    assert frames[0][1] == 0xA7, "first frame carries the name"
-    assert frames[1][1] == 0x33, "second frame carries the bands"
-    assert frames[2][1] == 0x27, "third frame commits"
+    assert frames[0][0] == 0xA7, "first frame carries the name"
+    assert frames[1][0] == 0x33, "second frame carries the bands"
+    assert frames[2][0] == 0x27, "third frame commits"
 
 
 def test_commit_frame_is_absent_unless_asked_for():
@@ -80,30 +96,54 @@ def test_commit_frame_is_absent_unless_asked_for():
                                   name_command=0xA5)
 
     assert len(frames) == 2
-    assert [f[1] for f in frames] == [0xA5, 0x33]
+    assert [f[0] for f in frames] == [0xA5, 0x33]
 
 
 def test_name_frame_carries_connection_slot_and_ascii_name():
     frames = encode_parametric_eq(bands_from_gains([0.0] * 10), name="Flat")
     name_frame = frames[0]
 
-    assert name_frame[2] == CONNECTION_WIRELESS
-    assert name_frame[3] == 0x01  # custom preset slot
-    assert bytes(name_frame[4:]) == b"Flat"
+    assert name_frame[1] == CONNECTION_WIRELESS
+    assert name_frame[2] == 0x01  # custom preset slot
+    assert bytes(name_frame[3:]) == b"Flat"
+
+
+def test_name_frame_matches_the_layout_the_headset_reports_back():
+    """read_eq_preset_name's reply is [0xA6, connection, preset_type, name].
+
+    The write is the same shape one opcode over, so the captured reply in
+    tests/test_hardware_eq_readback.py doubles as a check on this frame.
+    """
+    frames = encode_parametric_eq(bands_from_gains([0.0] * 10), name="Custom")
+
+    assert frames[0][:3] == [0xA7, CONNECTION_WIRELESS, 0x01]
 
 
 def test_band_frame_holds_ten_encoded_bands():
     frames = encode_parametric_eq(bands_from_gains([0.0] * 10))
     band_frame = frames[1]
 
-    assert band_frame[2] == CONNECTION_WIRELESS
-    assert len(band_frame) - 3 == 10 * 6
+    assert band_frame[1] == CONNECTION_WIRELESS
+    assert len(band_frame) - 2 == 10 * 6
+
+
+def test_band_frame_fits_the_64_byte_report():
+    """Two header bytes plus sixty of curve — the size the headset echoes back.
+
+    With the report id in the payload this was 63 bytes of a 64-byte report,
+    which still padded cleanly: nothing about the length gave the extra byte
+    away.
+    """
+    frames = encode_parametric_eq(bands_from_gains([0.0] * 10))
+
+    assert len(frames[1]) == 62
+    assert len(frames[1]) <= 64
 
 
 def test_gains_land_in_the_band_frame_in_order():
     gains = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
     frames = encode_parametric_eq(bands_from_gains(gains))
-    payload = frames[1][3:]
+    payload = frames[1][2:]
 
     for index, gain in enumerate(gains):
         assert payload[index * 6 + 3] == int(gain * 10)
@@ -112,8 +152,8 @@ def test_gains_land_in_the_band_frame_in_order():
 def test_bluetooth_curve_targets_its_own_connection():
     frames = encode_parametric_eq(bands_from_gains([0.0] * 10),
                                   connection=CONNECTION_BLUETOOTH)
-    assert frames[0][2] == CONNECTION_BLUETOOTH
-    assert frames[1][2] == CONNECTION_BLUETOOTH
+    assert frames[0][1] == CONNECTION_BLUETOOTH
+    assert frames[1][1] == CONNECTION_BLUETOOTH
 
 
 def test_default_frequencies_match_the_sliders():
@@ -138,7 +178,7 @@ def test_band_frame_omits_the_connection_when_the_family_does():
                                    bands_carry_connection=False)
 
     assert len(with_conn[1]) - len(without[1]) == 1
-    assert without[1][:2] == [0x00, 0x33]
-    assert with_conn[1][:3] == [0x00, 0x33, CONNECTION_WIRELESS]
+    assert without[1][:1] == [0x33]
+    assert with_conn[1][:2] == [0x33, CONNECTION_WIRELESS]
     # The bands themselves are identical, only their offset differs.
-    assert without[1][2:] == with_conn[1][3:]
+    assert without[1][1:] == with_conn[1][2:]

@@ -81,12 +81,26 @@ def bands_from_gains(gains_db: list[float],
 def encode_parametric_eq(bands: list[EqBand], name: str = "Custom",
                          connection: int = CONNECTION_WIRELESS,
                          preset_type: int = PRESET_CUSTOM,
-                         report_id: int = 0x00,
                          name_command: int = 0xA7,
                          band_command: int = 0x33,
                          commit_command: int | None = None,
                          bands_carry_connection: bool = True) -> list[list[int]]:
     """Frames for the parametric families (Nova 7 Gen 2: 0xA7, Nova 5: 0xA5).
+
+    Each frame starts with its **opcode**, not with the `report_id` the specs
+    declare as their first field. That field is the HID report number, which
+    belongs in the SET_REPORT `wValue` — `CoreEngine.send_command()` puts it
+    there from the profile's `command_report_id`, and these families all
+    declare it constant 0x00 (unnumbered reports, nothing on the wire). GG's
+    own frames look like they carry it because hidapi takes a 65-byte buffer
+    whose first byte is that report number and strips it before sending the 64
+    bytes; ASM's control transfer carries only those 64.
+
+    Emitting it as payload shifted every frame one byte right, so the headset
+    read opcode 0x00 and discarded the lot without a word: the sliders moved
+    and nothing happened, on every parametric family (#146). Hardware settled
+    it — the readback queries in this module have never carried the byte, and
+    a real Nova 7P Gen 2 answers them.
 
     GG sends the curve in order:
 
@@ -114,16 +128,16 @@ def encode_parametric_eq(bands: list[EqBand], name: str = "Custom",
     for band in bands:
         payload += list(encode_band(band))
 
-    band_frame = [report_id, band_command]
+    band_frame = [band_command]
     if bands_carry_connection:
         band_frame.append(connection)
 
     frames = [
-        [report_id, name_command, connection, preset_type] + name_bytes,
+        [name_command, connection, preset_type] + name_bytes,
         band_frame + payload,
     ]
     if commit_command is not None:
-        frames.append([report_id, commit_command])
+        frames.append([commit_command])
     return frames
 
 
@@ -143,23 +157,28 @@ ENCODERS = {
 # their replies lets a user confirm whether the curve they set with the
 # sliders is actually sitting in the headset.
 #
-# Two offset conventions collide here and both are spelled out because
-# getting either wrong silently decodes padding as a plausible-looking value:
+# The offsets below are no longer inferred. A real Arctis Nova 7P Gen 2
+# answered both queries (#146) and its replies are pinned as fixtures in
+# tests/test_hardware_eq_readback.py:
+#
+#   32 00 | 20 00 01 00 86 05 | 40 00 01 00 86 05 | ... | 00 00
+#   a6 00 00 | "Flat" + NUL padding
 #
 # 1. ASM's read buffers never carry the leading `report_id` byte the spec
-#    declares as a constant field — this holds for every existing
-#    response_mapping / SettingsReadback in this codebase (see config.py's
-#    SettingsReadback docstring and the 0x20/0xA0/0xB0 replies these profiles
-#    already parse: response[0] is the opcode echo, not report_id).
-# 2. `get_eq_preset_data`'s incoming struct additionally carries
-#    "; TODO: remove after FW fix missing byte" directly on its
-#    connection_type field — the one field this struct has that none of its
-#    siblings (read_eq_preset_name, audio_settings, ux_settings,
-#    headset_status) needed a note for, all of which otherwise mirror their
-#    own outgoing shape exactly. That singles out connection_type as the
-#    byte current firmware omits: the reply is [opcode, band_1..band_10],
-#    with no connection_type echo at all. `read_eq_preset_name` carries no
-#    such note, so it keeps its full declared shape.
+#    declares as a constant field — response[0] is the opcode echo. This
+#    holds for every response_mapping / SettingsReadback in this codebase
+#    (see config.py's SettingsReadback docstring and the 0x20/0xA0/0xB0
+#    replies these profiles already parse), and both replies above confirm it.
+# 2. connection_type *is* echoed, right after the opcode, in both replies.
+#    `get_eq_preset_data`'s incoming struct carries a
+#    "; TODO: remove after FW fix missing byte" note on that very field, and
+#    an earlier reading of this module took it to mean current firmware omits
+#    the byte — so band 1 was decoded from offset 1. It does not: 32 00 20 00
+#    decodes to the canonical 32 Hz first band at offset 2, and to a nonsense
+#    8192 Hz at offset 1. Whatever that note is about, the field is present.
+#
+# This is the failure mode the raw hex in read_hardware_eq() exists for: at
+# offset 1 the reply still decoded into ten plausible-looking bands.
 
 def decode_band(data: bytes) -> EqBand:
     """Six bytes → EqBand, the inverse of :func:`encode_band`.
@@ -184,14 +203,11 @@ def decode_band(data: bytes) -> EqBand:
 
 
 # Offset of band 1 inside a decoded get_eq_preset_data (0x32) reply, and the
-# size of each band. response[0] is the 0x32 echo; per the missing-byte note
-# above, connection_type is not echoed by current firmware, so band data
-# starts right after the opcode. If a firmware update starts sending
-# connection_type again, this becomes 2 and get_eq_preset_data replies grow
-# by one byte — decode_eq_preset_data() will raise ValueError (reply too
-# short for BAND_START=1 with the old expectation) rather than silently
-# reading the curve one byte out of phase.
-_EQ_BAND_START = 1
+# size of each band: response[0] is the 0x32 echo, response[1] the
+# connection_type echo, per the captured reply above. Ten bands of six bytes
+# then fill offsets 2..61 of a 64-byte frame, leaving two padding bytes —
+# which is also why an off-by-one here cannot be caught by length alone.
+_EQ_BAND_START = 2
 _EQ_BAND_SIZE = 6
 _EQ_BAND_COUNT = 10
 

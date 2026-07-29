@@ -99,7 +99,7 @@ def test_parametric_profiles_send_their_own_frames(profile, expected_opcodes):
 
     assert engine.send_eq_command([20] * 10) is True
     assert engine.has_hardware_eq() is True
-    opcodes = [call.args[0][1] for call in engine.send_command.call_args_list]
+    opcodes = [call.args[0][0] for call in engine.send_command.call_args_list]
     assert opcodes == expected_opcodes
 
 
@@ -128,7 +128,8 @@ def test_slider_scale_maps_onto_decibels():
     engine.send_eq_command([0, 20, 40] + [20] * 7)
 
     band_frame = engine.send_command.call_args_list[1].args[0]
-    gains = [band_frame[3 + i * 6 + 3] for i in range(3)]
+    # band_frame is [0x33, connection, band_1..band_10]; gain is byte 3 of a band.
+    gains = [band_frame[2 + i * 6 + 3] for i in range(3)]
     # -10 dB → -100 decidecibels → 0x9C, 0 dB → 0x00, +10 dB → 100 → 0x64
     assert gains == [0x9C, 0x00, 0x64]
 
@@ -209,7 +210,7 @@ def test_stored_curve_is_restored_in_the_family_s_own_format(
 
     CoreEngine._apply_stored_eq(engine)
 
-    opcodes = [call.args[0][1] for call in engine.send_command.call_args_list]
+    opcodes = [call.args[0][0] for call in engine.send_command.call_args_list]
     assert opcodes == expected_opcodes
 
 

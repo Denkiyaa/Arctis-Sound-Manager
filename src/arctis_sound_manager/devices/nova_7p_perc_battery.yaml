@@ -122,8 +122,10 @@ device:
     # read_eq_preset_name (0xA6), both declared in the spec this family
     # shares with the Nova 7 Gen 2 (base_arctis_nova_7_gen2_tx.device).
     # connection_type defaults to 0x00 (wireless), the same slot the Custom
-    # EQ sliders write to. See hardware_eq.decode_eq_preset_data() for the
-    # firmware byte-count quirk this reply has.
+    # EQ sliders write to. This readback is what proved the curve was never
+    # arriving: the headset answered with its factory Flat preset while a
+    # custom curve was set. Real replies from this model are pinned in
+    # tests/test_hardware_eq_readback.py.
     readback:
       band_query: 0x32
       name_query: 0xa6

@@ -2213,13 +2213,12 @@ class CoreEngine:
             result['bands_error'] = 'timeout'
         else:
             # Always carry the raw reply, decoded or not. Where band 1 starts
-            # in this frame is an inference — the spec's own
-            # "TODO: remove after FW fix missing byte" says the firmware drops
-            # a byte, and nobody has seen a real reply yet. If that inference
-            # is off by one, every value below is wrong in a way that still
-            # looks like a curve, and this tool exists precisely to stop us
-            # concluding from something plausible. The hex lets anyone
-            # re-derive the offsets from what the headset actually said.
+            # was first inferred from the spec's "TODO: remove after FW fix
+            # missing byte" note and was off by one: the reply decoded into
+            # ten plausible bands (8192 Hz, Q 34.30) that were pure phase
+            # error. A real reply (#146) settled it at offset 2. Keep shipping
+            # the hex — it is what let the offset be corrected from a user
+            # report instead of believed.
             result['bands_raw'] = ' '.join(f'{b & 0xFF:02x}' for b in band_response)
             try:
                 result['bands'] = [
