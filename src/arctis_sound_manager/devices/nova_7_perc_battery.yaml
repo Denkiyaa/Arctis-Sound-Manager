@@ -9,6 +9,17 @@ device:
     - 0x22a9 # Arctis Nova 7 Diablo IV Gen 2
     - 0x22a5 # Arctis Nova 7X Gen 2
     - 0x22ad # Arctis Nova 7X White (upgrade revision)
+    # Was in nova_7_discrete_battery.yaml, added as "same device as 0x227a,
+    # different PID" from a bare user report. Its own spec says otherwise:
+    # arctis_nova_7_wow_upgrade_tx.device includes base_arctis_nova_7_gen2_tx
+    # (battery `range 1 100`), its get-main-product-id resolves to
+    # arctis_nova_7_gen2_tx_id, and the upgrade include redefines no part of
+    # headset_status. It is the WoW dongle *after* the firmware update, which
+    # switches it to the Gen 2 protocol — 0x227a, the same headset before the
+    # update, does include base_arctis_nova_7_tx and stays in the Gen 1
+    # profile. Read as Gen 1 its battery byte was divided by a 0-4 scale, so a
+    # real 76 % rendered as 1900 % (percentage() does not clamp).
+    - 0x22ab # Arctis Nova 7 WoW Edition (post-upgrade firmware)
   command_padding:
     length: 64
     position: end
@@ -39,13 +50,25 @@ device:
         media_mix: 0x01
         chat_mix: 0x02
 
+      # Every offset here is the spec's field index minus one (ASM's buffers
+      # carry no report id): connection_status 2→0x01, battery 3→0x02,
+      # charging 4→0x03, game_chatmix 5→0x04, chat_chatmix 6→0x05,
+      # bt_power_default 8→0x07, bt_call_default 9→0x08, mic_mute 10→0x09.
+      # See `(struct headset_status)` in base_arctis_nova_7_gen2_tx.device.
+      #
+      # 0x06 is missing from that list on purpose: the spec declares
+      # `(field unused bytearray (size 1))` there. It was read as
+      # bluetooth_connection, so the indicator showed padding — plausible,
+      # never real. The headset does report its Bluetooth link, but through
+      # the 0xB5 push on the sync interface, not in this frame; mapping that
+      # needs an observed frame first, as the offsets in this family's push
+      # frames have already proven not to match the spec elsewhere.
       - starts_with: 0xb0
         headset_power_status: 0x01
         headset_battery_charge: 0x02
         cable_charging: 0x03
         media_mix: 0x04
         chat_mix: 0x05
-        bluetooth_connection: 0x06
         bluetooth_power_status: 0x07
         bluetooth_auto_mute: 0x08
         mic_status: 0x09
@@ -62,7 +85,6 @@ device:
       bluetooth:
         - bluetooth_power_status
         - bluetooth_auto_mute
-        - bluetooth_connection
 
   # On-device parametric EQ (parametric_eq, opcode 0xA7). Unlike the Nova Pro
   # families this is not a run of gain bytes: each band carries a frequency,
@@ -210,12 +232,6 @@ device:
       type: percentage
       perc_min: 0
       perc_max: 100
-    bluetooth_connection:
-      type: int_str_mapping
-      values:
-        0x00: off
-        0x02: connected
-        0x03: disconnected
     bluetooth_power_status:
       type: on_off
       off: 0x01

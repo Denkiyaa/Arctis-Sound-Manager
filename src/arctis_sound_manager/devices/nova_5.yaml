@@ -32,9 +32,19 @@ device:
   status:
     request: 0xb0
     response_mapping:
+      # Offset 0x02 is the spec's `(field unused uint8)` — see
+      # base_arctis_nova_5_tx.device, `(struct headset_status)`. It used to be
+      # read as bluetooth_connection, which is doubly wrong: the byte carries
+      # nothing, and this headset has no Bluetooth at all (the profile
+      # declares no Bluetooth setting either). What it displayed was padding,
+      # dressed up as a connection state.
+      #
+      # The remaining offsets follow the -1 shift the rest of this frame
+      # confirms: connection_status 2→0x01, battery_status 4→0x03,
+      # charging_status 5→0x04. The spec also carries game_chatmix_level /
+      # chat_chatmix_level at 0x05 / 0x06, which ASM does not read yet.
       - starts_with: 0xb0
         headset_power_status: 0x01
-        bluetooth_connection: 0x02
         headset_battery_charge: 0x03
         cable_charging: 0x04
 
@@ -46,8 +56,6 @@ device:
         - headset_power_status
         - headset_battery_charge
         - cable_charging
-      bluetooth:
-        - bluetooth_connection
       wireless:
         - wireless_mode
 
@@ -162,12 +170,6 @@ device:
         0x01: on
         0x02: plugged_not_charging
         0x03: off
-    bluetooth_connection:
-      type: int_str_mapping
-      values:
-        0x00: off
-        0x02: disconnected
-        0x03: connected
     wireless_mode:
       type: int_str_mapping
       values:

@@ -52,11 +52,26 @@ device:
   status:
     request: 0xb0
     response_mapping:
+      # Offsets are the spec's field index minus one (ASM's buffers carry no
+      # report id) — `(struct headset_status)` in
+      # base_arctis_nova_7_gen2_tx.device, the spec this family shares with
+      # the Nova 7 Gen 2.
+      #
+      # 0x06 is deliberately absent: the spec declares
+      # `(field unused bytearray (size 1))` there, and it was read as
+      # bluetooth_connection, so the indicator showed padding rather than any
+      # real link state. The headset does report its Bluetooth connection, on
+      # the 0xB5 push over the sync interface — mapping that needs a frame
+      # someone has actually observed, since this family's push offsets have
+      # already been shown not to follow the spec.
+      #
+      # Offsets 0x04 / 0x05 hold game_chatmix_level / chat_chatmix_level and
+      # stay unread here: on this hardware the wheel is repurposed to sidetone
+      # (see the note above device_init), unlike the non-P Nova 7 Gen 2.
       - starts_with: 0xb0
         headset_power_status: 0x01
         headset_battery_charge: 0x02
         cable_charging: 0x03
-        bluetooth_connection: 0x06
         bluetooth_power_status: 0x07
         bluetooth_auto_mute: 0x08
         mic_status: 0x09
@@ -71,7 +86,6 @@ device:
       bluetooth:
         - bluetooth_power_status
         - bluetooth_auto_mute
-        - bluetooth_connection
 
   # On-device parametric EQ (parametric_eq, opcode 0xA7). Unlike the Nova Pro
   # families this is not a run of gain bytes: each band carries a frequency,
@@ -204,12 +218,6 @@ device:
         0x01: on
         0x02: plugged_not_charging
         0x03: off
-    bluetooth_connection:
-      type: int_str_mapping
-      values:
-        0x00: off
-        0x02: connected
-        0x03: disconnected
     bluetooth_power_status:
       type: on_off
       off: 0x01
