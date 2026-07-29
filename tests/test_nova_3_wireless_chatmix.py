@@ -169,3 +169,29 @@ def test_the_mix_is_wired_to_pipewire_not_to_the_device_page():
 
     assert "chat_mix" not in cfg.status.representation["headset"]
     assert "media_mix" not in cfg.status.representation["headset"]
+
+
+def test_device_init_asks_for_the_microphone_state():
+    """Without this the Microphone section is missing until someone hits mute.
+
+    The daemon starts with an empty status dict, get_status() drops a category
+    whose variables are all unpopulated, and on this dongle nothing carries the
+    mic state except the 0x52 push — which only fires on a change. 0x52 is a
+    read command too (`(struct mic_status)` declares the outgoing form), and
+    its reply has the same shape as the push, so the existing mapping parses it.
+    """
+    cfg = _load_config()
+
+    assert [0x52] in cfg.device_init
+
+
+def test_mic_status_maps_the_unknown_state():
+    """255 is a documented value for this field and the readback can return it.
+
+    Unmapped, it parses to nothing — and a category with no populated variable
+    is removed wholesale, so the section would vanish exactly when the state is
+    merely unknown.
+    """
+    cfg = _load_config()
+
+    assert cfg.status_parse["mic_status"].init_kwargs["values"][0xFF] == "unknown"

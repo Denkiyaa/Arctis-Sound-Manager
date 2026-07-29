@@ -58,6 +58,16 @@ device:
     - [0x39, 'settings.mic_side_tone']
     - [0x27, 'settings.volume_limiter']
     - [0x35, 'settings.range_extend']
+    # Ask for the microphone state instead of waiting for someone to press
+    # mute. 0x52 is a read command as well as a push: `(struct mic_status)`
+    # declares an outgoing [report_id, 0x52] whose reply carries jack presence
+    # then mute state — the same layout as the push, so the 0x52 mapping below
+    # parses both. Without this the Microphone section is simply absent from
+    # the Devices page until the first mute press: the daemon starts with no
+    # status values at all, the polled 0xB0 on this dongle carries nothing
+    # about the mic, and get_status() drops a category with no populated
+    # variable (#149, reported by @rhavinx on v1.2.17).
+    - [0x52]
     - ['status.request']
 
   status:
@@ -238,3 +248,8 @@ device:
       values:
         0x00: unmuted
         0x01: muted
+        # The spec gives 255 as a third state for both mic fields, and it is
+        # what the readback answers before the headset knows. Left unmapped it
+        # parses to nothing, which takes the whole Microphone section down with
+        # it — the state is unknown, so say so rather than show an empty page.
+        0xff: unknown
