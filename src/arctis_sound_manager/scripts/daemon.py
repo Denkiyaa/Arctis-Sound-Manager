@@ -145,6 +145,25 @@ async def main_async():
     logger.info(f'-{"v " + project_version():>27}  -')
     logger.info('-------------------------------')
 
+    # Repair installs whose device profiles are pinned to an old release before
+    # anything reads them. asm-setup used to copy every packaged profile into
+    # ~/.config/arctis_manager/devices/, which takes precedence over the
+    # packaged folder and is never refreshed by an upgrade — so profile fixes
+    # silently never reached existing users. Runs here because the daemon is the
+    # only thing that starts for everyone, every session; asm-setup fires once,
+    # at first GUI launch.
+    try:
+        from arctis_sound_manager.constants import (HOME_CONFIG_FOLDER,
+                                                    SRC_CONFIG_FOLDER)
+        from arctis_sound_manager.device_override_reconcile import (
+            log_report, reconcile_home_device_overrides)
+        log_report(
+            reconcile_home_device_overrides(HOME_CONFIG_FOLDER, SRC_CONFIG_FOLDER),
+            HOME_CONFIG_FOLDER,
+        )
+    except Exception as exc:
+        logger.warning('could not reconcile device profile overrides: %r', exc)
+
     from arctis_sound_manager.udev_checker import is_udev_rules_valid
     if not is_udev_rules_valid():
         logger.warning('udev rules are missing or invalid — USB access may fail (errno 13). Run: sudo asm-cli udev write-rules --force --reload')

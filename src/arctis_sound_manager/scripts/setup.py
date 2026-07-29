@@ -396,15 +396,29 @@ def main() -> None:
         print("  [info] No PipeWire configs found in /usr/share — using install.sh layout")
 
     # ── Device configs ──
-    dev_src = _SHARE_DIR / "devices"
-    if dev_src.is_dir():
-        _DEVICE_DIR.mkdir(parents=True, exist_ok=True)
-        for yaml in dev_src.glob("*.yaml"):
-            dst = _DEVICE_DIR / yaml.name
-            shutil.copy2(yaml, dst)
-            print(f"  [ok] {yaml.name} → {dst}")
-    else:
-        print("  [info] No device configs found in /usr/share — using install.sh layout")
+    # Deliberately NOT copied into ~/.config/arctis_manager/devices/ any more.
+    # That folder takes precedence over the packaged profiles and is never
+    # refreshed by an upgrade, so seeding it with copies pinned every headset to
+    # whatever release the user first ran: new product ids, status offsets and EQ
+    # opcodes shipped afterwards never reached them, silently and permanently.
+    # ASM reads its own profiles directly; the folder is for profiles a user
+    # writes themselves. Existing copies are cleaned up on every daemon start —
+    # see device_override_reconcile.
+    from arctis_sound_manager.constants import (HOME_CONFIG_FOLDER,
+                                                SRC_CONFIG_FOLDER)
+    from arctis_sound_manager.device_override_reconcile import (
+        DISABLED_DIRNAME, reconcile_home_device_overrides)
+
+    report = reconcile_home_device_overrides(HOME_CONFIG_FOLDER, SRC_CONFIG_FOLDER)
+    for name in report.removed:
+        print(f"  [ok] removed redundant profile copy {name} (ASM uses its own)")
+    for name in report.disabled:
+        print(f"  [!] {name} shadowed the packaged profile and was not receiving "
+              f"updates — moved to {HOME_CONFIG_FOLDER.parent / DISABLED_DIRNAME}/")
+    for name in report.kept:
+        print(f"  [ok] keeping your own profile {name}")
+    if not (report.removed or report.disabled or report.kept):
+        print("  [ok] device profiles read from the package")
 
     # ── HRIR file ──
     def _hrir_valid(path: Path) -> bool:
