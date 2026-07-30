@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageFont
@@ -15,8 +16,46 @@ _LINE_H = 11
 _BAR_H = 9
 _FONT_BIG_SIZE = 20
 _FONT_MED_SIZE = 16
+_FONT_SMALL_SIZE = 10
 _ICON_SIZE = 20
 _WEATHER_H = _ICON_SIZE + 2
+
+# Scalable faces to fall back on when Pillow cannot size its own default font.
+# Any of these is present on a desktop install; the order only decides which
+# one wins when several are.
+_SYSTEM_FONT_CANDIDATES = (
+    "DejaVuSans.ttf",  # let Pillow search its own font paths first
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",   # Debian / Ubuntu
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",            # Fedora
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",               # Arch
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    "/usr/share/fonts/gnu-free/FreeSans.ttf",
+)
+
+
+@lru_cache(maxsize=64)
+def _load_font(size: int) -> "ImageFont.FreeTypeFont | ImageFont.ImageFont":
+    """Return a font of `size` pixels, whatever Pillow version is installed.
+
+    ``ImageFont.load_default(size=...)`` only exists from Pillow 10.1; Ubuntu
+    22.04 and Pop!_OS 22.04 ship 9.0.1, where it raised a TypeError that killed
+    the daemon at startup (#154).  The TrueType fallback matters twice over: the
+    bitmap font ``load_default()`` returns has no ``getlength()``/``getbbox()``
+    before Pillow 9.2 either, and the whole renderer measures text with those.
+    """
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        pass
+    for candidate in _SYSTEM_FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    # Nothing scalable available: an unsized bitmap font still draws something.
+    return ImageFont.load_default()
 
 
 class OledRenderer:
@@ -24,9 +63,12 @@ class OledRenderer:
     HEIGHT = 64
 
     def __init__(self) -> None:
-        self._font = ImageFont.load_default()
-        self._font_big = ImageFont.load_default(size=_FONT_BIG_SIZE)
-        self._font_med = ImageFont.load_default(size=_FONT_MED_SIZE)
+        # Sized like the others rather than left unsized: the renderer measures
+        # this font with getlength(), which the unsized bitmap font lacks before
+        # Pillow 9.2 (#154).
+        self._font = _load_font(_FONT_SMALL_SIZE)
+        self._font_big = _load_font(_FONT_BIG_SIZE)
+        self._font_med = _load_font(_FONT_MED_SIZE)
 
     def _image_to_bytes(self, image: Image.Image) -> bytes:
         mono = image.convert("1")
@@ -129,7 +171,7 @@ class OledRenderer:
 
         Returns the pixel width consumed."""
         letter = "S" if eq_mode == "sonar" else "C"
-        font = ImageFont.load_default(size=size)
+        font = _load_font(size)
         lw = int(math.ceil(font.getlength(letter)))
         # Fake-bold on the 1-bit panel: stamp the glyph with 1px offsets so the
         # strokes thicken without needing a dedicated bold font file.
@@ -206,17 +248,17 @@ class OledRenderer:
 
     def measure_eq_text(self, eq_preset: str, sz_eq: int) -> int:
         """Return pixel width of 'EQ: <eq_preset>' at the given font size."""
-        font = ImageFont.load_default(size=max(7, min(30, sz_eq)))
+        font = _load_font(max(7, min(30, sz_eq)))
         return self._measure_text_pixels(font, f"EQ: {eq_preset}")
 
     def measure_profile_text(self, active_profile: str, sz_profile: int) -> int:
         """Return pixel width of 'Profile: <active_profile>' at the given font size."""
-        font = ImageFont.load_default(size=max(7, min(30, sz_profile)))
+        font = _load_font(max(7, min(30, sz_profile)))
         return self._measure_text_pixels(font, f"Profile: {active_profile}")
 
     def measure_eq_chat_text(self, eq_chat_preset: str, sz_eq_chat: int) -> int:
         """Return pixel width of 'Chat: <eq_chat_preset>' at the given font size."""
-        font = ImageFont.load_default(size=max(7, min(30, sz_eq_chat)))
+        font = _load_font(max(7, min(30, sz_eq_chat)))
         return self._measure_text_pixels(font, f"Chat: {eq_chat_preset}")
 
     def render_status_image(
@@ -263,12 +305,12 @@ class OledRenderer:
         sz_eq_chat    = max(7, min(30, fs.get('eq_chat',      8)))
         sz_sonar_mode = max(7, min(30, fs.get('sonar_mode',    8)))
 
-        font_time    = ImageFont.load_default(size=sz_time)
-        font_battery = ImageFont.load_default(size=sz_battery)
-        font_profile = ImageFont.load_default(size=sz_profile)
-        font_eq      = ImageFont.load_default(size=sz_eq)
-        font_wtmp    = ImageFont.load_default(size=sz_weather_tmp)
-        font_eq_chat  = ImageFont.load_default(size=sz_eq_chat)
+        font_time    = _load_font(sz_time)
+        font_battery = _load_font(sz_battery)
+        font_profile = _load_font(sz_profile)
+        font_eq      = _load_font(sz_eq)
+        font_wtmp    = _load_font(sz_weather_tmp)
+        font_eq_chat  = _load_font(sz_eq_chat)
         font_small   = self._font  # city / labels always small
 
         natural_h = self._natural_height(
@@ -415,7 +457,7 @@ class OledRenderer:
         image = Image.new("1", (self.WIDTH, self.HEIGHT), color=0)
         draw = ImageDraw.Draw(image)
 
-        font_by = ImageFont.load_default(size=16)
+        font_by = _load_font(16)
         by_text = "By Loteran"
         by_h = 18  # 16pt + 2px baseline
         by_y = self.HEIGHT - by_h
@@ -425,7 +467,7 @@ class OledRenderer:
         # ASM fills available space above "By Loteran"
         available_h = by_y - 4
         asm_size = max(8, available_h - 2)
-        font_asm = ImageFont.load_default(size=asm_size)
+        font_asm = _load_font(asm_size)
         asm_w = int(font_asm.getlength("ASM"))
         asm_x = (self.WIDTH - asm_w) // 2
         asm_y = max(0, (available_h - asm_size) // 2 + 2)

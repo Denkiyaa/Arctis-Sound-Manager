@@ -1513,8 +1513,16 @@ class CoreEngine:
                 and device_config.oled is not None
             )
             if has_oled:
-                self.oled_manager = OledManager(self)
-                self.oled_manager.start()
+                # The OLED is decoration: never let it take the daemon down with
+                # it.  A missing font, an unexpected Pillow version (#154) or a
+                # refused USB interface used to abort startup entirely, leaving
+                # the user with no audio routing at all.
+                try:
+                    self.oled_manager = OledManager(self)
+                    self.oled_manager.start()
+                except Exception as exc:
+                    self.logger.error("OLED display disabled, initialisation failed: %r", exc)
+                    self.oled_manager = None
 
             self.redirect_to_media_sink()
             # Reached only when the full pipeline was configured without an early
