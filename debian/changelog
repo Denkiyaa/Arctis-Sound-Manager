@@ -1,3 +1,57 @@
+arctis-sound-manager (1.2.19-1) noble; urgency=medium
+
+  * Profile fixes now reach you even if you installed ASM months ago. This
+    one was silently cancelling out a lot of the work in recent releases. At
+    first launch, ASM copied every device profile into your own
+    configuration folder — and that copy takes precedence over the packaged
+    one, forever, because no update ever refreshed it. So every profile fix
+    shipped after your first run was inert for you: new headsets ASM had
+    just learned to drive, corrected status byte offsets, fixed EQ commands,
+    none of it landed. You would update, see the new version number, and
+    keep running the protocol of the release you first installed. If you
+    have been reporting a problem that "still isn't fixed" after several
+    updates, this is very likely why. The daemon now reconciles that folder
+    at every start: a copy identical to the packaged profile is removed, one
+    you modified is moved aside to devices-disabled/ and named in the log so
+    nothing of yours is destroyed, and a profile for a headset ASM doesn't
+    ship is left strictly alone.
+  * Arctis Nova 7 / 7P Gen 2, Nova 5, Nova 3 Wireless, GameBuds: the custom
+    EQ sliders did nothing at all. Every equaliser frame went out one byte
+    off, so the headset read an opcode of zero and discarded the curve
+    without a word. Confirmed on hardware: a Nova 7P Gen 2 reported its
+    untouched factory preset while a custom curve was set in the app. The
+    readback decoder was misreading its answer by one byte too, and both are
+    now pinned against real replies from the headset.
+  * Arctis Nova Pro Wireless and Nova Pro Wired GameDAC: a custom EQ you
+    could see and not hear. The base station drew your curve on its screen
+    as you moved the sliders — proof the command was arriving — while the
+    sound never changed, because the headset kept applying its Flat preset
+    and nothing ever switched away from it. The curve is now selected once
+    it has been written. If you never touch these sliders, nothing changes:
+    the headset stays neutral behind the Sonar EQ exactly as before.
+  * The two equalisers no longer stack. ASM equalises either in software
+    (Sonar mode) or in the headset (Custom EQ mode), never both — but only
+    the software half of that was enforced. Switching to Sonar left the
+    on-device curve applied underneath it, so neither setting meant what it
+    said. The hardware equaliser now follows the mode you chose.
+  * Pop!_OS and Ubuntu 22.04: ASM would not start at all on a headset with a
+    display. The daemon crashed while setting up the OLED — on a version of
+    the Pillow imaging library older than the one it assumed — and because
+    that happens while the audio pipeline is being built, it took everything
+    down with it: no mixer, no EQ, no device settings, not just no screen.
+    It now works with the Pillow versions those releases ship, and a display
+    failing can no longer stop the rest of ASM from running. (#154)
+  * Arctis Nova 3P / 3X Wireless: the Microphone section was missing from
+    the Devices page. Nothing was wrong with reading the mic state — the
+    headset only announces it when it changes, and if you had not pressed
+    mute since starting ASM there was nothing to show, so the whole section
+    stayed hidden. With the boom mic unplugged, pressing mute reported
+    nothing either, leaving no way at all to make it appear. ASM now asks
+    the headset for the mic state at startup instead of waiting to be told.
+    (#149)
+
+ -- loteran <axel.valadon@gmail.com>  Thu, 30 Jul 2026 00:00:00 +0000
+
 arctis-sound-manager (1.2.18-1) noble; urgency=medium
 
   * Custom EQ: your saved curve now reaches the headset at startup. On the
