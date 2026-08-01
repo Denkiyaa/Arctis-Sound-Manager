@@ -189,6 +189,15 @@ in
             ];
             serviceConfig.ExecStart = "${cfg.package}/bin/asm-router";
           };
+
+          arctis-stream-guard = userService {
+            description = "Arctis Sound Manager screen-share stream guard";
+            after = [
+              "pipewire.service"
+              "arctis-manager.service"
+            ];
+            serviceConfig.ExecStart = "${cfg.package}/bin/asm-stream-guard";
+          };
         }
         // lib.optionalAttrs cfg.autostartTray {
           arctis-gui = userService {

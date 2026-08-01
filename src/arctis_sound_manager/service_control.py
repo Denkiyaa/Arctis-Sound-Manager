@@ -43,6 +43,7 @@ _SERVICE_MAP: dict[str, dict[str, str | None]] = {
     "filter-chain":        {"systemd": "filter-chain",        "dinit": "pipewire-filter-chain"},
     "arctis-manager":      {"systemd": "arctis-manager",      "dinit": "arctis-manager"},
     "arctis-video-router": {"systemd": "arctis-video-router", "dinit": "arctis-video-router"},
+    "arctis-stream-guard": {"systemd": "arctis-stream-guard", "dinit": "arctis-stream-guard"},
     # No dinit service for the GUI — handled via XDG autostart in autostart.py.
     "arctis-gui":          {"systemd": "arctis-gui",          "dinit": None},
 }

@@ -84,6 +84,9 @@ from arctis_sound_manager.gui.theme import (
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
+from arctis_sound_manager.stream_guard import GuardConfig
+from arctis_sound_manager.stream_guard import load_config as load_guard_config
+from arctis_sound_manager.stream_guard import save_config as save_guard_config
 from arctis_sound_manager.sonar_to_pipewire import (
     _MACRO_PARAMS as MACRO_PARAMS,
     check_and_fix_stale_configs,
@@ -2979,6 +2982,104 @@ class _SafeModeResetWorker(QThread):
         self.done.emit(ok)
 
 
+class _StreamGuardBar(QFrame):
+    """Pick which Sonar channels are allowed into a screen share.
+
+    Discord creates its own capture node when a share starts and links every
+    playback stream into it, so without this the whole system — browser tabs,
+    the Chat channel, notifications — goes out to the call. The guard daemon
+    (``asm-stream-guard``) enforces the choice made here; this widget only
+    writes the config, which the daemon re-reads on change.
+    """
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("streamGuardBar")
+
+        cfg = load_guard_config()
+        self._writing = False
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(14, 8, 14, 8)
+        row.setSpacing(12)
+
+        # is_checkbox=True matches every other toggle in the app: the track is
+        # painted in the accent colour while on, which is what makes "guard is
+        # active" readable at a glance rather than just the knob position.
+        self._enable = QToggle(is_checkbox=True)
+        self._enable.setChecked(cfg.enabled)
+        self._enable.stateChanged.connect(self._on_changed)
+        row.addWidget(self._enable)
+
+        self._title = QLabel(_t("stream_guard"))
+        self._title.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 11pt; font-weight: bold;")
+        row.addWidget(self._title)
+
+        self._boxes: dict[str, QCheckBox] = {}
+        for channel in ("game", "media", "chat"):
+            cb = QCheckBox(_t(channel))
+            cb.setChecked(channel in cfg.channels)
+            cb.stateChanged.connect(self._on_changed)
+            self._boxes[channel] = cb
+            row.addWidget(cb)
+
+        row.addStretch(1)
+
+        self._hint = QLabel(_t("stream_guard_hint"))
+        self._hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 9pt;")
+        row.addWidget(self._hint)
+
+        self._sync_enabled_state()
+        self.apply_theme()
+
+    def _sync_enabled_state(self) -> None:
+        for cb in self._boxes.values():
+            cb.setEnabled(self._enable.isChecked())
+
+    def _on_changed(self, *_args) -> None:
+        # Qt emits stateChanged while we are repopulating the widgets; without
+        # this the save would race with its own reload.
+        if self._writing:
+            return
+        self._writing = True
+        try:
+            self._sync_enabled_state()
+            channels = tuple(ch for ch, cb in self._boxes.items() if cb.isChecked())
+            try:
+                save_guard_config(GuardConfig(enabled=self._enable.isChecked(),
+                                              channels=channels))
+            except OSError as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Could not save stream guard config: %s", exc
+                )
+        finally:
+            self._writing = False
+
+    def apply_theme(self, t=None) -> None:
+        self.setStyleSheet(f"""
+            QFrame#streamGuardBar {{
+                background-color: {_theme.c('BG_CARD')};
+                border: 1px solid {_theme.c('BORDER')};
+                border-radius: 10px;
+            }}
+            QFrame#streamGuardBar QCheckBox {{
+                color: {_theme.c('TEXT_PRIMARY')};
+                font-size: 10pt;
+            }}
+            QFrame#streamGuardBar QCheckBox:disabled {{
+                color: {_theme.c('TEXT_SECONDARY')};
+            }}
+        """)
+        self._title.setStyleSheet(
+            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; font-weight: bold; "
+            f"background: transparent;"
+        )
+        self._hint.setStyleSheet(
+            f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 9pt; background: transparent;"
+        )
+
+
 class SonarPage(QWidget):
     def __init__(self, embedded: bool = False, parent: QWidget | None = None):
         super().__init__(parent)
@@ -3033,6 +3134,13 @@ class SonarPage(QWidget):
         self._safe_mode_timer.timeout.connect(self._refresh_safe_mode_banner)
         self._safe_mode_timer.start()
         self._refresh_safe_mode_banner()
+
+        # ── Screen-share guard ────────────────────────────────────────────────
+        # Sits above the tabs because it is a cross-channel decision: it says
+        # which of the channels below are allowed out to a Discord screen share.
+        self._stream_guard_bar = _StreamGuardBar()
+        root.addWidget(self._stream_guard_bar)
+        root.addSpacing(12)
 
         # ── Channel tabs ──────────────────────────────────────────────────────
         from PySide6.QtWidgets import QTabWidget
@@ -3259,6 +3367,9 @@ class SonarPage(QWidget):
     def apply_theme(self, t=None) -> None:
         """Restyle the Sonar page and all its channel widgets for the active theme."""
         self.setStyleSheet(f"background-color: {_theme.c('BG_MAIN')};")
+
+        if hasattr(self, "_stream_guard_bar"):
+            self._stream_guard_bar.apply_theme(t)
 
         self._tabs.setStyleSheet(f"""
             QTabWidget::pane {{

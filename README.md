@@ -590,6 +590,8 @@ ASM creates 3 virtual sinks on top of your Arctis device plus one external outpu
 
 The **media router** (`asm-router`) automatically moves browsers and video players to `Arctis_Media`. Manual placements via G / C / M / O buttons are saved as persistent overrides.
 
+The **stream guard** (`asm-stream-guard`) decides which of these channels a screen share is allowed to carry. Discord's Linux client offers no source picker: it creates its own capture node and links every playback stream into it, continuously, so the whole system's audio goes out to the call. Pick the allowed channels in the bar at the top of the Sonar page — Game only, by default — and the guard cuts everything else as PipeWire announces it. Sources are matched by the channel they play on, so moving an app with the G / C / M buttons is all it takes to include or exclude it.
+
 The External Output card routes audio **directly** to the physical sink, bypassing virtual stereo sinks — this preserves true 5.1 / 7.1 passthrough. Configure it in **Settings → Audio → External Output Device**.
 
 ---
@@ -952,6 +954,7 @@ src/arctis_sound_manager/
 │   ├── daemon.py                  # asm-daemon  — device manager service
 │   ├── gui.py                     # asm-gui     — graphical interface
 │   ├── video_router.py            # asm-router  — automatic media routing
+│   ├── stream_guard.py            # asm-stream-guard — screen-share audio filter
 │   ├── cli.py                     # asm-cli     — udev / desktop / diagnose tools
 │   └── setup.py                   # asm-setup   — post-install automation
 │

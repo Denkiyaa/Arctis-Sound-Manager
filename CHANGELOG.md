@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Stream Guard: screen sharing no longer broadcasts your whole system.** Discord's Linux client has no way to pick which audio a screen share carries. When a share starts it creates its own capture node and links *every* playback stream into it — the browser tab you left open, your music, the voice call itself — and it keeps relinking, so unlinking by hand does not hold. A new bar at the top of the Sonar page picks which channels are allowed out: leave it on Game and only the game goes to the call, while Media and Chat stay in your headset. The `asm-stream-guard` service enforces the choice on PipeWire graph events rather than on a timer, so a stream Discord has just relinked is cut in tens of milliseconds instead of on the next poll — the gap during which private audio is already on the wire. Sources are matched by the channel they play on, not by application name, so anything you move to an allowed channel is included automatically and nothing needs to be kept in a list.
+
 ## [1.2.19] - 30 July 2026
 
 ### Fixed

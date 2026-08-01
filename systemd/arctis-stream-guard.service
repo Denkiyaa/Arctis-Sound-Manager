@@ -1,0 +1,12 @@
+[Unit]
+Description=Arctis Sound Manager — Stream Guard (keep non-allowed channels out of Discord's screen share)
+After=pipewire.service arctis-manager.service
+Requires=pipewire.service
+
+[Service]
+ExecStart=/usr/bin/asm-stream-guard
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
