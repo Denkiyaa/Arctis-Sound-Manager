@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The microphone chain could be fed by the headset's own output — and other people heard it.** On an Arctis Nova 7 sitting on an `iec958-stereo` profile the headset exposes no capture node of its own, and the microphone slot fell back to the *output* sink. That sink's monitor was then linked into the microphone EQ, so everything audible on the machine — a browser tab, the game — was transmitted as if it were the microphone: a video played in a browser went out over a Discord call as though the user were speaking it. It came back on every daemon restart, which is why it reappeared with each update. The input no longer inherits the output's fallback, and the capture link is now refused outright when the proposed source is a sink. This is the one input-side mistake that is completely inaudible to the person making it.
+
 ## [1.2.19] - 30 July 2026
 
 ### Fixed

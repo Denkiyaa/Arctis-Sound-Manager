@@ -816,8 +816,11 @@ def test_ensure_filter_chain_healthy_returns_true_when_healthy(tmp_path, monkeyp
     (tmp_path / "sonar-game-eq.conf").write_text("# dummy ASM conf")
 
     with patch("arctis_sound_manager.service_control.is_active", return_value=True), \
-         patch("arctis_sound_manager.init_system.detect_init", return_value="unknown"):
+         patch("arctis_sound_manager.service_control.detect_init",
+               return_value="unknown"):
         # detect_init returning "unknown" skips NRestarts check
+        # (service_control binds detect_init at import, so it must be patched
+        # there — patching init_system leaves the real systemctl call in place)
         result = stp.ensure_filter_chain_healthy()
 
     assert result is True
@@ -1418,6 +1421,12 @@ def test_ensure_spatial_eq_links_moves_link_on_toggle(monkeypatch):
     state = {"game": True}
     monkeypatch.setattr(_s2p_p3, "_spatial_enabled", lambda ch: state[ch])
     monkeypatch.setattr(_s2p_p3, "_get_physical_out_game", lambda: "alsa_output.test-headset")
+    # HeSuVi is loaded — otherwise the issue #100 fallback sends the ON legs to
+    # the physical output too, and the toggle it is testing stops being visible.
+    monkeypatch.setattr(
+        "arctis_sound_manager.pw_utils.pw_node_exists",
+        lambda name, data=None: True,
+    )
     targets = []
     monkeypatch.setattr(
         "arctis_sound_manager.pw_utils.ensure_loopback_link",
