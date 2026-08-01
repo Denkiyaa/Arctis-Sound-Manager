@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Clips: save the last thirty seconds, with each Sonar channel on its own audio track.** A rolling capture runs in the background; the Clips page — or `asm-clipd` bound to a key — writes the preceding seconds to `~/Videos/ASM Clips` as an `.mkv` carrying Game, Chat and Mic as separate tracks, so what you keep can still be remixed afterwards. The library is a grid of poster frames rather than a list of timestamps that differ only by the second they were taken; the frame is lifted from five seconds before the end, inside the span the editor opens with, because the middle of a clip is usually the part where nothing has happened yet. The editor trims, remembers the span per clip, and exports to a separate `Shared/` folder so an export never comes back as another card in the library. Exporting ends in a share step with the poster frame as a drag-out card — drag it straight into Discord. Select, rename and delete in bulk; deletion goes through the system trash, because a mis-click on a grid of near-identical cards should be recoverable.
 
+### Fixed
+
+- **The microphone chain could be fed by the headset's own output — and other people heard it.** On an Arctis Nova 7 sitting on an `iec958-stereo` profile the headset exposes no capture node of its own, and the microphone slot fell back to the *output* sink. That sink's monitor was then linked into the microphone EQ, so everything audible on the machine — a browser tab, the game — was transmitted as if it were the microphone: a video played in a browser went out over a Discord call as though the user were speaking it. It came back on every daemon restart, which is why it reappeared with each update. The input no longer inherits the output's fallback, and the capture link is now refused outright when the proposed source is a sink. This is the one input-side mistake that is completely inaudible to the person making it.
+
 ## [1.2.19] - 30 July 2026
 
 ### Fixed
