@@ -145,9 +145,9 @@ nix build "git+file:///opt/projects/Arctis-Sound-Manager?dir=nix#default"
 
 What the module configures:
 
-- `environment.systemPackages` → `asm-gui`, `asm-daemon`, `asm-cli`, `asm-router`, `asm-clipd`, `asm-setup`, `asm-diag-dinit`.
+- `environment.systemPackages` → `asm-gui`, `asm-daemon`, `asm-cli`, `asm-router`, `asm-stream-guard`, `asm-clipd`, `asm-setup`, `asm-diag-dinit`.
 - `services.udev.packages` → `91-steelseries-arctis.rules`.
-- `systemd.user.services.{arctis-manager,arctis-video-router,filter-chain,arctis-gui}`.
+- `systemd.user.services.{arctis-manager,arctis-video-router,arctis-stream-guard,filter-chain,arctis-gui}`.
 - `systemd.tmpfiles` symlink `/usr/lib/ladspa` → the Sonar LADSPA plugins
   (so ASM's FHS-only dependency checker finds plate_1423 / rnnoise).
 
@@ -160,7 +160,7 @@ nothing user-specific is managed declaratively here.
 ## Troubleshooting
 
 ```bash
-systemctl --user status arctis-manager arctis-video-router filter-chain
+systemctl --user status arctis-manager arctis-video-router arctis-stream-guard filter-chain
 journalctl --user -u arctis-manager -f
 ARCTIS_LOG_LEVEL=debug systemctl --user restart arctis-manager
 asm-daemon --verify-setup          # preflight: device YAMLs, deps, udev, pipewire
