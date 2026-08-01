@@ -26,6 +26,7 @@ Arctis device is currently attached (`device_state.is_device_set()` == False).
 from __future__ import annotations
 
 import logging
+import json
 import re
 from pathlib import Path
 
@@ -353,6 +354,46 @@ def _get_physical_out_chat() -> str:
     """Mono PCM used by chat and sidetone (pro-output-0 on dual-PCM devices)."""
     from arctis_sound_manager import device_state as _ds
     return _ds.get_physical_out_chat()
+
+
+CHANNEL_OUTPUTS_FILE = Path.home() / ".config" / "arctis_manager" / "channel_output_devices.json"
+
+
+def _load_channel_outputs() -> dict:
+    try:
+        data = json.loads(CHANNEL_OUTPUTS_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def channel_destination(channel: str, data: list | None = None) -> str:
+    """Which device *channel* should end up on.
+
+    The user's per-channel choice when they have made one, and the headset
+    otherwise. Selecting a device has to mean "send this channel there", not
+    "drag this channel's applications onto that sink" — the latter is what the
+    home page used to do, and the routing-override replay dragged them straight
+    back, so the choice appeared to do nothing at all.
+
+    A saved device that is not in the graph (earbuds in their case, a dock
+    unplugged) falls back to the headset rather than leaving the channel linked
+    to nothing, and is picked up again by the watchdog as soon as it returns.
+    """
+    from arctis_sound_manager.pw_utils import pw_node_exists
+
+    physical = (_get_physical_out_chat() if channel == "chat"
+                else _get_physical_out_game())
+
+    chosen = _load_channel_outputs().get(channel)
+    if not chosen or chosen == physical:
+        return physical
+    if pw_node_exists(chosen, data):
+        return chosen
+
+    _log.info("channel '%s': saved output '%s' is not present — using %s",
+              channel, chosen, physical or "(no device)")
+    return physical
 
 
 def _get_physical_in() -> str:
@@ -2102,6 +2143,7 @@ def check_and_fix_stale_configs() -> tuple[bool, bool]:
         dynamic_hesuvi = _CONF_DIR / "sink-virtual-surround-7.1-hesuvi.conf"
         if not dynamic_hesuvi.exists():
             generate_hesuvi_conf()
+            generate_hesuvi_conf(channel="media")
         fixed = True
         needs_pw_restart = True
 
@@ -2573,7 +2615,7 @@ def ensure_spatial_eq_links(
         # historical un-suffixed node, Media routes to effect_input.…-hesuvi-media,
         # so their independent Immersion/Distance never bleed into each other.
         surround_node = _SURROUND if channel == "game" else _SURROUND_MEDIA
-        target = surround_node if enabled else _get_physical_out_game()
+        target = surround_node if enabled else channel_destination(channel, data)
         if enabled and not pw_node_exists(surround_node, data):
             # HeSuVi is not in the graph. If its HRIR WAV is missing the
             # convolver can never load and the node will never appear —
@@ -2583,7 +2625,7 @@ def ensure_spatial_eq_links(
             # (filter-chain restarting): keep targeting HeSuVi and let the
             # next watchdog tick relink, rather than flap onto physical.
             if not _HRIR_DEST.exists():
-                phys = _get_physical_out_game()
+                phys = channel_destination(channel, data)
                 if phys:
                     _log.warning(
                         "Spatial ON but HeSuVi is not loaded and no HRIR is present; "
@@ -2708,19 +2750,25 @@ def ensure_physical_output_links(data: list | None = None) -> dict[str, bool]:
 
     results: dict[str, bool] = {}
 
-    chat_target = _get_physical_out_chat()
+    chat_target = channel_destination("chat", data)
     if chat_target:
         results["chat"] = ensure_loopback_link(_CHAT_OUTPUT_NAME, chat_target, data=data)
 
-    game_target = _get_physical_out_game()
-    if game_target:
-        results["hesuvi"] = ensure_loopback_link(_HESUVI_OUTPUT_NAME, game_target, data=data)
-        # Media's parallel HeSuVi chain (issue #169) shares the physical GAME
-        # output — same unconditional last hop, its own node. Skipped cleanly
-        # when the media chain isn't up yet (self-heals next tick).
-        results["hesuvi_media"] = ensure_loopback_link(
-            _HESUVI_OUTPUT_NAME_MEDIA, game_target, data=data
-        )
+    # Each channel's HeSuVi stage reaches that channel's OWN device: #169 gave
+    # Media its own chain, and channel_destination decides where that chain
+    # comes out. Sharing one destination is what made Media's device menu inert
+    # and dragged it along with Game.
+    for _ch, _hes_node in (("game", _HESUVI_OUTPUT_NAME),
+                           ("media", _HESUVI_OUTPUT_NAME_MEDIA)):
+        _dest = channel_destination(_ch, data)
+        if not _dest:
+            continue
+        # "hesuvi" stays the game key so existing callers keep working; media
+        # is additive. ensure_loopback_link already reports False when the node
+        # is absent (media's stage only exists once it has been generated), so
+        # no separate existence check is needed here.
+        _key = "hesuvi" if _ch == "game" else "hesuvi_media"
+        results[_key] = ensure_loopback_link(_hes_node, _dest, data=data)
 
     # The Output channel's last hop (EQ → external sink: HDMI, TV, speakers)
     # was owned by nobody at all. Unlike chat/game/media it is not covered by
@@ -2869,6 +2917,7 @@ _HESUVI_CONV_MIX_LINKS = [
 ]
 
 
+
 def generate_hesuvi_conf(
     immersion_pct: int = 50,
     distance_pct: int = 50,
@@ -2905,6 +2954,7 @@ def generate_hesuvi_conf(
         _log.warning("Skipping HeSuVi config generation: no Arctis device attached.")
         return ""
 
+    _hes_dest = channel_destination(channel)
     if output_path is None:
         output_path = _CONF_DIR / _hesuvi_conf_name(channel)
     if channel == "game":
@@ -3079,8 +3129,8 @@ context.modules = [
       }}
       playback.props = {{
         node.name          = "{_out_node}"
-        node.target        = "{_get_physical_out_game()}"
-        target.object      = "{_get_physical_out_game()}"
+        node.target        = "{_hes_dest}"
+        target.object      = "{_hes_dest}"
         node.dont-fallback = true
         node.linger        = true
         audio.channels     = 2
