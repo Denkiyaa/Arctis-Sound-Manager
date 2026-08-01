@@ -48,6 +48,7 @@ override_dh_auto_install:
 	printf '#!/usr/bin/python3\nimport sys\nfrom arctis_sound_manager.scripts.cli import main\nsys.exit(main())\n'            > $(DEST)/usr/bin/asm-cli
 	printf '#!/usr/bin/python3\nimport sys\nfrom arctis_sound_manager.scripts.gui import main\nsys.exit(main())\n'            > $(DEST)/usr/bin/asm-gui
 	printf '#!/usr/bin/python3\nimport sys\nfrom arctis_sound_manager.scripts.video_router import main\nsys.exit(main())\n'   > $(DEST)/usr/bin/asm-router
+	printf '#!/usr/bin/python3\nimport sys\nfrom arctis_sound_manager.scripts.stream_guard import main\nsys.exit(main())\n'    > $(DEST)/usr/bin/asm-stream-guard
 	printf '#!/usr/bin/python3\nimport sys\nfrom arctis_sound_manager.scripts.setup import main\nsys.exit(main())\n'          > $(DEST)/usr/bin/asm-setup
 	chmod 755 $(DEST)/usr/bin/asm-*
 
@@ -62,6 +63,8 @@ override_dh_auto_install:
 	    $(DEST)/usr/lib/systemd/user/arctis-manager.service
 	install -Dm644 systemd/arctis-video-router.service \
 	    $(DEST)/usr/lib/systemd/user/arctis-video-router.service
+	install -Dm644 systemd/arctis-stream-guard.service \
+	    $(DEST)/usr/lib/systemd/user/arctis-stream-guard.service
 	install -Dm644 systemd/arctis-gui.service \
 	    $(DEST)/usr/lib/systemd/user/arctis-gui.service
 

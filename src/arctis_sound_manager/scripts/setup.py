@@ -55,6 +55,14 @@ depends-on = arctis-manager
 logfile = /tmp/arctis-video-router.log
 """
 
+_DINIT_ARCTIS_STREAM_GUARD = """\
+type = process
+command = {asm_stream_guard}
+restart = true
+depends-on = arctis-manager
+logfile = /tmp/arctis-stream-guard.log
+"""
+
 # Written to ~/.config/dinit.d/boot only when no boot service exists at all.
 # Without a `boot` service that has `waits-for.d`, `dinitctl enable` fails with
 # "service 'boot' has no waits-for.d directory specified" and services won't
@@ -89,11 +97,14 @@ def _setup_dinit_services() -> None:
 
     asm_daemon = shutil.which("asm-daemon") or "/usr/bin/asm-daemon"
     asm_router = shutil.which("asm-router") or "/usr/bin/asm-router"
+    asm_stream_guard = shutil.which("asm-stream-guard") or "/usr/bin/asm-stream-guard"
 
     (HOME_DINIT_SERVICE_FOLDER / "arctis-manager").write_text(
         _DINIT_ARCTIS_MANAGER.format(asm_daemon=asm_daemon))
     (HOME_DINIT_SERVICE_FOLDER / "arctis-video-router").write_text(
         _DINIT_ARCTIS_VIDEO_ROUTER.format(asm_router=asm_router))
+    (HOME_DINIT_SERVICE_FOLDER / "arctis-stream-guard").write_text(
+        _DINIT_ARCTIS_STREAM_GUARD.format(asm_stream_guard=asm_stream_guard))
 
     # filter-chain uses absolute path to filter-chain.conf (no WorkingDirectory in dinit)
     fc_conf = filter_chain_conf_path()
@@ -123,7 +134,7 @@ def _setup_dinit_services() -> None:
 
     # Reload stopped service definitions so dinit picks up restart=true from updated files.
     # Running services cannot be reloaded — skip them; they already have the right behaviour.
-    for svc in ["arctis-video-router", "pipewire-filter-chain"]:
+    for svc in ["arctis-video-router", "arctis-stream-guard", "pipewire-filter-chain"]:
         try:
             st = subprocess.run(["dinitctl", "status", svc], capture_output=True, text=True,
                                 timeout=10)
@@ -160,7 +171,8 @@ def _setup_dinit_services() -> None:
 
     # Enable and start each service (use 'start' not 'restart' — idempotent if not yet running).
     # Guard every service individually to avoid double-launch (issue #25).
-    for svc in ["arctis-manager", "arctis-video-router", "pipewire-filter-chain"]:
+    for svc in ["arctis-manager", "arctis-video-router", "arctis-stream-guard",
+                "pipewire-filter-chain"]:
         try:
             en = subprocess.run(["dinitctl", "enable", svc], check=False,
                                 capture_output=True, text=True, timeout=10)
@@ -573,6 +585,7 @@ def main() -> None:
 
         _run_systemctl(["enable", "--now", "arctis-manager.service"])
         _run_systemctl(["enable", "--now", "arctis-video-router.service"])
+        _run_systemctl(["enable", "--now", "arctis-stream-guard.service"])
         _run_systemctl(["enable", "--now", fc_service])
         from arctis_sound_manager.autostart import set_autostart
         set_autostart(True)

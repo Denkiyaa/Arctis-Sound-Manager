@@ -31,7 +31,14 @@ def _sc(monkeypatch, *, available=True, active=False, enabled=True):
 def test_enabled_but_stopped_router_is_started(monkeypatch):
     started = _sc(monkeypatch, active=False, enabled=True)
     _ensure_media_router_running(logging.getLogger("t"))
-    assert started == [("arctis-video-router",)]
+    assert ("arctis-video-router",) in started
+
+
+def test_enabled_but_stopped_stream_guard_is_started(monkeypatch):
+    """A silently dead guard means the next screen share leaks every channel."""
+    started = _sc(monkeypatch, active=False, enabled=True)
+    _ensure_media_router_running(logging.getLogger("t"))
+    assert ("arctis-stream-guard",) in started
 
 
 def test_running_router_is_left_alone(monkeypatch):
@@ -58,3 +65,23 @@ def test_failure_never_breaks_daemon_startup(monkeypatch):
     monkeypatch.setattr(sc, "manager_available", lambda: True)
     monkeypatch.setattr(sc, "is_active", MagicMock(side_effect=RuntimeError("boom")))
     _ensure_media_router_running(logging.getLogger("t"))  # must not raise
+
+
+def test_one_broken_service_does_not_block_the_other(monkeypatch):
+    """Errors are per-service: an unavailable router must not leave the guard
+    dead as collateral damage."""
+    from arctis_sound_manager import service_control as sc
+    monkeypatch.setattr(sc, "manager_available", lambda: True)
+    monkeypatch.setattr(sc, "is_active", lambda svc: False)
+    monkeypatch.setattr(sc, "is_enabled", lambda svc: True)
+    started = []
+
+    def _start(svc, **kw):
+        if svc == "arctis-video-router":
+            raise RuntimeError("boom")
+        started.append(svc)
+        return True
+
+    monkeypatch.setattr(sc, "start", _start)
+    _ensure_media_router_running(logging.getLogger("t"))
+    assert started == ["arctis-stream-guard"]

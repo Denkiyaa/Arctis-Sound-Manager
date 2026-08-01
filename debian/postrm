@@ -18,7 +18,7 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
             su -l "$REAL_USER" -c "
                 XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS=unix:path=$DBUS_SOCKET
                 export XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
-                for unit in arctis-manager.service arctis-video-router.service arctis-gui.service filter-chain.service; do
+                for unit in arctis-manager.service arctis-video-router.service arctis-stream-guard.service arctis-gui.service filter-chain.service; do
                     systemctl --user disable --now \"\$unit\" >/dev/null 2>&1 || true
                 done
                 rm -f \"\$HOME/.config/pipewire/pipewire.conf.d/10-arctis-virtual-sinks.conf\"
@@ -26,12 +26,13 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
                 rm -f \"\$HOME/.config/pipewire/filter-chain.conf.d\"/sonar-*.conf
                 rm -f \"\$HOME/.config/systemd/user/arctis-manager.service\"
                 rm -f \"\$HOME/.config/systemd/user/arctis-video-router.service\"
+                rm -f \"\$HOME/.config/systemd/user/arctis-stream-guard.service\"
                 rm -f \"\$HOME/.config/systemd/user/arctis-gui.service\"
                 rm -f \"\$HOME/.local/share/applications/ArctisManager.desktop\"
                 rm -f \"\$HOME/.local/share/applications/ArctisManagerSystray.desktop\"
                 update-desktop-database \"\$HOME/.local/share/applications\" >/dev/null 2>&1 || true
                 if command -v dinitctl >/dev/null 2>&1; then
-                    for svc in arctis-manager arctis-video-router arctis-gui pipewire-filter-chain; do
+                    for svc in arctis-manager arctis-video-router arctis-stream-guard arctis-gui pipewire-filter-chain; do
                         dinitctl disable \"\$svc\" 2>/dev/null || true
                         rm -f \"\$HOME/.config/dinit.d/\$svc\" 2>/dev/null || true
                     done
