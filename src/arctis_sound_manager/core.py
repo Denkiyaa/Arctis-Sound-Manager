@@ -1951,7 +1951,19 @@ class CoreEngine:
                     # value is missing. A stray 0 here gets pushed to the device
                     # and min-caps the control — e.g. mic_volume dropping to 1/10
                     # after a reconnect/update instead of the user's saved level.
-                    result.append(self.device_settings.get(uri[1], self._setting_default(uri[1])))
+                    resolved = self.device_settings.get(uri[1], self._setting_default(uri[1]))
+                    # Optional derived form, e.g. 'settings.mic_side_tone.enabled':
+                    # apply the same value.* transforms _resolve_update_sequence
+                    # uses, so init can split a setting into a state byte + a
+                    # level byte rather than hardcoding the state on (#161 — the
+                    # Nova Pro Omni sidetone could never be turned off because
+                    # the init always forced its state byte to 1).
+                    if len(uri) > 2:
+                        token = f'value.{uri[2]}'
+                        if token not in _DERIVED_TOKENS:
+                            raise Exception(f'Unknown derived token in init byte: {byte}')
+                        resolved = _DERIVED_TOKENS[token](resolved)
+                    result.append(resolved)
                 elif byte == 'status.request':
                     if self.device_config is None:
                         raise Exception(f'Device configuration is not available, skipping {byte}')

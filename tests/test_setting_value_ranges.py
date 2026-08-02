@@ -38,7 +38,7 @@ FIRMWARE_RANGES: dict[tuple[str, str], tuple[int, int]] = {
     ("nova_7_perc_battery.yaml", "mic_mute_led_brightness"): (0, 3),
     ("nova_7p_perc_battery.yaml", "mic_mute_led_brightness"): (0, 3),
     ("nova_pro_omni.yaml", "mic_volume"): (1, 10),
-    ("nova_pro_omni.yaml", "mic_side_tone"): (1, 10),
+    ("nova_pro_omni.yaml", "mic_side_tone"): (0, 10),
     ("nova_pro_omni.yaml", "anc_level"): (1, 3),
     ("nova_pro_omni.yaml", "mic_led_brightness"): (0, 10),
 }

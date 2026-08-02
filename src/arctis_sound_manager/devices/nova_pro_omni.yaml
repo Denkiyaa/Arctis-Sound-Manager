@@ -72,7 +72,7 @@ device:
     - [0x01, 0xb8, 'settings.anc_level']           # ANC level 1-3
     - [0x01, 0xb9, 'settings.transparent_level']   # transparency level 1-10
     - [0x01, 0x37, 'settings.mic_volume']          # mic volume 1-10
-    - [0x01, 0x38, 0x01, 'settings.mic_side_tone'] # boom sidetone: state ON + level
+    - [0x01, 0x38, 'settings.mic_side_tone.enabled', 'settings.mic_side_tone.at_least_1'] # boom sidetone: state (0/1) + level 1-10
     - [0x01, 0xbf, 'settings.mic_led_brightness']  # muted-mic LED brightness 1-10
     - [0x01, 0x27, 'settings.volume_limiter']      # volume limiter
     - [0x01, 0xb2, 'settings.bluetooth_power_status']  # BT on at power-up
@@ -232,19 +232,20 @@ device:
         update_sequence: [0x01, 0x37, 'value']
       mic_side_tone:
         # boom_mic_sidetone (0x38): byte 2 = state (0/1), byte 3 = level 1-10.
-        # The slider drives the level; state is written as ON for any level, so
-        # the lowest position is 10% rather than a true off — the state byte
-        # would need its own control, and only the level was validated on
-        # hardware. 0x18 — used before — is read_radio_eq_name, a query: it
-        # never applied any sidetone at all, which is why this looked dead.
+        # The slider spans 0-10: 0 writes state=0 (a true off, #161 — before
+        # this the state byte was hardcoded on, so the sidetone could never be
+        # disabled), 1-10 write state=1 with that level. The level byte is
+        # pinned to >= 1 even when off (value.at_least_1) because the firmware
+        # misbehaves on a 0 level. (0x18 — used before 0x38 — was
+        # read_radio_eq_name, a query: it applied no sidetone at all.)
         type: slider
-        min: 0x01
+        min: 0x00
         max: 0x0a
         step: 1
-        min_label: perc_10
+        min_label: off
         max_label: perc_100
-        default: 0x05
-        update_sequence: [0x01, 0x38, 0x01, 'value']
+        default: 0x00
+        update_sequence: [0x01, 0x38, 'value.enabled', 'value.at_least_1']
       mic_led_brightness:
         type: slider
         min: 0x01

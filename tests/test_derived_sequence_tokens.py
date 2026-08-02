@@ -65,6 +65,41 @@ def test_level_never_reaches_the_device_as_zero():
     assert frame[3] >= 1 and frame[4] >= 1
 
 
+@pytest.mark.parametrize("value,expected", [
+    (0,  [0x01, 0x38, 0x00, 0x01]),  # off: state 0, level pinned to 1
+    (1,  [0x01, 0x38, 0x01, 0x01]),  # on, lowest
+    (5,  [0x01, 0x38, 0x01, 0x05]),
+    (10, [0x01, 0x38, 0x01, 0x0a]),  # on, highest
+])
+def test_omni_sidetone_frames(value, expected):
+    """The boom sidetone splits into a state byte + a level byte, so 0 is a
+    true off rather than a floor of 10% (#161)."""
+    engine, config = _engine("nova_pro_omni.yaml")
+    setting = _setting(config, "mic_side_tone")
+
+    assert CoreEngine._resolve_update_sequence(engine, setting, value) == expected
+
+
+def test_omni_sidetone_init_is_off_when_unset():
+    """At init with no saved value the sidetone must resolve to state OFF —
+    the regression in #161 was the init hardcoding the state byte to 1, so the
+    sidetone came back on at every connect no matter what the user chose."""
+    import threading
+    from arctis_sound_manager.settings import DeviceSettings
+
+    _, config = _engine("nova_pro_omni.yaml")
+    engine = MagicMock()
+    engine._device_lock = threading.RLock()
+    engine.device_config = config
+    engine.device_settings = DeviceSettings(config.vendor_id, config.product_ids[0])
+    engine._setting_default = lambda name: CoreEngine._setting_default(engine, name)
+
+    resolved = CoreEngine.translate_init_bytes(
+        engine, [0x01, 0x38, "settings.mic_side_tone.enabled",
+                 "settings.mic_side_tone.at_least_1"])
+    assert resolved == [0x01, 0x38, 0x00, 0x01]
+
+
 def test_tokens_are_inert_for_ordinary_settings():
     """A plain setting must keep sending its value untouched."""
     engine, config = _engine("nova_pro_omni.yaml")

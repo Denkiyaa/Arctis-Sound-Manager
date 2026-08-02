@@ -128,10 +128,11 @@ def test_device_init_hardcodes_no_user_setting(raw):
     must not, or it silently overwrites what the user set on the DAC itself.
     """
     # Constants that are part of the wire format rather than user state:
-    #   0x8d/0x49 — sonar-present / software-chatmix handshake flags,
-    #   0x38      — boom_mic_sidetone takes state THEN level; the level is the
-    #               setting, the leading state byte only says "sidetone on".
-    structural = {0x8d: 1, 0x49: 1, 0x38: 1}
+    #   0x8d/0x49 — sonar-present / software-chatmix handshake flags.
+    # 0x38 (boom_mic_sidetone) takes state THEN level, but neither is hardcoded:
+    # both are derived from the setting (settings.mic_side_tone.enabled /
+    # .at_least_1), so its state byte follows the user's choice (#161).
+    structural = {0x8d: 1, 0x49: 1}
     for command in raw["device_init"]:
         if command == ["status.request"]:
             continue
@@ -181,4 +182,6 @@ def test_settings_reference_existing_entries(raw):
     for command in raw["device_init"]:
         for byte in command:
             if isinstance(byte, str) and byte.startswith("settings."):
-                assert byte.split(".", 1)[1] in declared, f"{byte} is not declared"
+                # A byte may carry a derived suffix (settings.<name>.enabled);
+                # the second dotted component is always the setting name.
+                assert byte.split(".")[1] in declared, f"{byte} is not declared"
