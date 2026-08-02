@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 
 from arctis_sound_manager.log_setup import configure_logging
-from arctis_sound_manager.pw_utils import _abs_exe, _pw_run
+from arctis_sound_manager.pw_utils import _abs_exe, _pw_run, _parse_pw_dump_output
 from arctis_sound_manager.stream_guard import (CONFIG_FILE,
                                                DEFAULT_CAPTURE_NODES,
                                                GuardConfig, describe_cut,
@@ -79,10 +79,24 @@ def _current_config() -> GuardConfig:
 # ── PipeWire I/O ───────────────────────────────────────────────────────────
 
 def _pw_dump() -> list:
-    """Snapshot the graph. Returns [] on failure — the tick then does nothing."""
+    """Snapshot the graph. Returns [] on failure — the tick then does nothing.
+
+    ``pw-dump`` can print more than one concatenated JSON document when a
+    registry object is added/removed mid-enumeration (see
+    ``pw_utils._parse_pw_dump_output`` for the full explanation). Falls back
+    to that recovery path instead of treating a momentary hiccup as an empty
+    graph, which used to make Stream Guard miss a tick of screen-share
+    policing.
+    """
     try:
         r = _pw_run(["pw-dump"], capture_output=True, text=True, timeout=3)
-        return json.loads(r.stdout)
+        try:
+            return json.loads(r.stdout)
+        except json.JSONDecodeError:
+            recovered = _parse_pw_dump_output(r.stdout)
+            if recovered is not None:
+                return recovered
+            raise
     except Exception as exc:
         log.warning("pw-dump failed: %s", exc)
         return []
