@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Stream Guard: screen sharing no longer broadcasts your whole system.** Discord's Linux client has no way to pick which audio a screen share carries. When a share starts it creates its own capture node and links *every* playback stream into it — the browser tab you left open, your music, the voice call itself — and it keeps relinking, so unlinking by hand does not hold. A new bar at the top of the Sonar page picks which channels are allowed out: leave it on Game and only the game goes to the call, while Media and Chat stay in your headset. The `asm-stream-guard` service enforces the choice on PipeWire graph events rather than on a timer, so a stream Discord has just relinked is cut in tens of milliseconds instead of on the next poll — the gap during which private audio is already on the wire. Sources are matched by the channel they play on, not by application name, so anything you move to an allowed channel is included automatically and nothing needs to be kept in a list.
+
 ### Fixed
 
 - **The microphone chain could be fed by the headset's own output — and other people heard it.** On an Arctis Nova 7 sitting on an `iec958-stereo` profile the headset exposes no capture node of its own, and the microphone slot fell back to the *output* sink. That sink's monitor was then linked into the microphone EQ, so everything audible on the machine — a browser tab, the game — was transmitted as if it were the microphone: a video played in a browser went out over a Discord call as though the user were speaking it. It came back on every daemon restart, which is why it reappeared with each update. The input no longer inherits the output's fallback, and the capture link is now refused outright when the proposed source is a sink. This is the one input-side mistake that is completely inaudible to the person making it.
+- **Arctis Nova Pro Omni: the microphone sidetone could not be turned off.** The command that sets it kept its on/off byte pinned to on, so the slider's lowest position was a quiet sidetone rather than silence — and it switched itself back on at every reconnect no matter what you chose. The slider now reaches a true off, and off is the default. (#161)
 
 ## [1.2.19] - 30 July 2026
 

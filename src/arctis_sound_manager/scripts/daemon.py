@@ -98,10 +98,21 @@ def verify_setup() -> int:
     return 0 if issues == 0 else 1
 
 
-def _ensure_media_router_running(logger) -> None:
-    """Start the media router if it is enabled but not running.
+# Companion services the daemon revives on startup, with the user-visible
+# consequence of each staying dead — the log line has to say what silently
+# stopped working, not just name a unit.
+_COMPANION_SERVICES = (
+    ('arctis-video-router', 'media router',
+     'manual routing choices are remembered again'),
+    ('arctis-stream-guard', 'stream guard',
+     'muted channels stay out of screen shares again'),
+)
 
-    Quitting ASM from the tray stops arctis-manager, arctis-video-router and
+
+def _ensure_media_router_running(logger) -> None:
+    """Start the companion services that are enabled but not running.
+
+    Quitting ASM from the tray stops arctis-manager, the companion services and
     filter-chain together, on purpose — the system is meant to behave as if ASM
     were not installed. Relaunching the app brought back the daemon and the
     filter-chain, but nothing brought back the router: it stayed dead for the
@@ -110,28 +121,37 @@ def _ensure_media_router_running(logger) -> None:
     remembers them as per-app routing overrides, so users saw their apps drift
     back to the default channel with no explanation.
 
+    The stream guard fails the same way but louder: a guard that is silently
+    dead means the next screen share broadcasts every channel to the call.
+
     Only started when the unit is *enabled*: a user who deliberately disabled
-    the router must not have it resurrected on every daemon start. Failures are
-    logged and swallowed — the daemon's own job comes first.
+    one must not have it resurrected on every daemon start. Failures are logged
+    and swallowed, per service — the daemon's own job comes first, and one
+    unavailable unit must not stop the others from being revived.
     """
     from arctis_sound_manager import service_control as sc
 
     try:
         if not sc.manager_available():
             return
-        if sc.is_active('arctis-video-router'):
-            return
-        if not sc.is_enabled('arctis-video-router'):
-            logger.debug('media router is disabled — leaving it stopped')
-            return
-        logger.warning(
-            'media router is enabled but not running (stopped with a previous '
-            'ASM session?) — starting it so manual routing choices are '
-            'remembered again'
-        )
-        sc.start('arctis-video-router', timeout=10)
     except Exception as exc:
-        logger.warning('could not check/start the media router: %r', exc)
+        logger.warning('could not check the service manager: %r', exc)
+        return
+
+    for unit, label, consequence in _COMPANION_SERVICES:
+        try:
+            if sc.is_active(unit):
+                continue
+            if not sc.is_enabled(unit):
+                logger.debug('%s is disabled — leaving it stopped', label)
+                continue
+            logger.warning(
+                '%s is enabled but not running (stopped with a previous ASM '
+                'session?) — starting it so %s', label, consequence
+            )
+            sc.start(unit, timeout=10)
+        except Exception as exc:
+            logger.warning('could not check/start the %s: %r', label, exc)
 
 
 async def main_async():

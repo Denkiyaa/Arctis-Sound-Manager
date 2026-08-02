@@ -18,7 +18,7 @@
 # Copyright (C) 2026 loteran — SPDX-License-Identifier: GPL-3.0-or-later
 set -u
 
-SERVICES="arctis-manager.service arctis-video-router.service arctis-gui.service"
+SERVICES="arctis-manager.service arctis-video-router.service arctis-stream-guard.service arctis-gui.service"
 
 restart_for_session() {
     uid="$1"

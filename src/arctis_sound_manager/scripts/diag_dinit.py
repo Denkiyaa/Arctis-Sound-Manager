@@ -116,7 +116,8 @@ def check_init() -> dict:
 # ── B. ASM dinit service files ────────────────────────────────────────────────
 
 
-_SERVICES = ["arctis-manager", "arctis-video-router", "pipewire-filter-chain"]
+_SERVICES = ["arctis-manager", "arctis-video-router", "arctis-stream-guard",
+             "pipewire-filter-chain"]
 _USER_DINIT_D = Path.home() / ".config" / "dinit.d"
 
 
@@ -364,7 +365,8 @@ def check_asm() -> dict:
     section("D. ASM install state")
     result: dict = {}
 
-    for binary in ("asm-daemon", "asm-gui", "asm-router", "asm-cli", "asm-diag-dinit"):
+    for binary in ("asm-daemon", "asm-gui", "asm-router", "asm-stream-guard",
+                   "asm-cli", "asm-diag-dinit"):
         path = shutil.which(binary)
         result[binary] = path
         (ok if path else miss)(binary, path or "not in PATH")

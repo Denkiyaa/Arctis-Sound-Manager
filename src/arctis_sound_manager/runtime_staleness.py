@@ -41,6 +41,7 @@ _UNKNOWN = ("", "dev")
 _USER_SERVICES = (
     "arctis-manager.service",
     "arctis-video-router.service",
+    "arctis-stream-guard.service",
 )
 
 
