@@ -861,6 +861,7 @@ def ensure_capture_link(
             data = _pw_dump()
 
         node_ids: dict[str, int] = {}
+        node_classes: dict[str, str] = {}
         for obj in data:
             if not obj.get("type", "").endswith("Node"):
                 continue
@@ -868,11 +869,25 @@ def ensure_capture_link(
             name = props.get("node.name", "")
             if name:
                 node_ids[name] = obj["id"]
+                node_classes[name] = props.get("media.class", "")
 
         source_id = node_ids.get(source_name)
         capture_id = node_ids.get(capture_name)
         if source_id is None:
             logger.debug("ensure_capture_link: source '%s' not in graph", source_name)
+            return False
+
+        # A sink's "output" ports are its monitor: linking one here does not
+        # feed the microphone chain with a microphone, it feeds it with
+        # everything the user is listening to, and every app reading the ASM
+        # mic then transmits their desktop audio. Refused outright rather than
+        # trusted to the callers — this is the one mistake on the input side
+        # that is inaudible to the person making it.
+        if node_classes.get(source_name, "") == "Audio/Sink":
+            logger.error(
+                "ensure_capture_link: refusing to feed '%s' from '%s' — that is "
+                "an output, and its monitor would be transmitted as the "
+                "microphone", capture_name, source_name)
             return False
         if capture_id is None:
             logger.debug("ensure_capture_link: capture '%s' not in graph", capture_name)

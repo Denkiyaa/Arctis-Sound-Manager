@@ -1432,10 +1432,19 @@ class CoreEngine:
                 return
 
             fallback = physical_out_game or physical_out_chat or ""
+            # The input deliberately does NOT share the output's fallback.
+            # A headset with no capture node of its own — a Nova 7 sitting on
+            # an iec958-stereo profile, a wireless dongle whose mic has not
+            # enumerated yet — used to have its *sink* name stored as the mic,
+            # and ensure_micro_capture_link then wired that sink's monitor into
+            # effect_input.sonar-micro-eq. Everything the user could hear was
+            # transmitted as their microphone: a browser tab went out over
+            # Discord as if they were speaking it. Empty is the honest answer;
+            # the watchdog links the mic once a real source appears.
             device_state.set_current_device(
                 physical_out_game=physical_out_game or fallback,
                 physical_out_chat=physical_out_chat or fallback,
-                physical_in=physical_in or fallback,
+                physical_in=physical_in or "",
                 spatial_engine=device_config.spatial_engine,
                 device_name=device_config.name,
             )
