@@ -3,7 +3,10 @@
 
 """Tests for pw_utils — native PipeWire stream detection and routing."""
 
+import json
+
 from arctis_sound_manager.pw_utils import (
+    _parse_pw_dump_output,
     get_native_streams,
     loopback_link_target,
     move_native_stream,
@@ -489,3 +492,72 @@ class TestSetFilterGain:
         ok = pw_utils.set_filter_gain("effect_input.sonar-output-eq", "boost:Gain", 1.0)
 
         assert ok is False
+
+
+class TestParsePwDumpOutput:
+    """pw-dump can occasionally print more than one JSON document,
+    concatenated with no separator, when a registry object is
+    added/removed mid-enumeration. ``_parse_pw_dump_output`` recovers the
+    real dump instead of ``_pw_dump()`` treating the graph as empty (which
+    used to make the loopback watchdog tear down healthy loopbacks and
+    restart the filter-chain for no reason — the mechanism behind ASM's
+    random audio dropouts).
+    """
+
+    def test_single_valid_document_returns_it(self):
+        text = '[{"id": 1, "info": null}, {"id": 2, "info": null}]'
+        result = _parse_pw_dump_output(text)
+        assert result == [{"id": 1, "info": None}, {"id": 2, "info": None}]
+
+    def test_tombstone_after_real_dump_is_ignored(self):
+        real = [{"id": i, "info": None} for i in range(50)]
+        text = json.dumps(real) + "\n" + json.dumps([{"id": 152, "info": None}]) + "\n"
+        result = _parse_pw_dump_output(text)
+        assert result == real
+
+    def test_tombstone_before_real_dump_is_ignored(self):
+        real = [{"id": i, "info": None} for i in range(50)]
+        text = json.dumps([{"id": 152, "info": None}]) + "\n" + json.dumps(real) + "\n"
+        result = _parse_pw_dump_output(text)
+        assert result == real
+
+    def test_multiple_tombstones_still_picks_largest(self):
+        real = [{"id": i, "info": None} for i in range(50)]
+        text = (
+            json.dumps([{"id": 1, "info": None}]) + "\n"
+            + json.dumps(real) + "\n"
+            + json.dumps([{"id": 2, "info": None}]) + "\n"
+        )
+        result = _parse_pw_dump_output(text)
+        assert result == real
+
+    def test_no_valid_json_returns_none(self):
+        assert _parse_pw_dump_output("not json at all") is None
+
+    def test_empty_string_returns_none(self):
+        assert _parse_pw_dump_output("") is None
+
+    def test_pw_dump_recovers_from_concatenated_output(self, monkeypatch):
+        """End-to-end: _pw_dump() itself falls back to the recovery path
+        instead of returning [] on a JSONDecodeError."""
+        real = [{"id": i, "info": None} for i in range(50)]
+        stdout = json.dumps(real) + "\n" + json.dumps([{"id": 152, "info": None}]) + "\n"
+
+        def fake_run(argv, **kwargs):
+            return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        monkeypatch.setattr(pw_utils, "_pw_run", fake_run)
+
+        result = pw_utils._pw_dump()
+
+        assert result == real
+
+    def test_pw_dump_still_returns_empty_on_genuine_garbage(self, monkeypatch):
+        def fake_run(argv, **kwargs):
+            return types.SimpleNamespace(returncode=0, stdout="not json", stderr="")
+
+        monkeypatch.setattr(pw_utils, "_pw_run", fake_run)
+
+        result = pw_utils._pw_dump()
+
+        assert result == []

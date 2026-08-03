@@ -248,10 +248,69 @@ def reapply_routing_overrides(timeout_s: float = 6.0) -> int:
     return moved
 
 
+def _parse_pw_dump_output(text: str) -> list | None:
+    """Recover a usable dump from ``pw-dump`` output that failed a plain
+    ``json.loads`` (issue: random ASM audio dropouts, diagnosed on PipeWire
+    1.0.5, Aug 2026).
+
+    A single non-monitor ``pw-dump`` invocation is documented as printing one
+    JSON array, but in practice it can print **more than one**, concatenated
+    back-to-back with no separator, when a registry object is added/removed
+    while pw-dump is still enumerating the graph. The extra document observed
+    here is a tiny one-element "tombstone" array like ``[{"id": N, "info":
+    null}]`` — and it can appear *before or after* the real dump, so the
+    real dump is not reliably "the first document".
+
+    ``json.loads`` treats any trailing bytes after the first valid document
+    as a hard parse error ("Extra data"), so ``_pw_dump()`` used to return
+    ``[]`` on every one of these — an apparently *empty* PipeWire graph. The
+    loopback watchdog (``core.py: _loopback_watchdog``) reads an empty dump
+    as "every loopback/EQ target is gone" and escalates to recreating
+    loopbacks and restarting the filter-chain service — tearing down and
+    rebuilding the exact audio path that was actually fine. That churn is
+    the mechanism behind ASM's random audio dropouts, not any real failure
+    of PipeWire or the headset.
+
+    This walks every concatenated JSON document in the output via
+    ``JSONDecoder.raw_decode`` and returns the largest list (by object
+    count) — the real dump always has hundreds of entries; a tombstone has
+    exactly one. Returns ``None`` if nothing parseable was found at all.
+    """
+    decoder = json.JSONDecoder()
+    idx = 0
+    n = len(text)
+    best: list | None = None
+    while idx < n:
+        while idx < n and text[idx] in " \t\r\n":
+            idx += 1
+        if idx >= n:
+            break
+        try:
+            obj, end = decoder.raw_decode(text, idx)
+        except Exception:
+            break
+        if isinstance(obj, list) and (best is None or len(obj) > len(best)):
+            best = obj
+        idx = end
+    return best
+
+
 def _pw_dump() -> list:
     try:
         r = _pw_run(["pw-dump"], capture_output=True, text=True, timeout=3)
-        return json.loads(r.stdout)
+        try:
+            return json.loads(r.stdout)
+        except json.JSONDecodeError:
+            recovered = _parse_pw_dump_output(r.stdout)
+            if recovered is not None:
+                logger.info(
+                    "pw-dump: output had concatenated JSON documents "
+                    "(%d bytes) — recovered the real dump (%d objects) "
+                    "instead of treating the graph as empty",
+                    len(r.stdout), len(recovered),
+                )
+                return recovered
+            raise
     except Exception as e:
         logger.warning("pw-dump failed: %s", e)
         return []
