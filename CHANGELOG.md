@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.21] - 3 August 2026
+
+### Fixed
+
+- **Random audio dropouts on a healthy setup are gone.** ASM reads the PipeWire graph with `pw-dump`, and once in a while — when a node appears or disappears at the exact moment it runs — `pw-dump` prints a second, tiny JSON fragment stuck onto the end of the real one. ASM took that as a parse error and concluded the entire graph had vanished, so its watchdog tore down and rebuilt the loopbacks and restarted the filter-chain — audible as a dropout every 15–25 minutes on hardware that was working perfectly the whole time. The graph is now read back even when `pw-dump` doubles up its output. Diagnosed on a Nova Pro Wireless by @relxek. (#164)
+- **Ubuntu 26.04: the app now starts after a clean install.** On 26.04, PySide6 is split into separate per-module packages, and ASM's dependency on them was written in a way (`… | python3-pip`) that let the package manager consider it satisfied by `python3-pip` — which nearly everyone already has — and skip the actual Qt modules. `asm-gui` then died at launch with `No module named 'PySide6.QtNetwork'`. The Qt modules are now hard dependencies, so a plain install pulls them in. Traced to the exact missing submodules by @n6dlh. (#163)
+
 ## [1.2.20] - 2 August 2026
 
 ### Added
