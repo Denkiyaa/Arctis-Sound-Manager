@@ -754,11 +754,15 @@ class DevicePage(QWidget):
             self._clips_btn.setEnabled(True)
 
         if not ok:
-            self._clips_status.setText(
-                I18n.translate("ui", "clips_install_partial_upgrade")
-                if clips_setup.looks_like_dependency_conflict(detail)
-                else (clips_setup.last_line(detail)
-                      or I18n.translate("ui", "clips_pkg_failed")))
+            if clips_setup.looks_like_dependency_conflict(detail):
+                upgrade = clips_setup.system_upgrade_command()
+                self._clips_status.setText(
+                    I18n.translate("ui", "clips_install_partial_upgrade")
+                    + ((" " + upgrade) if upgrade else ""))
+            else:
+                self._clips_status.setText(
+                    clips_setup.last_line(detail)
+                    or I18n.translate("ui", "clips_pkg_failed"))
             return False
         return True
 

@@ -163,6 +163,33 @@ def packages_in(argv: list[str]) -> list[str]:
     return [tok for tok in argv[2:] if not tok.startswith("-")]
 
 
+_UPGRADE_COMMANDS = {
+    "pacman": "sudo pacman -Syu",
+    "apt": "sudo apt update && sudo apt full-upgrade",
+    "dnf": "sudo dnf upgrade",
+}
+
+
+def system_upgrade_command() -> str | None:
+    """The command that brings this machine up to date, or None if unknown.
+
+    Offered when an install fails on a dependency conflict, and only then. It is
+    the real fix — on Arch a package is built against the exact versions in the
+    repository at that moment, down to soname pins like
+    `libpipewire-0.3.so=0-64`, so there is no such thing as upgrading one
+    package on its own; the repository's `gst-plugin-pipewire` wants
+    `pipewire=1:1.6.8-1` and nothing else will do.
+
+    Not what the Install button runs. Upgrading someone's entire machine behind
+    one password prompt is far more than they asked for when they turned on a
+    screen recorder, and it is a decision only they can make — so ASM names the
+    command and leaves the choice with them.
+    """
+    from arctis_sound_manager.system_deps_checker import (_package_manager_for,
+                                                          detect_distro)
+    return _UPGRADE_COMMANDS.get(_package_manager_for(detect_distro()) or "")
+
+
 def manual_command(argvs: list[list[str]]) -> str | None:
     """One copy-pasteable command for a whole group of argv, or None when there
     is nothing to run.

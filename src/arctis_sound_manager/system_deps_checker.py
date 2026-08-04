@@ -850,8 +850,18 @@ def clip_dep_checks() -> list[DepCheck]:
 
     The GStreamer plugin sets are grouped rather than listed one per row. A
     user reading the dialog is answering "can this machine record?", not
-    auditing plugin packages, and grouping also means one `pacman -S` with
+    auditing plugin packages, and grouping also means one `pacman` call with
     three packages instead of three password prompts.
+
+    The pacman commands are plain `-S`, deliberately, even though `-S` against
+    a database older than the mirrors is a partial upgrade and fails exactly
+    here — the repository's `gst-plugin-pipewire` depends on an *exact* pipewire
+    release, so the moment the installed pipewire and the repository's disagree,
+    pacman refuses with "could not satisfy dependencies". The fix for that is
+    `-Syu`, which upgrades the entire machine; turning on a screen recorder is
+    not a good reason to do that behind one password prompt. So the button
+    installs, and when the install fails this way the screen says what to run.
+    See `clips_setup.system_upgrade_command`.
     """
     return [
         DepCheck(

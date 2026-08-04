@@ -236,6 +236,7 @@ class ClipsInstallPage(QWidget):
         self._manual_field.setVisible(cmd is not None)
         self._manual_hint.setVisible(cmd is not None)
 
+
         # Nothing on this machine to remove means no offer to remove it. The
         # button is about the packages, not about the feature, so it follows
         # what the probe found rather than the toggle.
@@ -280,13 +281,16 @@ class ClipsInstallPage(QWidget):
                     # Nothing on this screen can fix this one, and the package
                     # manager's own wording ("installing pipewire breaks
                     # dependency 'pipewire=…' required by pipewire-pulse")
-                    # does not lead anyone to the fix.
-                    self._status.setText(_tr(
-                        "clips_install_partial_upgrade",
-                        "Install failed: this machine's packages and its "
-                        "repositories disagree, so the capture packages cannot "
-                        "be resolved. Update the whole system first, then try "
-                        "again.") + "\n\n" + clips_setup.last_line(detail))
+                    # does not lead anyone to the fix. So name the fix.
+                    upgrade = clips_setup.system_upgrade_command()
+                    self._status.setText(
+                        _tr("clips_install_partial_upgrade",
+                            "Install failed: this machine's packages and its "
+                            "repositories disagree, so the capture packages "
+                            "cannot be resolved. Update the whole system "
+                            "first, then try again:")
+                        + (("\n\n" + upgrade) if upgrade else "")
+                        + "\n\n" + clips_setup.last_line(detail))
                 else:
                     self._status.setText(
                         _tr("clips_install_failed", "Install failed: {0}").format(
