@@ -87,6 +87,11 @@ _ALWAYS_PRESENT_BINARIES = {
     # a missing one degrades the bug report, but doesn't break a feature.
     "lsb_release", "notify-send",
     "dpkg", "rpm", "pip", "pip3", "pipx", "python3",
+    # Package-manager query tools update_checker.py uses to tell a
+    # repository-tracked install from a hand-downloaded one (#163). Always
+    # present on their own distro; a missing one only degrades the update
+    # dialog, it doesn't break a feature.
+    "apt-cache", "dnf",
     # The pipewire daemon binary itself — covered indirectly by the
     # pactl + pw-cli registry checks (those fail if `pipewire` isn't
     # running, which subsumes "is the binary installed").
