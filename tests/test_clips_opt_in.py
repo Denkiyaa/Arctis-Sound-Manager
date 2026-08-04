@@ -595,3 +595,50 @@ def test_rpm_and_deb_do_not_hard_require_the_clip_stack():
     depends_block = control.split("Recommends:")[0]
     assert "python3-gi" not in depends_block
     assert "gstreamer1.0-plugins-base" not in depends_block
+
+
+def test_a_pipx_install_is_told_it_cannot_get_there(monkeypatch, tmp_path):
+    """The loop that has no exit.
+
+    PyGObject is a system package, not a wheel that carries GObject with it, so
+    a venv made without --system-site-packages can never import it. The screen
+    asked for python-gobject, the user installed it, the package manager
+    reported success, the re-probe failed again, and the screen said "still
+    missing some components" — for as long as anyone kept trying.
+
+    `_can_import` uses find_spec, which cannot see the system module from
+    inside the venv, so no amount of installing changes the answer. The only
+    honest thing the screen can do is say so before the password prompt.
+    """
+    import sys
+
+    from arctis_sound_manager.gui import clips_setup
+
+    venv = tmp_path / "venv"
+    venv.mkdir()
+    (venv / "pyvenv.cfg").write_text(
+        "home = /usr/bin\ninclude-system-site-packages = false\nversion = 3.14\n")
+    monkeypatch.setattr(sys, "prefix", str(venv))
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+    monkeypatch.setattr(sdc, "clip_dep_checks", lambda: [_blocking_check(False)])
+
+    assert clips_setup.isolated_venv() is True
+    assert clips_setup.bindings_unreachable() is True
+
+    # The same venv with the system's packages visible is a normal install.
+    (venv / "pyvenv.cfg").write_text(
+        "home = /usr/bin\ninclude-system-site-packages = true\nversion = 3.14\n")
+    assert clips_setup.isolated_venv() is False
+    assert clips_setup.bindings_unreachable() is False
+
+
+def test_a_distro_install_is_never_mistaken_for_a_venv(monkeypatch):
+    """The message must not appear on the install everyone actually has."""
+    import sys
+
+    from arctis_sound_manager.gui import clips_setup
+
+    monkeypatch.setattr(sys, "prefix", "/usr")
+    monkeypatch.setattr(sys, "base_prefix", "/usr")
+
+    assert clips_setup.isolated_venv() is False

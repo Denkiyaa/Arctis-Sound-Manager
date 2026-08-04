@@ -91,6 +91,47 @@ def runtime_ready() -> bool:
         return False
 
 
+def isolated_venv() -> bool:
+    """True when ASM is running from a virtualenv that cannot see the system's
+    Python packages — which is what `pipx install` produces.
+
+    This one state makes the whole install screen a loop rather than a path.
+    PyGObject is not on PyPI as a wheel that carries GObject with it; it is a
+    system package, and a venv created without ``--system-site-packages`` cannot
+    import it however many times it is installed. So the screen asks for
+    python-gobject, the user installs it, the package manager reports success,
+    the re-probe still fails, and the screen says "still missing some
+    components" — forever, with nothing about it hinting at the real problem.
+
+    Read from ``pyvenv.cfg`` rather than by probing ``sys.path``: the flag is
+    what actually decides whether the interpreter was given the system's
+    site-packages, and reading it says so plainly. A venv whose config cannot be
+    read is treated as isolated, which is the safer answer — the message it
+    produces is an explanation, not a refusal to continue.
+    """
+    import sys
+    from pathlib import Path
+
+    if sys.prefix == sys.base_prefix:
+        return False
+
+    try:
+        for line in (Path(sys.prefix) / "pyvenv.cfg").read_text().splitlines():
+            key, sep, value = line.partition("=")
+            if sep and key.strip() == "include-system-site-packages":
+                return value.strip().lower() != "true"
+    except OSError as exc:
+        logger.debug("could not read pyvenv.cfg: %s", exc)
+    return True
+
+
+def bindings_unreachable() -> bool:
+    """Whether PyGObject is missing *and* no package manager can fix it here."""
+    if not isolated_venv():
+        return False
+    return any(c.name.startswith("PyGObject") for c in missing_checks())
+
+
 def clips_enabled() -> bool:
     try:
         from arctis_sound_manager.settings import GeneralSettings
