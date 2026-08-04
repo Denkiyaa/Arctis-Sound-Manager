@@ -67,7 +67,18 @@ def test_caption_carries_the_time_and_the_size():
 
 
 def test_caption_of_a_partial_file_does_not_crash():
-    assert "0 MB" in clip_caption(0.0, 0)
+    assert "0 KB" in clip_caption(0.0, 0)
+
+
+def test_a_small_clip_does_not_read_as_an_empty_one():
+    """Whole megabytes turned every short clip into "0 MB", which reads as a
+    file that failed rather than a file that is small — the library had two of
+    them, both playable."""
+    from arctis_sound_manager.gui.clips_page import clip_size
+
+    assert clip_size(515_231) == "503 KB"
+    assert clip_size(3 * 1024 * 1024) == "3.0 MB"
+    assert clip_size(38 * 1024 * 1024) == "38 MB"
 
 
 # ── the grid stays a grid ─────────────────────────────────────────────────────
