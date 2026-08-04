@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 from arctis_sound_manager.clip_buffer import Frame
-from arctis_sound_manager.clip_capture import _mark_default_audio_track
+from arctis_sound_manager.clip_capture import _finish_matroska
 
 
 def _frames(sizes: dict[str, int]) -> dict[str, list[Frame]]:
@@ -81,7 +81,7 @@ def test_the_fixture_starts_from_the_broken_state(tmp_path):
 @needs_ffmpeg
 def test_exactly_one_channel_is_left_as_the_default(tmp_path):
     clip = _clip(tmp_path, 3)
-    _mark_default_audio_track(
+    _finish_matroska(
         clip, ["video", "game", "chat", "mic"],
         _frames({"game": 30_000, "chat": 15_000, "mic": 15_000}))
 
@@ -94,7 +94,7 @@ def test_the_channel_that_holds_audio_is_the_one_kept(tmp_path):
     headset directly — while a browser tab was the loudest thing in it. Keeping
     the first channel would have defaulted that clip to silence."""
     clip = _clip(tmp_path, 5)
-    _mark_default_audio_track(
+    _finish_matroska(
         clip, ["video", "game", "chat", "media", "google_chrome", "mic"],
         _frames({"game": 29_851, "chat": 14_999, "media": 15_008,
                  "google_chrome": 151_249, "mic": 14_981}))
@@ -110,7 +110,7 @@ def test_every_channel_survives_the_remux(tmp_path):
     before = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "stream=codec_name",
          "-of", "csv=p=0", str(clip)], capture_output=True, text=True).stdout
-    _mark_default_audio_track(
+    _finish_matroska(
         clip, ["video", "a", "b", "c", "d"],
         _frames({"a": 1, "b": 2, "c": 3, "d": 4}))
     after = subprocess.run(
@@ -121,13 +121,41 @@ def test_every_channel_survives_the_remux(tmp_path):
 
 
 @needs_ffmpeg
-def test_a_single_channel_clip_is_left_alone(tmp_path):
-    """Nothing to disambiguate, so nothing is worth a remux for."""
-    clip = _clip(tmp_path, 1)
-    mtime = clip.stat().st_mtime_ns
-    _mark_default_audio_track(clip, ["video", "game"], _frames({"game": 999}))
+def test_a_single_channel_clip_is_still_named(tmp_path):
+    """One track needs no default flag — there is nothing to disambiguate — but
+    it does need a name. Being the only track does not make it obvious which
+    channel it was."""
+    import subprocess
 
-    assert clip.stat().st_mtime_ns == mtime
+    clip = _clip(tmp_path, 1)
+    _finish_matroska(clip, ["video", "game"], _frames({"game": 999}))
+
+    titles = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream_tags=title", "-of", "csv=p=0", str(clip)],
+        capture_output=True, text=True).stdout.splitlines()
+
+    assert titles == ["Game"]
+
+
+@needs_ffmpeg
+def test_every_channel_is_named_in_the_container(tmp_path):
+    """The names lived only in the sidecar, so a clip was self-describing inside
+    ASM and nowhere else: opened in mpv or handed to someone, a five-channel clip
+    offered five tracks called "Audio" and finding the microphone meant playing
+    each one."""
+    import subprocess
+
+    clip = _clip(tmp_path, 3)
+    _finish_matroska(clip, ["video", "game", "chat", "google_chrome"],
+                     _frames({"game": 900, "chat": 10, "google_chrome": 20}))
+
+    titles = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream_tags=title", "-of", "csv=p=0", str(clip)],
+        capture_output=True, text=True).stdout.splitlines()
+
+    assert titles == ["Game", "Chat", "Google Chrome"]
 
 
 def test_no_ffmpeg_leaves_the_clip_exactly_as_written(tmp_path, monkeypatch):
@@ -139,7 +167,7 @@ def test_no_ffmpeg_leaves_the_clip_exactly_as_written(tmp_path, monkeypatch):
     clip.write_bytes(b"not really a matroska")
     monkeypatch.setattr(clip_capture.shutil, "which", lambda name: None)
 
-    _mark_default_audio_track(clip, ["video", "game", "chat"],
+    _finish_matroska(clip, ["video", "game", "chat"],
                               _frames({"game": 10, "chat": 20}))
 
     assert clip.read_bytes() == b"not really a matroska"
@@ -152,7 +180,7 @@ def test_a_failed_remux_does_not_destroy_the_clip(tmp_path):
     clip = tmp_path / "clip.mkv"
     clip.write_bytes(b"not really a matroska")
 
-    _mark_default_audio_track(clip, ["video", "game", "chat"],
+    _finish_matroska(clip, ["video", "game", "chat"],
                               _frames({"game": 10, "chat": 20}))
 
     assert clip.read_bytes() == b"not really a matroska"

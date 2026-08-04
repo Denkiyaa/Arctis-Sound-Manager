@@ -184,17 +184,34 @@ def announce_clip(path: Path, seconds: float, game: str | None = None) -> None:
     log.debug("no sound player or cue file available for the clip cue")
 
 
-def _mark_default_audio_track(path: Path, order: list[str],
-                              frames: dict) -> None:
-    """Leave exactly one audio track flagged as the default one to play.
+def _track_title(track: str) -> str:
+    """The channel name as a person reads it: ``google_chrome`` → Google Chrome."""
+    return track.replace("_", " ").title()
 
-    Matroska's FlagDefault is 1 when it is not written, and matroskamux never
-    writes it — so a clip carrying five channels tells every player that all
-    five are the default. The player then picks by its own tie-break, and since
-    most channels in a normal session are empty (nothing is routed to Chat, the
-    microphone is muted), what it usually picks is silence. The clip looks like
-    it recorded no audio when two of its tracks are perfectly loud, which is
-    exactly the report this fixes.
+
+def _finish_matroska(path: Path, order: list[str], frames: dict) -> None:
+    """Name every audio track, and leave exactly one flagged as the default.
+
+    Both are things matroskamux will not do from an appsrc branch, and both are
+    fixed in the one remux this already ran for the default flag — a stream
+    copy, ~50 ms on a 30 s clip, so naming the tracks costs nothing on top.
+
+    **The names.** matroskamux takes titles from stream tags, which appsrc does
+    not carry, so every track was written as a bare "Audio". ASM itself was fine
+    — it writes the channel names into a sidecar and reads them back — but the
+    clip was only self-describing inside ASM. Opened in mpv or VLC, or handed to
+    anyone else, a five-channel clip offered five tracks called Audio, and
+    finding the microphone meant playing each one. The sidecar stays: it also
+    carries the game and the duration, and it survives a player that drops
+    unknown tags on a re-encode.
+
+    **The default flag.** Matroska's FlagDefault is 1 when it is not written,
+    and matroskamux never writes it — so a clip carrying five channels tells
+    every player that all five are the default. The player then picks by its own
+    tie-break, and since most channels in a normal session are empty (nothing is
+    routed to Chat, the microphone is muted), what it usually picks is silence.
+    The clip looks like it recorded no audio when two of its tracks are
+    perfectly loud, which is exactly the report this fixes.
 
     Which track to keep is decided by how many encoded bytes it holds. Opus
     compresses silence to almost nothing — in the reported clip the three empty
@@ -203,36 +220,43 @@ def _mark_default_audio_track(path: Path, order: list[str],
     beats picking the first channel, which is the Game channel and is empty for
     anyone playing through the headset directly.
 
-    A stream copy, so it is a remux and not a re-encode: ~50 ms on a 30 s clip.
-    Any failure leaves the original file exactly as it was — a clip with an
-    awkward default flag is worth far more than no clip.
+    Any failure leaves the original file exactly as it was — a clip with
+    unnamed tracks and an awkward default flag is worth far more than no clip.
     """
     import subprocess
 
     ffmpeg = shutil.which("ffmpeg")
     audio = [t for t in order if t != "video"]
-    if ffmpeg is None or len(audio) < 2:
+    if ffmpeg is None or not audio:
         return
 
-    loudest = max(range(len(audio)),
-                  key=lambda i: sum(len(f.payload) for f in frames[audio[i]]))
-    temp = path.with_name(path.name + ".default.mkv")
+    argv = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(path),
+            "-map", "0", "-c", "copy"]
+    for index, track in enumerate(audio):
+        argv += [f"-metadata:s:a:{index}", f"title={_track_title(track)}"]
+
+    # One default only matters when there is a choice to get wrong.
+    loudest = None
+    if len(audio) > 1:
+        loudest = max(range(len(audio)),
+                      key=lambda i: sum(len(f.payload) for f in frames[audio[i]]))
+        argv += ["-disposition:a", "0", f"-disposition:a:{loudest}", "default"]
+
+    temp = path.with_name(path.name + ".tagged.mkv")
+    argv.append(str(temp))
     try:
-        result = subprocess.run(
-            [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(path),
-             "-map", "0", "-c", "copy",
-             "-disposition:a", "0", f"-disposition:a:{loudest}", "default",
-             str(temp)],
-            capture_output=True, text=True, timeout=60)
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=60)
         if result.returncode != 0 or not temp.exists() or temp.stat().st_size == 0:
-            log.debug("could not set the default audio track: %s",
+            log.debug("could not name the clip's tracks: %s",
                       (result.stderr or "").strip()[:200])
             temp.unlink(missing_ok=True)
             return
         temp.replace(path)
-        log.info("clip default audio track: %s", audio[loudest])
+        log.info("clip tracks: %s%s", ", ".join(_track_title(t) for t in audio),
+                 f" (default: {_track_title(audio[loudest])})"
+                 if loudest is not None else "")
     except (OSError, subprocess.SubprocessError) as exc:
-        log.debug("could not set the default audio track: %s", exc)
+        log.debug("could not name the clip's tracks: %s", exc)
         temp.unlink(missing_ok=True)
 
 
@@ -1211,15 +1235,16 @@ class ClipCapture:
             path.unlink(missing_ok=True)
             return None
 
-        _mark_default_audio_track(path, order, frames)
+        _finish_matroska(path, order, frames)
 
         log.info("clip saved: %s (%.1fs, %d tracks, %.1f MB%s)",
                  path, actual, len(order), size / (1024 * 1024),
                  f", {game}" if game else "")
-        # Track names beside the clip. matroskamux takes titles from stream
-        # tags, which appsrc does not carry, so every track landed in the editor
-        # as "Audio" — three identical rows with no way to tell the game from
-        # the microphone, which is exactly the choice the editor exists to make.
+        # Track names beside the clip as well as inside it. The container now
+        # carries them (see _finish_matroska), but the sidecar is what the
+        # editor reads first: it also holds the game and the measured duration,
+        # it needs no ffprobe to read, and it survives an export or a re-encode
+        # by some other tool dropping the tags.
         try:
             path.with_suffix(".tracks.json").write_text(json.dumps({
                 "tracks": order,
