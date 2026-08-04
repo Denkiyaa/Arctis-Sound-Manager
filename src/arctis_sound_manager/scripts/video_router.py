@@ -32,7 +32,6 @@ EVENT_TIMEOUT    = 5.0   # seconds to wait for a PA event before forced re-check
 EVENT_DEBOUNCE   = 0.15  # seconds to let rapid event bursts settle
 NATIVE_INTERVAL  = 5.0   # seconds between pw-dump calls (expensive subprocess)
 OVERRIDES_FILE = Path.home() / ".config" / "arctis_manager" / "routing_overrides.json"
-CHANNEL_OUTPUTS_FILE = Path.home() / ".config" / "arctis_manager" / "channel_output_devices.json"
 
 # Arctis virtual sinks the router repatriates from when the headset is off,
 # and treats interchangeably wherever "is this app on an Arctis channel?" is
@@ -93,15 +92,6 @@ def get_headset_power(force: bool = False) -> HeadsetPower:
 
     _power_cache = (now, power)
     return power
-
-
-def _load_channel_outputs() -> dict:
-    if CHANNEL_OUTPUTS_FILE.exists():
-        try:
-            return json.loads(CHANNEL_OUTPUTS_FILE.read_text())
-        except Exception:
-            pass
-    return {}
 
 
 # effect_input sinks are internal filter-chain nodes — apps should never
@@ -236,45 +226,6 @@ def _lookup_override(overrides: dict, key: str, app: str) -> str | None:
     if app != key:
         return overrides.get(app)
     return None
-
-
-# Arctis virtual channel -> the key used in channel_output_devices.json
-# (the Channels tab's per-channel "output device" picker). Kept in one place
-# so _resolve_channel_output and the enforcement pass below can't drift.
-_CHANNEL_VIRTUAL_TO_KEY = {"Arctis_Game": "game", "Arctis_Chat": "chat", "Arctis_Media": "media"}
-_CHANNEL_KEY_TO_VIRTUAL = {v: k for k, v in _CHANNEL_VIRTUAL_TO_KEY.items()}
-
-
-def _resolve_channel_output(sink_name: str, channel_outputs: dict, sink_map: dict) -> str:
-    """Resolve *sink_name* through the user's per-channel output-device pick.
-
-    ``channel_output_devices.json`` (Channels tab -> per-channel "output
-    device" combo) redirects a whole Arctis virtual channel to an external
-    physical sink (e.g. Media -> onboard speakers). Every other place that
-    decides where a stream should go — most importantly per-app overrides in
-    ``routing_overrides.json`` — used to resolve straight to the bare virtual
-    sink name (``"Arctis_Media"``), ignoring that redirect entirely. Both
-    the app-override enforcement pass and the separate per-channel
-    enforcement pass then fought over the same stream every tick: the
-    override pass moved it back to ``Arctis_Media``, the channel-output pass
-    immediately moved it back out to the physical sink, forever — the user's
-    channel output device pick could never actually stick for any app that
-    also had (or acquired) a saved override.
-
-    Called wherever a target sink name is about to be compared/moved to, so
-    every enforcement path agrees on the same effective destination. Returns
-    *sink_name* unchanged when it isn't an Arctis virtual channel, the
-    channel has no configured external output, or that output isn't
-    currently present in the graph (falls back to the virtual channel rather
-    than silently going nowhere).
-    """
-    channel = _CHANNEL_VIRTUAL_TO_KEY.get(sink_name)
-    if channel is None:
-        return sink_name
-    target_name = channel_outputs.get(channel)
-    if not target_name or target_name not in sink_map:
-        return sink_name
-    return target_name
 
 
 def load_overrides() -> dict:
@@ -423,7 +374,6 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
         return
 
     overrides = load_overrides()
-    channel_outputs = _load_channel_outputs()
     sink_inputs = pulse.sink_input_list()
     sink_map = {s.name: s.index for s in sinks}
     sink_idx_to_name = {s.index: s.name for s in sinks}
@@ -495,11 +445,6 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
                 wanted = auto
 
         if wanted is not None:
-            # Route through the user's per-channel output-device pick (Media
-            # -> onboard speakers, etc.) so this pass and the per-channel
-            # enforcement pass below agree on the same destination instead of
-            # fighting over it every tick (see _resolve_channel_output).
-            wanted = _resolve_channel_output(wanted, channel_outputs, sink_map)
             wanted_index = sink_map.get(wanted)
             if wanted_index is not None and si.sink != wanted_index:
                 log.info("Override: moving '%s' -> %s", app, wanted)
@@ -580,8 +525,6 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
                 wanted = auto
 
         if wanted is not None:
-            # Same channel-output redirect as the PA-stream pass above.
-            wanted = _resolve_channel_output(wanted, channel_outputs, sink_map)
             if s["sink_name"] is None or s["sink_name"] != wanted:
                 log.info("Override native: moving '%s' -> %s", app, wanted)
                 move_native_stream(s["id"], wanted)
@@ -590,31 +533,32 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
                 _native_placed[key] = s["sink_name"]
             continue
 
-    # ── Per-channel output device enforcement ───────────────────────────────
-    # channel_outputs was already loaded at the top of the tick — the override
-    # passes above resolve through it too (see _resolve_channel_output), so
-    # both must see the exact same mapping or they fight over the stream.
-    if channel_outputs:
-        for _ch, _target_name in channel_outputs.items():
-            _virtual_frag = _CHANNEL_KEY_TO_VIRTUAL.get(_ch)
-            if not _virtual_frag:
-                continue
-            _target_idx = sink_map.get(_target_name)
-            if _target_idx is None:
-                continue
-            for _si in sink_inputs:
-                _app = _si.proplist.get("application.name", "")
-                if not _app:
-                    continue
-                _key = app_override_key(_app, _si.proplist.get("application.process.binary", ""))
-                _current_name = sink_idx_to_name.get(_si.sink, "")
-                if _virtual_frag in _current_name and _si.sink != _target_idx:
-                    log.info("Channel output: '%s' %s -> %s", _app, _current_name, _target_name)
-                    try:
-                        pulse.sink_input_move(_si.index, _target_idx)
-                        _pa_placed[_key] = _target_idx
-                    except Exception:
-                        pass
+    # A channel's output device is *not* enforced here, deliberately.
+    #
+    # This used to walk the streams sitting on a channel's virtual sink and move
+    # them onto the chosen device. Two things were wrong with it. The first is
+    # that it fought the block above in the same tick: the override says "Chrome
+    # belongs on Arctis_Media", this said "anything on Arctis_Media belongs on
+    # the earbuds", and each undid the other on every pass — the log showed the
+    # pair one second apart, and the device menu appeared to do nothing at all.
+    #
+    # The second is that winning was no better than losing. Dragging a stream
+    # off Arctis_Media takes it out of that channel entirely, past the Sonar EQ
+    # and the HeSuVi stage, which is the whole reason the channel exists.
+    #
+    # Sending a channel somewhere means moving the *channel's* last link, not
+    # its applications: `sonar_to_pipewire.ensure_physical_output_links` points
+    # each channel's HeSuVi output at `channel_destination(channel)`, and Media
+    # has its own HeSuVi instance so it can differ from Game. That is where this
+    # belongs and where it already works.
+    #
+    # #177 landed on develop while this branch was open and reached for the
+    # other half of the same problem: it made the override pass resolve through
+    # the channel-output mapping too, so the two passes agree instead of
+    # fighting. That does stop the oscillation — but both passes then agree on
+    # dragging the stream off its channel, which is the second problem above.
+    # The link-level fix below covers the oscillation as well, so the resolve
+    # step #177 added has nothing left to do here.
 
 
 def _main_loop():
