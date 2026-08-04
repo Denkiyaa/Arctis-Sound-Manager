@@ -175,6 +175,21 @@ class ClipsInstallPage(QWidget):
         actions.addWidget(self._recheck_btn)
 
         actions.addStretch(1)
+
+        # Someone who turned Clips off but left the packages installed has, up
+        # to now, had nowhere to go: the tab offered to Enable and nothing else,
+        # and the packages it once installed stayed on the machine with no
+        # mention of them anywhere. Shown only when there is something to remove.
+        self._remove_btn = QPushButton(_tr("clips_remove_packages", "Remove packages"))
+        self._remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._remove_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {_theme.c('TEXT_SECONDARY')};"
+            f" border: 1px solid {_theme.c('BORDER')}; border-radius: 6px; padding: 8px 16px; font-size: 10pt; }}"
+            f"QPushButton:hover {{ border-color: {_theme.c('ACCENT')}; color: {_theme.c('TEXT_PRIMARY')}; }}"
+        )
+        self._remove_btn.clicked.connect(self._on_remove)
+        actions.addWidget(self._remove_btn)
+
         root.addLayout(actions)
 
         self._status = QLabel("")
@@ -220,6 +235,11 @@ class ClipsInstallPage(QWidget):
         self._manual_field.setText(cmd or "")
         self._manual_field.setVisible(cmd is not None)
         self._manual_hint.setVisible(cmd is not None)
+
+        # Nothing on this machine to remove means no offer to remove it. The
+        # button is about the packages, not about the feature, so it follows
+        # what the probe found rather than the toggle.
+        self._remove_btn.setVisible(bool(clips_setup.present_names()))
 
         # Nothing left to fetch: this is the switched-off state, not the
         # missing-runtime one. "Install" would be a lie about what the button
@@ -282,6 +302,12 @@ class ClipsInstallPage(QWidget):
     def _on_recheck(self) -> None:
         self._refresh()
         self._finish_if_ready(manual=True)
+
+    def _on_remove(self) -> None:
+        """Remove the capture packages from the screen that offers to install
+        them — the same conversation the recorder's Uninstall has."""
+        clips_setup.confirm_and_remove(self)
+        self._refresh()
 
     def _finish_if_ready(self, manual: bool = False) -> None:
         """Re-probe; if the runtime is now present, turn the feature on and ask

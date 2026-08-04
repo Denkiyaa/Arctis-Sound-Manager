@@ -613,103 +613,20 @@ class ClipsPage(QWidget):
     def _on_uninstall(self) -> None:
         """Switch Clips off from the tab, and offer to remove its packages.
 
-        Removing is asked separately from switching off, and defaults to no:
-        every one of these packages is shared with the rest of the desktop —
-        video players and browsers use ffmpeg and GStreamer too — so "I am done
-        with clips" is not the same statement as "nothing else here needs
-        ffmpeg". The removal commands never force, so a package something else
-        depends on makes the package manager refuse, and the feature ends up off
-        either way.
-
         The recording is stopped first: leaving a capture running for a feature
         the user has just switched off would keep the screen-share indicator up
-        with nothing on screen to explain it.
+        with nothing on screen to explain it. The conversation itself lives in
+        `clips_setup.confirm_and_remove`, which the install screen asks too.
         """
         from arctis_sound_manager.gui import clips_setup
 
-        argvs, packages = clips_setup.remove_argvs()
-
-        answer = QMessageBox.StandardButton.No
-        if argvs:
-            box = QMessageBox(self)
-            box.setWindowTitle(_tr("clips_uninstall", "Uninstall"))
-            box.setText(_tr("clips_remove_packages_q",
-                            "Also remove the packages Clips installed?"))
-            # The exact command, not just the package names. These are packages
-            # the rest of the desktop shares, and the line is what lets someone
-            # check it against their own machine before handing over a root
-            # password — or run it themselves instead.
-            command = clips_setup.manual_command(argvs)
-            box.setInformativeText(
-                _tr("clips_remove_packages_hint", "Affected: {0}").format(
-                    ", ".join(packages))
-                + (("\n\n" + _tr("clips_remove_command",
-                                 "The command this runs:") + "\n" + command)
-                   if command else ""))
-            box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            box.setIcon(QMessageBox.Icon.Question)
-            box.setStandardButtons(QMessageBox.StandardButton.Yes
-                                   | QMessageBox.StandardButton.No
-                                   | QMessageBox.StandardButton.Cancel)
-            box.setDefaultButton(QMessageBox.StandardButton.No)
-            answer = box.exec()
-            if answer == QMessageBox.StandardButton.Cancel:
-                return
-
-        self._stop_capture()
-        clips_setup.set_enabled(False)
-
-        if answer == QMessageBox.StandardButton.Yes:
-            self._uninstall_btn.setEnabled(False)
-            self._status.setText(_tr("clips_removing",
-                                     "Removing the capture packages…"))
-            QApplication.processEvents()
-            before = clips_setup.present_names()
-            try:
-                ok, detail = clips_setup.run_batch(argvs, keep_going=True)
-            except clips_setup.NoPkexec:
-                ok, detail = False, _tr(
-                    "clips_no_pkexec",
-                    "pkexec not found — install polkit, or remove the "
-                    "packages yourself.")
-            finally:
-                self._uninstall_btn.setEnabled(True)
-            if ok:
-                self._report_removal(before, clips_setup.present_names())
-            else:
-                logger.info("clip package removal did not run: %s", detail)
-
-        self.clips_disabled.emit()
-
-    def _report_removal(self, before: set[str], after: set[str]) -> None:
-        """Say which packages went and which the machine kept.
-
-        Told in a dialog rather than the status label because this page is about
-        to be replaced by the install screen — a line written here would vanish
-        before it was read. And it is worth telling: "kept, because something
-        else needs it" is a different outcome from "removal failed", and the
-        user should not have to open a terminal to find out which one happened.
-        """
-        gone = sorted(before - after)
-        kept = sorted(after & before)
-
-        lines = []
-        if gone:
-            lines.append(_tr("clips_removed", "Removed: {0}").format(
-                ", ".join(gone)))
-        if kept:
-            lines.append(_tr(
-                "clips_removal_kept",
-                "Kept, because other software on this machine still needs "
-                "them: {0}").format(", ".join(kept)))
-        if not lines:
-            return
-
-        box = QMessageBox(self)
-        box.setWindowTitle(_tr("clips_uninstall", "Uninstall"))
-        box.setText("\n\n".join(lines))
-        box.setIcon(QMessageBox.Icon.Information)
-        box.exec()
+        # Stopped after the confirmation, not before it: calling the uninstall
+        # off should leave the recording exactly as it was found. A pipeline
+        # already running keeps the libraries it loaded, so a package removal
+        # in between costs nothing.
+        if clips_setup.confirm_and_remove(self):
+            self._stop_capture()
+            self.clips_disabled.emit()
 
     def _on_save(self) -> None:
         if self._capture is None:
