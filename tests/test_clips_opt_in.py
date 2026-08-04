@@ -486,6 +486,48 @@ def test_one_package_the_machine_still_needs_does_not_abandon_the_rest(
     assert seen[0].count(";") == 1
 
 
+def test_the_removal_preview_reads_both_streams_and_skips_what_is_not_there(
+        monkeypatch):
+    """pacman splits its answer across two streams: the summary ("failed to
+    prepare transaction") goes to stderr and the lines that actually name what
+    holds the package go to stdout. Reading either alone loses half of it — the
+    first cut of this reported every package as blocked by nothing at all.
+
+    And a package that is not installed is not a package that cannot be removed.
+    """
+    from arctis_sound_manager.gui import clips_setup
+
+    class _Proc:
+        def __init__(self, rc, out, err):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    answers = {
+        "ffmpeg": _Proc(
+            1,
+            ":: removing ffmpeg breaks dependency 'libavcodec.so=62-64' "
+            "required by chromaprint\n"
+            ":: removing ffmpeg breaks dependency 'libavutil.so=60-64' "
+            "required by mpv\n",
+            "error: failed to prepare transaction (could not satisfy dependencies)\n"),
+        "gst-plugins-good": _Proc(0, "gst-plugins-good-1.28.5-4\nwavpack-5.9.0-1.1\n", ""),
+        "gone": _Proc(1, "", "error: target not found: gone\n"),
+    }
+
+    # Pinned rather than inherited: the preview asks the running machine which
+    # package manager it has, and this test asserts on pacman's wording. Left
+    # unpinned it would pass here and fail on a dnf or apt runner.
+    monkeypatch.setattr(sdc, "detect_distro", lambda: "arch")
+    monkeypatch.setattr(clips_setup.subprocess, "run",
+                        lambda argv, **kw: answers[argv[-1]])
+
+    removable, blocked = clips_setup.removal_preview(
+        ["ffmpeg", "gst-plugins-good", "gone"])
+
+    assert removable == ["gst-plugins-good"]
+    assert blocked == {"ffmpeg": ["chromaprint", "mpv"]}
+    assert "gone" not in blocked, "a package that is not installed cannot be held"
+
+
 def test_a_partial_upgrade_is_told_apart_from_an_ordinary_install_failure():
     """The failure a user on an Arch derivative actually hits.
 
