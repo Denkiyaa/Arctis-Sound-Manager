@@ -179,6 +179,34 @@ def _drag(band, from_s: float, to_s: float) -> list[float]:
     return seen
 
 
+def test_the_kept_span_says_it_can_be_picked_up(_app):
+    """The selection has always been draggable and nothing said so: it is
+    painted as a lit region between two dimmed ones, which reads as a result
+    rather than a control, and people reach for the dimmed part instead — where
+    a drag scrubs and the trim stays exactly where it was.
+
+    The cursor is the whole hint, so it has to differ from the one over the ends.
+    """
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    from arctis_sound_manager.gui.trim_band import TrimBand
+
+    band = TrimBand(60.0)
+    band.resize(760, 74)
+    band.set_range(18.0, 38.0)
+
+    def _hover(x):
+        band.event(QMouseEvent(
+            QEvent.Type.MouseMove, QPointF(x, 10), Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier))
+        return band.cursor().shape()
+
+    inside = (band._x(18.0) + band._x(38.0)) / 2
+    assert _hover(inside) == Qt.CursorShape.OpenHandCursor
+    assert _hover(band._x(5.0)) != Qt.CursorShape.OpenHandCursor
+
+
 def test_dragging_the_playhead_scrubs(_app):
     band = _band(30.0)
     band.set_position(25.0)
