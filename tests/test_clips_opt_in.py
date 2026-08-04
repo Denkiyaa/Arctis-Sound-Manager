@@ -154,8 +154,13 @@ def test_installing_never_reaches_the_general_dependency_dialog(
 
     Clips must only ever run its own package commands.
     """
+    from PySide6.QtWidgets import QMessageBox
+
     monkeypatch.setattr(sdc, "clip_dep_checks", lambda: [_blocking_check(False)])
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", lambda self: 0)
+    # Agreeing to the "install these packages?" confirmation, which names them
+    # before anything is elevated.
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec",
+                        lambda self: QMessageBox.StandardButton.Yes)
 
     def _boom(*a, **k):
         raise AssertionError("Clips opened the general dependency dialog")
@@ -165,7 +170,8 @@ def test_installing_never_reaches_the_general_dependency_dialog(
 
     ran: list[list[list[str]]] = []
     monkeypatch.setattr(type(device_page), "_clips_pkexec",
-                        lambda self, argvs, text: ran.append(argvs) or True)
+                        lambda self, argvs, text, keep_going=False:
+                        ran.append(argvs) or True)
 
     device_page._install_clips()
 
@@ -182,10 +188,13 @@ def test_a_package_command_that_fails_leaves_the_feature_off(
     the feature off is meant to avoid."""
     from arctis_sound_manager.settings import GeneralSettings
 
+    from PySide6.QtWidgets import QMessageBox
+
     monkeypatch.setattr(sdc, "clip_dep_checks", lambda: [_blocking_check(False)])
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", lambda self: 0)
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec",
+                        lambda self: QMessageBox.StandardButton.Yes)
     monkeypatch.setattr(type(device_page), "_clips_pkexec",
-                        lambda self, argvs, text: False)
+                        lambda self, argvs, text, keep_going=False: False)
 
     device_page._install_clips()
 
@@ -212,6 +221,36 @@ def test_installing_with_everything_present_enables_without_asking_for_a_passwor
     settings.write_to_file()
 
 
+def test_the_install_names_its_packages_and_can_be_called_off(
+        device_page, monkeypatch):
+    """Turning on a screen recorder should not be how someone finds GStreamer
+    on their system. The names and the exact command are shown before anything
+    is elevated, and saying no there installs nothing."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from arctis_sound_manager.settings import GeneralSettings
+
+    monkeypatch.setattr(sdc, "clip_dep_checks", lambda: [_blocking_check(False)])
+
+    shown: list[str] = []
+
+    def _capture(self):
+        shown.append(self.informativeText())
+        return QMessageBox.StandardButton.Cancel
+
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", _capture)
+    monkeypatch.setattr(type(device_page), "_clips_pkexec",
+                        lambda self, argvs, text, keep_going=False:
+                        pytest.fail("installed without being agreed to"))
+
+    device_page._install_clips()
+
+    assert shown, "asked for nothing"
+    assert "gi" in shown[0], shown[0]
+    assert "sudo pacman -S gi" in shown[0], shown[0]
+    assert GeneralSettings.read_from_file().clips_enabled is False
+
+
 def test_a_degraded_dep_does_not_veto_the_feature(device_page, monkeypatch):
     """ffmpeg missing costs thumbnails and export — a real loss, but the
     capture still records, so it is not grounds for refusing to turn it on."""
@@ -221,9 +260,13 @@ def test_a_degraded_dep_does_not_veto_the_feature(device_page, monkeypatch):
         name="ffmpeg / ffprobe", severity=sdc.Severity.DEGRADED,
         feature="thumbnails", detect=lambda: False,
         install_commands={"arch": ["pacman", "-S", "ffmpeg"]})
+    from PySide6.QtWidgets import QMessageBox
+
     monkeypatch.setattr(sdc, "clip_dep_checks", lambda: [degraded])
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec",
+                        lambda self: QMessageBox.StandardButton.Yes)
     monkeypatch.setattr(type(device_page), "_clips_pkexec",
-                        lambda self, argvs, text: True)
+                        lambda self, argvs, text, keep_going=False: True)
 
     device_page._install_clips()
 
@@ -251,7 +294,8 @@ def test_uninstalling_switches_off_even_when_the_packages_stay(
                         lambda self: QMessageBox.StandardButton.No)
     removed: list = []
     monkeypatch.setattr(type(device_page), "_clips_pkexec",
-                        lambda self, argvs, text: removed.append(argvs) or True)
+                        lambda self, argvs, text, keep_going=False:
+                        removed.append(argvs) or True)
 
     device_page._uninstall_clips()
 

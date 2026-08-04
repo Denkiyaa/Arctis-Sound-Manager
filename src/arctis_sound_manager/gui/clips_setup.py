@@ -158,6 +158,34 @@ def packages_in(argv: list[str]) -> list[str]:
     return [tok for tok in argv[2:] if not tok.startswith("-")]
 
 
+def manual_command(argvs: list[list[str]]) -> str | None:
+    """One copy-pasteable command for a whole group of argv, or None when there
+    is nothing to run.
+
+    Shown before anything is elevated, for installing and for removing alike.
+    Someone about to hand a GUI their root password is entitled to see the
+    command it is going to run — and on the removal side that is not a courtesy:
+    these are packages the rest of the desktop shares, and the exact line is
+    what lets a user check it against their own machine before agreeing, or run
+    it themselves with the flags they would rather use.
+
+    The confirmation flags are dropped along with the rest: a command a person
+    is going to read and run should stop and ask them, which is exactly what
+    `--noconfirm` exists to prevent.
+    """
+    if not argvs:
+        return None
+    base = argvs[0][:2]  # e.g. ["pacman", "-S"] / ["apt-get", "install"]
+    pkgs: list[str] = []
+    for argv in argvs:
+        for p in packages_in(argv):
+            if p not in pkgs:
+                pkgs.append(p)
+    if not pkgs:
+        return None
+    return "sudo " + " ".join(base + pkgs)
+
+
 # ── running them ──────────────────────────────────────────────────────────────
 
 class NoPkexec(RuntimeError):
