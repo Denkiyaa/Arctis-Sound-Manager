@@ -102,9 +102,26 @@ def clip_title(path) -> str:
     return game or _tr("clips_untitled", "Clip")
 
 
+def clip_size(size_bytes: int) -> str:
+    """A clip's size, in the unit that still says something about it.
+
+    Whole megabytes alone turned every short or heavily-dropped clip into
+    "0 MB", which reads as a broken file rather than a small one — a 515 KB clip
+    that plays perfectly well looked like nothing had been recorded. Under a
+    megabyte the answer is in kilobytes; over it, one decimal until the number
+    is big enough not to need it.
+    """
+    mb = size_bytes / (1024 * 1024)
+    if mb < 1:
+        return f"{size_bytes / 1024:.0f} KB"
+    if mb < 10:
+        return f"{mb:.1f} MB"
+    return f"{mb:.0f} MB"
+
+
 def clip_caption(mtime: float, size_bytes: int) -> str:
     """The second line of a card: when it was taken and how big it is."""
-    return f"{_format_time(mtime)}   ·   {size_bytes / (1024 * 1024):.0f} MB"
+    return f"{_format_time(mtime)}   ·   {clip_size(size_bytes)}"
 
 
 # ── poster frames ─────────────────────────────────────────────────────────────
