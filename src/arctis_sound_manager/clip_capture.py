@@ -660,6 +660,42 @@ class ScreenCastPortal:
             log.warning("could not persist the screencast token: %s", exc)
 
 
+def convert_chain(needs_gl: bool, max_fps: int) -> list[str]:
+    """The colour-convert stage, and the frame rate ceiling that rides on it.
+
+    The ceiling is `max-framerate`, not `framerate`, and that distinction is the
+    whole fix. The portal negotiates `framerate=0/1` — a variable-rate stream,
+    which is what a screen is, since it sends a frame only when something
+    changes. In that mode videorate has no cadence to measure against and
+    `max-rate` alone drops nothing at all: asked for 15 fps the capture kept 59,
+    and clips came out at roughly twice the size the setting implied.
+    `max-framerate` is the field a variable-rate stream carries its ceiling in,
+    and constraining it here propagates back up — far enough that the portal
+    itself starts producing at the lower rate, so the frames are never made
+    rather than made and dropped.
+
+    Pinning `framerate` instead would force an exact cadence onto a stream that
+    does not have one, which is what used to hold frames long enough to look
+    frozen.
+
+    Two chains when GL is in play, tried in order: glupload keeps the frame on
+    the GPU, which is worth a great deal at 1440p, but it cannot always import
+    what the portal hands out (driver and modifier dependent). The
+    system-memory path always negotiates, so it is held in reserve — without it
+    a GL failure takes the video branch down silently and the clip comes out
+    audio-only.
+    """
+    ceiling = f",max-framerate={int(max_fps)}/1"
+    system_memory = f"videoconvert ! video/x-raw,format=NV12{ceiling}"
+    if not needs_gl:
+        return [system_memory]
+    return [
+        "glupload ! glcolorconvert "
+        f"! video/x-raw(memory:GLMemory),format=NV12{ceiling}",
+        system_memory,
+    ]
+
+
 def pick_encoder(Gst, gop: int, kbps: int) -> tuple[str, bool]:
     """Return (encoder description, needs_gl) for the best available encoder."""
     for element, props, needs_gl in ENCODERS:
@@ -734,10 +770,7 @@ class ClipCapture:
         # reserve: without it a GL failure takes the video branch down silently
         # and the clip comes out audio-only.
         if not self._convert_chain:
-            self._convert_chain = [
-                "glupload ! glcolorconvert ! video/x-raw(memory:GLMemory),format=NV12",
-                "videoconvert ! video/x-raw,format=NV12",
-            ] if needs_gl else ["videoconvert ! video/x-raw,format=NV12"]
+            self._convert_chain = convert_chain(needs_gl, self.max_fps)
         convert = self._convert_chain[self._convert_index]
 
         self.audio_tracks = resolve_audio_sources()
