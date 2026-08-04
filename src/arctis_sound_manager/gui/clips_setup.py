@@ -157,6 +157,70 @@ def remove_argvs() -> tuple[list[list[str]], list[str]]:
     return argvs, sorted(set(packages))
 
 
+def removal_preview(packages: list[str]) -> tuple[list[str], dict[str, list[str]]]:
+    """Ask the package manager what removing each package would actually do,
+    without doing it: ``(removable, {package: what still needs it})``.
+
+    Both halves of the answer matter and neither is guessable from the list of
+    names. On a normal desktop most of these cannot go — ffmpeg is required by
+    firefox, mpv and vlc, libcanberra by kwin and plasma-workspace — and a user
+    looking at a list of packages with a Remove button has no way to know that
+    until they press it and nothing happens. Naming what holds each one turns a
+    silent no-op into an answer.
+
+    Unprivileged: `pacman -Rsp` and `apt-get -s remove` both simulate. Anything
+    else returns empty lists, and the caller shows the plain package list it
+    always did — a preview is worth having, not worth blocking on.
+    """
+    from arctis_sound_manager.system_deps_checker import (_package_manager_for,
+                                                          detect_distro)
+
+    manager = _package_manager_for(detect_distro())
+    removable: list[str] = []
+    blocked: dict[str, list[str]] = {}
+
+    for package in packages:
+        if manager == "pacman":
+            argv = ["pacman", "-Rsp", package]
+        elif manager == "apt":
+            argv = ["apt-get", "-s", "remove", package]
+        else:
+            return [], {}
+
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("could not preview removing %s: %s", package, exc)
+            continue
+
+        if proc.returncode == 0:
+            removable.append(package)
+            continue
+
+        # Both streams, not one: pacman puts the summary ("failed to prepare
+        # transaction") on stderr and the lines that actually name the reason on
+        # stdout, so reading either alone loses half the answer.
+        output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+
+        # Not installed is not "cannot be removed" — there is nothing to remove,
+        # and listing it as held by something would be an invention.
+        if "target not found" in output or "unable to locate" in output.lower():
+            continue
+
+        # "removing ffmpeg breaks dependency 'libavcodec.so=62-64' required by
+        # chromaprint" — the name after "required by" is what is holding it.
+        holders: list[str] = []
+        for line in output.splitlines():
+            _, sep, tail = line.partition("required by")
+            if sep:
+                holder = tail.strip()
+                if holder and holder not in holders:
+                    holders.append(holder)
+        blocked[package] = holders
+
+    return removable, blocked
+
+
 def packages_in(argv: list[str]) -> list[str]:
     """The package names in a package-manager argv, dropping the manager, the
     subcommand and any flags: ``apt-get install -y A B`` → ``[A, B]``."""
@@ -345,14 +409,40 @@ def confirm_and_remove(parent) -> bool:
 
     answer = QMessageBox.StandardButton.No
     if argvs:
-        command = manual_command(argvs)
+        removable, blocked = removal_preview(packages)
+
+        # A command naming a package that is not installed is one pacman refuses
+        # outright — "target not found", nothing removed — and this is a command
+        # written to be copied. So it names only what is actually here, and
+        # falls back to the full list when there was no preview to narrow it.
+        present = [p for p in packages if p in removable or p in blocked]
+        command = manual_command([argvs[0][:2] + present] if present else argvs)
+
+        detail = _tr("clips_remove_packages_hint", "Affected: {0}").format(
+            ", ".join(packages))
+        if removable or blocked:
+            # Replace the flat list with what the package manager says will
+            # actually happen. It is usually "almost nothing", and that is the
+            # part worth knowing before agreeing.
+            detail = ""
+            if removable:
+                detail += _tr("clips_remove_will_go",
+                              "These would be removed: {0}").format(
+                    ", ".join(removable))
+            if blocked:
+                held = "\n".join(
+                    f"  • {pkg} — {', '.join(holders)}" if holders else f"  • {pkg}"
+                    for pkg, holders in blocked.items())
+                detail += ("\n\n" if detail else "") + _tr(
+                    "clips_remove_held",
+                    "These would stay, because other software still needs "
+                    "them:") + "\n" + held
         box = QMessageBox(parent)
         box.setWindowTitle(_tr("clips_uninstall", "Uninstall"))
         box.setText(_tr("clips_remove_packages_q",
                         "Also remove the packages Clips installed?"))
         box.setInformativeText(
-            _tr("clips_remove_packages_hint", "Affected: {0}").format(
-                ", ".join(packages))
+            detail
             + (("\n\n" + _tr("clips_remove_command", "The command this runs:")
                 + "\n" + command) if command else ""))
         box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
