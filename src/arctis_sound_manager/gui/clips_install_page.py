@@ -267,11 +267,24 @@ class ClipsInstallPage(QWidget):
                 self._install_btn.setEnabled(True)
 
             if not ok:
-                self._status.setText(
-                    _tr("clips_install_failed", "Install failed: {0}").format(
-                        detail or _tr("clips_pkg_failed",
-                                      "The package manager refused. "
-                                      "Nothing was changed.")))
+                if clips_setup.looks_like_dependency_conflict(detail):
+                    # Nothing on this screen can fix this one, and the package
+                    # manager's own wording ("installing pipewire breaks
+                    # dependency 'pipewire=…' required by pipewire-pulse")
+                    # does not lead anyone to the fix.
+                    self._status.setText(_tr(
+                        "clips_install_partial_upgrade",
+                        "Install failed: this machine's packages and its "
+                        "repositories disagree, so the capture packages cannot "
+                        "be resolved. Update the whole system first, then try "
+                        "again.") + "\n\n" + clips_setup.last_line(detail))
+                else:
+                    self._status.setText(
+                        _tr("clips_install_failed", "Install failed: {0}").format(
+                            clips_setup.last_line(detail)
+                            or _tr("clips_pkg_failed",
+                                   "The package manager refused. "
+                                   "Nothing was changed.")))
                 self._refresh()
                 return
 

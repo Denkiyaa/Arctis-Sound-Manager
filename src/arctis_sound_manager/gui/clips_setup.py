@@ -164,6 +164,39 @@ class NoPkexec(RuntimeError):
     """polkit is not installed, so nothing can be elevated from here."""
 
 
+# What each package manager says when the install cannot proceed because the
+# machine's packages and its repositories disagree — the state Arch calls a
+# partial upgrade, and the one a user on a derivative distro is most likely to
+# hit here: the repo's gst-plugin-pipewire wants an exact pipewire release, and
+# the installed one is the derivative's rebuild of the same upstream version.
+_CONFLICT_MARKERS = (
+    "could not satisfy dependencies",   # pacman
+    "breaks dependency",                # pacman
+    "unmet dependencies",               # apt
+    "held broken packages",             # apt
+    "nothing provides",                 # dnf
+    "conflicting requests",             # dnf
+)
+
+
+def looks_like_dependency_conflict(output: str) -> bool:
+    """Whether a failed install failed because the machine is mid-upgrade.
+
+    Worth telling apart from every other install failure: nothing the user can
+    do on this screen will fix it, and the fix — update the whole system first —
+    is not one they would guess from "installing pipewire breaks dependency
+    'pipewire=1:1.6.8-1.2' required by pipewire-pulse".
+    """
+    low = output.lower()
+    return any(marker in low for marker in _CONFLICT_MARKERS)
+
+
+def last_line(output: str) -> str:
+    """The most specific line of a package manager's complaint."""
+    lines = [ln for ln in output.strip().splitlines() if ln.strip()]
+    return lines[-1] if lines else ""
+
+
 def run_batch(argvs: list[list[str]], keep_going: bool = False) -> tuple[bool, str]:
     """Run package commands as one elevated batch; return (ok, detail).
 
@@ -211,6 +244,8 @@ def run_batch(argvs: list[list[str]], keep_going: bool = False) -> tuple[bool, s
         return True, ""
 
     if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        return False, (detail[-1] if detail else "")
+        # The whole complaint, not its last line: the line that names the cause
+        # is rarely the last one a package manager prints, and the caller has to
+        # be able to tell a dependency conflict from a mirror that timed out.
+        return False, (proc.stderr or proc.stdout or "").strip()
     return True, ""

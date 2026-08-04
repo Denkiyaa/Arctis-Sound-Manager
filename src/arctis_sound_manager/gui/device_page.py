@@ -755,7 +755,10 @@ class DevicePage(QWidget):
 
         if not ok:
             self._clips_status.setText(
-                detail or I18n.translate("ui", "clips_pkg_failed"))
+                I18n.translate("ui", "clips_install_partial_upgrade")
+                if clips_setup.looks_like_dependency_conflict(detail)
+                else (clips_setup.last_line(detail)
+                      or I18n.translate("ui", "clips_pkg_failed")))
             return False
         return True
 
