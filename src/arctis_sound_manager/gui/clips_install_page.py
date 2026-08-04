@@ -60,18 +60,7 @@ def clips_runtime_ready() -> bool:
 def _manual_command() -> str | None:
     """A single, copy-pasteable command that installs every missing package on
     this distro, or None when the distro is unknown (no argv to offer)."""
-    argvs = clips_setup.install_argvs()
-    if not argvs:
-        return None
-    base = argvs[0][:2]  # e.g. ["apt-get", "install"] / ["pacman", "-S"]
-    pkgs: list[str] = []
-    for argv in argvs:
-        for p in clips_setup.packages_in(argv):
-            if p not in pkgs:
-                pkgs.append(p)
-    if not pkgs:
-        return None
-    return "sudo " + " ".join(base + pkgs)
+    return clips_setup.manual_command(clips_setup.install_argvs())
 
 
 class ClipsInstallPage(QWidget):

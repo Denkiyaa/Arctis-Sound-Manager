@@ -767,6 +767,34 @@ class DevicePage(QWidget):
 
         argvs = clips_setup.install_argvs()
 
+        # Name what is about to land on the machine before asking for a root
+        # password. The Video tab's install screen lists this on the page; this
+        # row had only a count ("installs 2 package groups"), which is not
+        # enough to decide with — and turning on a screen recorder should not be
+        # the reason someone finds GStreamer on their system unannounced.
+        if argvs:
+            command = clips_setup.manual_command(argvs)
+            packages = []
+            for argv in argvs:
+                packages.extend(p for p in clips_setup.packages_in(argv)
+                                if p not in packages)
+            box = QMessageBox(self)
+            box.setWindowTitle(I18n.translate("ui", "clips_install"))
+            box.setText(I18n.translate("ui", "clips_install_packages_q"))
+            box.setInformativeText(
+                I18n.translate("ui", "clips_install_packages_hint").format(
+                    ", ".join(packages))
+                + (("\n\n" + I18n.translate("ui", "clips_install_command")
+                    + "\n" + command) if command else ""))
+            box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setStandardButtons(QMessageBox.StandardButton.Yes
+                                   | QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(QMessageBox.StandardButton.Yes)
+            if box.exec() != QMessageBox.StandardButton.Yes:
+                self._refresh_clips_row()
+                return
+
         if argvs and not self._clips_pkexec(
                 argvs, I18n.translate("ui", "clips_installing")):
             self._refresh_clips_row()
@@ -811,9 +839,14 @@ class DevicePage(QWidget):
             box = QMessageBox(self)
             box.setWindowTitle(I18n.translate("ui", "clips_uninstall"))
             box.setText(I18n.translate("ui", "clips_remove_packages_q"))
+            # The exact command as well as the names — see clips_page for why.
+            command = clips_setup.manual_command(argvs)
             box.setInformativeText(
                 I18n.translate("ui", "clips_remove_packages_hint").format(
-                    ", ".join(packages)))
+                    ", ".join(packages))
+                + (("\n\n" + I18n.translate("ui", "clips_remove_command")
+                    + "\n" + command) if command else ""))
+            box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             box.setIcon(QMessageBox.Icon.Question)
             box.setStandardButtons(QMessageBox.StandardButton.Yes
                                    | QMessageBox.StandardButton.No
