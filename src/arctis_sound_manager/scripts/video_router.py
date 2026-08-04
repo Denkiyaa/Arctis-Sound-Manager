@@ -32,7 +32,6 @@ EVENT_TIMEOUT    = 5.0   # seconds to wait for a PA event before forced re-check
 EVENT_DEBOUNCE   = 0.15  # seconds to let rapid event bursts settle
 NATIVE_INTERVAL  = 5.0   # seconds between pw-dump calls (expensive subprocess)
 OVERRIDES_FILE = Path.home() / ".config" / "arctis_manager" / "routing_overrides.json"
-CHANNEL_OUTPUTS_FILE = Path.home() / ".config" / "arctis_manager" / "channel_output_devices.json"
 
 # Arctis virtual sinks the router repatriates from when the headset is off,
 # and treats interchangeably wherever "is this app on an Arctis channel?" is
@@ -93,15 +92,6 @@ def get_headset_power(force: bool = False) -> HeadsetPower:
 
     _power_cache = (now, power)
     return power
-
-
-def _load_channel_outputs() -> dict:
-    if CHANNEL_OUTPUTS_FILE.exists():
-        try:
-            return json.loads(CHANNEL_OUTPUTS_FILE.read_text())
-        except Exception:
-            pass
-    return {}
 
 
 # effect_input sinks are internal filter-chain nodes — apps should never
@@ -543,30 +533,24 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
                 _native_placed[key] = s["sink_name"]
             continue
 
-    # ── Per-channel output device enforcement ───────────────────────────────
-    channel_outputs = _load_channel_outputs()
-    if channel_outputs:
-        _ch_virtual = {"game": "Arctis_Game", "chat": "Arctis_Chat", "media": "Arctis_Media"}
-        for _ch, _target_name in channel_outputs.items():
-            _virtual_frag = _ch_virtual.get(_ch)
-            if not _virtual_frag:
-                continue
-            _target_idx = sink_map.get(_target_name)
-            if _target_idx is None:
-                continue
-            for _si in sink_inputs:
-                _app = _si.proplist.get("application.name", "")
-                if not _app:
-                    continue
-                _key = app_override_key(_app, _si.proplist.get("application.process.binary", ""))
-                _current_name = sink_idx_to_name.get(_si.sink, "")
-                if _virtual_frag in _current_name and _si.sink != _target_idx:
-                    log.info("Channel output: '%s' %s -> %s", _app, _current_name, _target_name)
-                    try:
-                        pulse.sink_input_move(_si.index, _target_idx)
-                        _pa_placed[_key] = _target_idx
-                    except Exception:
-                        pass
+    # A channel's output device is *not* enforced here, deliberately.
+    #
+    # This used to walk the streams sitting on a channel's virtual sink and move
+    # them onto the chosen device. Two things were wrong with it. The first is
+    # that it fought the block above in the same tick: the override says "Chrome
+    # belongs on Arctis_Media", this said "anything on Arctis_Media belongs on
+    # the earbuds", and each undid the other on every pass — the log showed the
+    # pair one second apart, and the device menu appeared to do nothing at all.
+    #
+    # The second is that winning was no better than losing. Dragging a stream
+    # off Arctis_Media takes it out of that channel entirely, past the Sonar EQ
+    # and the HeSuVi stage, which is the whole reason the channel exists.
+    #
+    # Sending a channel somewhere means moving the *channel's* last link, not
+    # its applications: `sonar_to_pipewire.ensure_physical_output_links` points
+    # each channel's HeSuVi output at `channel_destination(channel)`, and Media
+    # has its own HeSuVi instance so it can differ from Game. That is where this
+    # belongs and where it already works.
 
 
 def _main_loop():
