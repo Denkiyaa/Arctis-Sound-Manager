@@ -19,6 +19,8 @@ powered by the PipeWire filter-chain.
 ## Documentation
 
 - [Supported devices](device_support.md) — every supported headset, with its USB Product ID.
+- [Video Clips](clips.md) — the opt-in screen recorder: installing it, removing it, and what
+  its per-channel audio tracks are for.
 - [Device configuration file specs](device_configuration_file_specs.md) — how a headset is described
   in YAML, and what it takes to add a new one.
 - [D-Bus interface](dbus.md) — the daemon's D-Bus API, for scripting and integrations.
