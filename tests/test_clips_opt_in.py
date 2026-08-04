@@ -320,14 +320,93 @@ def test_the_main_window_builds_with_clips_off():
     main = QMainApp(app, logging.WARNING)
     try:
         assert main.main_window is not None
-        # Hidden, not removed: sidebar index is stack index, so dropping the
-        # entry would renumber Settings and Help.
         assert main._stack.count() == 8
-        assert main._sidebar_buttons[PAGE_CLIPS].isVisible() is False
+        # The Video tab is never hidden: with Clips off (the default in tests)
+        # the tab shows the install screen rather than disappearing, so someone
+        # who does not already know about Clips can still find it.
+        #
+        # isHidden() rather than isVisible(): the window is built but never
+        # shown here, and isVisible() is False for every widget under an unshown
+        # window — it would read the same whether the entry was hidden on
+        # purpose or not, which is the whole question.
+        assert main._sidebar_buttons[PAGE_CLIPS].isHidden() is False
         # The link a settings page walks to reach the sidebar.
         assert getattr(main.main_window, "main_app", None) is main
     finally:
         main.main_window.deleteLater()
+
+
+# ── The Video tab ─────────────────────────────────────────────────────────────
+
+
+def test_a_present_runtime_does_not_make_the_tab_show_the_recorder(monkeypatch):
+    """Installed is not the same as on.
+
+    Deciding the tab's face on the runtime alone reads well until someone
+    uninstalls Clips: the packages stay — ffmpeg and the GStreamer sets belong
+    to the rest of the desktop, and removal is offered separately and defaults
+    to no — so the probe still says yes and the recorder comes straight back.
+    Uninstall then looks broken. Both halves have to agree.
+    """
+    from arctis_sound_manager.gui import clips_setup
+
+    monkeypatch.setattr(sdc, "clip_dep_checks", lambda: [_blocking_check(True)])
+    monkeypatch.setattr(clips_setup, "clips_enabled", lambda: False)
+
+    assert clips_setup.runtime_ready() is True
+    assert clips_setup.clips_active() is False
+
+
+def test_the_tab_offers_to_enable_rather_than_install_what_is_already_there(
+        monkeypatch):
+    """With every package present, the button that says "Install" would be
+    lying about what it is about to do — and there is nothing to re-check by
+    hand either."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from arctis_sound_manager.gui.clips_install_page import ClipsInstallPage
+
+    monkeypatch.setattr(sdc, "clip_dep_checks", lambda: [_blocking_check(True)])
+    QApplication.instance() or QApplication([])
+
+    page = ClipsInstallPage()
+    try:
+        assert page._install_btn.text() == "Enable"
+        assert page._recheck_btn.isHidden() is True
+    finally:
+        page.deleteLater()
+
+
+def test_uninstalling_from_the_tab_switches_off_and_asks_for_the_swap(
+        monkeypatch):
+    """The recorder's own Uninstall has to do both halves: persist the flag, and
+    tell the window, or the user is left looking at a recorder for a feature
+    they just turned off."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from arctis_sound_manager.gui import clips_setup
+    from arctis_sound_manager.gui.clips_page import ClipsPage
+
+    QApplication.instance() or QApplication([])
+
+    written: list[bool] = []
+    monkeypatch.setattr(clips_setup, "set_enabled", written.append)
+    # Answering the "also remove the packages?" question with No.
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.exec", lambda self: 0)
+    monkeypatch.setattr(clips_setup, "run_batch",
+                        lambda argvs: pytest.fail("nothing should be removed"))
+
+    page = ClipsPage()
+    swapped: list[bool] = []
+    page.clips_disabled.connect(lambda: swapped.append(True))
+    try:
+        page._on_uninstall()
+        assert written == [False]
+        assert swapped == [True]
+    finally:
+        page.deleteLater()
 
 
 # ── Packaging ─────────────────────────────────────────────────────────────────

@@ -351,7 +351,10 @@ class QMainApp(QBaseDesktopApp):
         self._headset_page   = HeadsetPage()
         self._dac_page       = DacPage()
         self._device_page    = DevicePage()
-        self._clips_page     = ClipsPage()
+        # The Video tab is always present. When Clips is not on, it shows the
+        # install screen (what it does, which packages it needs, and a one-click
+        # install) instead of the recorder.
+        self._clips_page = self._build_clips_page()
         self._help_page      = HelpPage()
 
         self._theme_editor_page = ThemeEditorPage()
@@ -406,21 +409,90 @@ class QMainApp(QBaseDesktopApp):
             self.logger.debug("could not read clips_enabled, hiding Clips: %s", exc)
             enabled = False
 
+        # The Video tab is always visible: when Clips is off the tab *is* the
+        # explanation and the way to turn it on, so there is no state in which
+        # hiding it is the right call. `enabled` is still read (above) so a bad
+        # settings file is logged, but it no longer gates the button. No
+        # redirect either — the page always leads somewhere.
+        del enabled
         buttons = getattr(self, "_sidebar_buttons", None) or []
         if PAGE_CLIPS < len(buttons):
-            buttons[PAGE_CLIPS].setVisible(enabled)
+            buttons[PAGE_CLIPS].setVisible(True)
 
-        # Turning the feature off while sitting on its page would leave the
-        # user on a page no button leads back to.
-        #
-        # getattr rather than attribute access: this is called once while the
-        # window is still being assembled, and reaching for a stack that does
-        # not exist yet took the whole window down with it — the tray icon
-        # appeared and nothing opened, because the failure is inside the
-        # constructor. Nothing here is worth a window.
+        # Settings can turn Clips on or off while the window is open, and the
+        # tab has to follow without a restart.
+        self._sync_clips_page()
+
+    def _build_clips_page(self):
+        """The recorder when Clips is on and usable, the install screen when it
+        is not, wired so either can hand over to the other."""
+        from arctis_sound_manager.gui import clips_setup
+        from arctis_sound_manager.gui.clips_install_page import ClipsInstallPage
+
+        if clips_setup.clips_active():
+            page = ClipsPage()
+            disabled = getattr(page, "clips_disabled", None)
+            if disabled is not None:
+                disabled.connect(self._sync_clips_page)
+            return page
+
+        page = ClipsInstallPage()
+        page.clips_installed.connect(self._sync_clips_page)
+        return page
+
+    def _sync_clips_page(self) -> None:
+        """Put the face the tab is showing back in step with the feature.
+
+        Called after an install, an uninstall, or the Settings toggle. Swapping
+        in place is what keeps this from needing a restart; if the recorder
+        cannot be built in this process — a fresh `gi` import failing mid-run
+        after the packages landed — the install screen stays up and asks for a
+        restart rather than taking the window down with it.
+        """
         stack = getattr(self, "_stack", None)
-        if not enabled and stack is not None and stack.currentIndex() == PAGE_CLIPS:
-            self._switch_page(PAGE_HOME)
+        old = getattr(self, "_clips_page", None)
+        if stack is None or old is None:
+            return
+
+        from arctis_sound_manager.gui import clips_setup
+        from arctis_sound_manager.gui.clips_install_page import ClipsInstallPage
+
+        wants_recorder = clips_setup.clips_active()
+        showing_recorder = not isinstance(old, ClipsInstallPage)
+        if wants_recorder == showing_recorder:
+            return
+
+        # Read before the swap: removing the old page renumbers the stack, so
+        # asking afterwards cannot tell "the user was looking at Clips" from
+        # "the indices moved under them".
+        was_on_clips = stack.currentWidget() is old
+
+        try:
+            new_page = self._build_clips_page()
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(
+                "clips is on but the recorder could not be built in-process: %s", exc)
+            status = getattr(old, "_status", None)
+            if status is not None:
+                status.setText(I18n.translate("ui", "clips_install_restart"))
+            return
+
+        idx = stack.indexOf(old)
+        if idx < 0:
+            idx = PAGE_CLIPS
+        stack.insertWidget(idx, new_page)
+        stack.removeWidget(old)
+        old.deleteLater()
+        self._clips_page = new_page
+        if hasattr(new_page, "apply_theme"):
+            try:
+                new_page.apply_theme()
+            except Exception:  # noqa: BLE001
+                pass
+        # Turning it on from the tab lands on the recorder; turning it off
+        # leaves whoever did it from Settings where they were.
+        if was_on_clips or wants_recorder:
+            self._switch_page(PAGE_CLIPS)
 
     def _check_upgraded_under_us(self) -> None:
         """Surface an upgrade that landed while this window was open."""

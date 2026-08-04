@@ -23,6 +23,7 @@ from PySide6.QtGui import (QColor, QDesktopServices, QIcon, QKeySequence,
                            QPainter, QPixmap, QPolygonF, QShortcut)
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
     QHBoxLayout,
     QInputDialog,
@@ -228,6 +229,10 @@ class ClipGrid(QListWidget):
 class ClipsPage(QWidget):
     """Rolling capture control plus the clip library."""
 
+    # Raised after Clips has been switched off from this page, so the window can
+    # put the install screen back without a restart.
+    clips_disabled = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._capture = None
@@ -282,6 +287,19 @@ class ClipsPage(QWidget):
         self._folder_btn.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(CLIP_DIR))))
         actions.addWidget(self._folder_btn)
+
+        # Deliberately not beside Start and Save: it is the one control here
+        # that uninstalls software, and it sits at the far end of the row that
+        # holds the things you press once, not among the ones you press while
+        # playing. It never touches the clips already on disk.
+        self._uninstall_btn = QPushButton(_tr("clips_uninstall", "Uninstall"))
+        self._uninstall_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._uninstall_btn.setToolTip(_tr(
+            "clips_uninstall_tooltip",
+            "Switch Clips off and optionally remove the packages it "
+            "installed. Your saved clips are left alone."))
+        self._uninstall_btn.clicked.connect(self._on_uninstall)
+        actions.addWidget(self._uninstall_btn)
 
         root.addLayout(actions)
 
@@ -591,6 +609,68 @@ class ClipsPage(QWidget):
         self._save_btn.setEnabled(False)
         self._fps.setEnabled(True)
         self._update_status()
+
+    def _on_uninstall(self) -> None:
+        """Switch Clips off from the tab, and offer to remove its packages.
+
+        Removing is asked separately from switching off, and defaults to no:
+        every one of these packages is shared with the rest of the desktop —
+        video players and browsers use ffmpeg and GStreamer too — so "I am done
+        with clips" is not the same statement as "nothing else here needs
+        ffmpeg". The removal commands never force, so a package something else
+        depends on makes the package manager refuse, and the feature ends up off
+        either way.
+
+        The recording is stopped first: leaving a capture running for a feature
+        the user has just switched off would keep the screen-share indicator up
+        with nothing on screen to explain it.
+        """
+        from arctis_sound_manager.gui import clips_setup
+
+        argvs, packages = clips_setup.remove_argvs()
+
+        answer = QMessageBox.StandardButton.No
+        if argvs:
+            box = QMessageBox(self)
+            box.setWindowTitle(_tr("clips_uninstall", "Uninstall"))
+            box.setText(_tr("clips_remove_packages_q",
+                            "Also remove the packages Clips installed?"))
+            box.setInformativeText(
+                _tr("clips_remove_packages_hint", "Affected: {0}").format(
+                    ", ".join(packages)))
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setStandardButtons(QMessageBox.StandardButton.Yes
+                                   | QMessageBox.StandardButton.No
+                                   | QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(QMessageBox.StandardButton.No)
+            answer = box.exec()
+            if answer == QMessageBox.StandardButton.Cancel:
+                return
+
+        self._stop_capture()
+        clips_setup.set_enabled(False)
+
+        if answer == QMessageBox.StandardButton.Yes:
+            self._uninstall_btn.setEnabled(False)
+            self._status.setText(_tr("clips_removing",
+                                     "Removing the capture packages…"))
+            QApplication.processEvents()
+            try:
+                ok, detail = clips_setup.run_batch(argvs)
+            except clips_setup.NoPkexec:
+                ok, detail = False, _tr(
+                    "clips_no_pkexec",
+                    "pkexec not found — install polkit, or remove the "
+                    "packages yourself.")
+            finally:
+                self._uninstall_btn.setEnabled(True)
+            if not ok:
+                # Worth saying out loud rather than silently: the feature is off
+                # regardless, but the packages the user asked to remove are
+                # still there, and they should not have to guess which happened.
+                logger.info("clip package removal refused: %s", detail)
+
+        self.clips_disabled.emit()
 
     def _on_save(self) -> None:
         if self._capture is None:
