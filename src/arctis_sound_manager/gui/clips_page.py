@@ -655,8 +655,9 @@ class ClipsPage(QWidget):
             self._status.setText(_tr("clips_removing",
                                      "Removing the capture packages…"))
             QApplication.processEvents()
+            before = clips_setup.present_names()
             try:
-                ok, detail = clips_setup.run_batch(argvs)
+                ok, detail = clips_setup.run_batch(argvs, keep_going=True)
             except clips_setup.NoPkexec:
                 ok, detail = False, _tr(
                     "clips_no_pkexec",
@@ -664,13 +665,42 @@ class ClipsPage(QWidget):
                     "packages yourself.")
             finally:
                 self._uninstall_btn.setEnabled(True)
-            if not ok:
-                # Worth saying out loud rather than silently: the feature is off
-                # regardless, but the packages the user asked to remove are
-                # still there, and they should not have to guess which happened.
-                logger.info("clip package removal refused: %s", detail)
+            if ok:
+                self._report_removal(before, clips_setup.present_names())
+            else:
+                logger.info("clip package removal did not run: %s", detail)
 
         self.clips_disabled.emit()
+
+    def _report_removal(self, before: set[str], after: set[str]) -> None:
+        """Say which packages went and which the machine kept.
+
+        Told in a dialog rather than the status label because this page is about
+        to be replaced by the install screen — a line written here would vanish
+        before it was read. And it is worth telling: "kept, because something
+        else needs it" is a different outcome from "removal failed", and the
+        user should not have to open a terminal to find out which one happened.
+        """
+        gone = sorted(before - after)
+        kept = sorted(after & before)
+
+        lines = []
+        if gone:
+            lines.append(_tr("clips_removed", "Removed: {0}").format(
+                ", ".join(gone)))
+        if kept:
+            lines.append(_tr(
+                "clips_removal_kept",
+                "Kept, because other software on this machine still needs "
+                "them: {0}").format(", ".join(kept)))
+        if not lines:
+            return
+
+        box = QMessageBox(self)
+        box.setWindowTitle(_tr("clips_uninstall", "Uninstall"))
+        box.setText("\n\n".join(lines))
+        box.setIcon(QMessageBox.Icon.Information)
+        box.exec()
 
     def _on_save(self) -> None:
         if self._capture is None:
