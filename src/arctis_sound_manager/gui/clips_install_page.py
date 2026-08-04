@@ -242,6 +242,28 @@ class ClipsInstallPage(QWidget):
         # what the probe found rather than the toggle.
         self._remove_btn.setVisible(bool(clips_setup.present_names()))
 
+        # Said before the password prompt, not after it. Installing
+        # python-gobject on a pipx install succeeds and changes nothing, and
+        # without this the screen would send the user around that loop first.
+        self._install_btn.setEnabled(True)
+        if clips_setup.bindings_unreachable():
+            self._install_btn.setEnabled(False)
+            self._recheck_btn.setVisible(False)
+            # The command would run, report success, and change nothing. Leaving
+            # it on screen next to the explanation invites exactly the loop the
+            # explanation is there to end.
+            self._manual_hint.setVisible(False)
+            self._manual_field.setVisible(False)
+            self._status.setText(_tr(
+                "clips_install_venv",
+                "Clips cannot run from this install of ASM. It is running from "
+                "an isolated Python environment — a pipx or venv install — and "
+                "PyGObject is a system package that such an environment cannot "
+                "see, however many times it is installed. Use your "
+                "distribution's package of ASM, or recreate the environment "
+                "with --system-site-packages."))
+            return
+
         # Nothing left to fetch: this is the switched-off state, not the
         # missing-runtime one. "Install" would be a lie about what the button
         # is going to do, and there is nothing to re-check by hand either.
