@@ -677,17 +677,9 @@ class DevicePage(QWidget):
     # installs and removes only those, and cannot touch a service.
 
     def _clips_missing(self) -> list:
-        from arctis_sound_manager.system_deps_checker import clip_dep_checks
+        from arctis_sound_manager.gui import clips_setup
 
-        missing = []
-        for check in clip_dep_checks():
-            try:
-                ok = bool(check.detect())
-            except Exception:  # noqa: BLE001 — a broken probe reads as missing
-                ok = False
-            if not ok:
-                missing.append(check)
-        return missing
+        return clips_setup.missing_checks()
 
     def _refresh_clips_row(self) -> None:
         """Put the button in the state the machine is actually in."""
@@ -743,51 +735,33 @@ class DevicePage(QWidget):
     def _clips_pkexec(self, argvs: list[list[str]], busy_text: str) -> bool:
         """Run package commands as one elevated batch, and report the outcome.
 
-        One `pkexec` for the whole batch so the password is asked once. Runs
-        synchronously because the button has nothing useful to offer while it
-        waits, and the result decides whether the feature is on.
-
-        Only ever handed package-manager argv built from the Clips group —
-        never an `_internal` remediation, which is how the old path ended up
-        able to restart the audio stack.
+        The running itself lives in `clips_setup.run_batch`, which the Video
+        tab's install page uses too; what stays here is the part that belongs to
+        this row — disabling its button and writing into its status label.
         """
-        import subprocess
-
-        if not shutil.which("pkexec"):
-            self._clips_status.setText(I18n.translate("ui", "clips_no_pkexec"))
-            return False
-
-        def _quote(args: list[str]) -> str:
-            return " ".join(f"'{a}'" if " " in a else a for a in args)
+        from arctis_sound_manager.gui import clips_setup
 
         self._clips_btn.setEnabled(False)
         self._clips_status.setText(busy_text)
         QApplication.processEvents()
         try:
-            proc = subprocess.run(
-                ["pkexec", "sh", "-c", " && ".join(_quote(a) for a in argvs)],
-                capture_output=True, text=True, timeout=900)
-        except (OSError, subprocess.SubprocessError) as exc:
-            log.warning("clip package command failed: %s", exc)
-            self._clips_status.setText(str(exc))
+            ok, detail = clips_setup.run_batch(argvs)
+        except clips_setup.NoPkexec:
+            self._clips_status.setText(I18n.translate("ui", "clips_no_pkexec"))
             return False
         finally:
             self._clips_btn.setEnabled(True)
 
-        if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "").strip().splitlines()
-            self._clips_status.setText(detail[-1] if detail else
-                                       I18n.translate("ui", "clips_pkg_failed"))
+        if not ok:
+            self._clips_status.setText(
+                detail or I18n.translate("ui", "clips_pkg_failed"))
             return False
         return True
 
     def _install_clips(self) -> None:
-        from arctis_sound_manager.settings import GeneralSettings
-        from arctis_sound_manager.system_deps_checker import (
-            Severity, install_command_for)
+        from arctis_sound_manager.gui import clips_setup
 
-        missing = self._clips_missing()
-        argvs = [cmd for cmd in (install_command_for(c) for c in missing) if cmd]
+        argvs = clips_setup.install_argvs()
 
         if argvs and not self._clips_pkexec(
                 argvs, I18n.translate("ui", "clips_installing")):
@@ -797,8 +771,7 @@ class DevicePage(QWidget):
         # Re-probe rather than trust the exit code: a package manager can
         # succeed and still leave the thing undetectable (wrong package for the
         # distro, a plugin that needs a re-scan).
-        still = [c for c in self._clips_missing()
-                 if c.severity is Severity.BLOCKING]
+        still = clips_setup.blocking_missing()
         if still:
             names = ", ".join(c.name for c in still)
             msg = QMessageBox(self)
@@ -810,9 +783,7 @@ class DevicePage(QWidget):
             self._refresh_clips_row()
             return
 
-        settings = GeneralSettings.read_from_file()
-        settings.clips_enabled = True
-        settings.write_to_file()
+        clips_setup.set_enabled(True)
         self._refresh_clips_row()
         self._apply_clips_visibility()
 
@@ -827,16 +798,9 @@ class DevicePage(QWidget):
         package another program depends on makes the package manager refuse,
         and the feature still ends up off either way.
         """
-        from arctis_sound_manager.settings import GeneralSettings
-        from arctis_sound_manager.system_deps_checker import (
-            clip_dep_checks, remove_command_for)
+        from arctis_sound_manager.gui import clips_setup
 
-        argvs, packages = [], []
-        for check in clip_dep_checks():
-            cmd = remove_command_for(check)
-            if cmd:
-                argvs.append(cmd)
-                packages.extend(a for a in cmd[3:] if not a.startswith("-"))
+        argvs, packages = clips_setup.remove_argvs()
 
         answer = QMessageBox.StandardButton.No
         if argvs:
@@ -845,7 +809,7 @@ class DevicePage(QWidget):
             box.setText(I18n.translate("ui", "clips_remove_packages_q"))
             box.setInformativeText(
                 I18n.translate("ui", "clips_remove_packages_hint").format(
-                    ", ".join(sorted(set(packages)))))
+                    ", ".join(packages)))
             box.setIcon(QMessageBox.Icon.Question)
             box.setStandardButtons(QMessageBox.StandardButton.Yes
                                    | QMessageBox.StandardButton.No
@@ -855,9 +819,7 @@ class DevicePage(QWidget):
             if answer == QMessageBox.StandardButton.Cancel:
                 return
 
-        settings = GeneralSettings.read_from_file()
-        settings.clips_enabled = False
-        settings.write_to_file()
+        clips_setup.set_enabled(False)
         self._refresh_clips_row()
         self._apply_clips_visibility()
 
