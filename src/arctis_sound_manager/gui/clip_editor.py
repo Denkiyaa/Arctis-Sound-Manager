@@ -429,8 +429,8 @@ class ClipEditor(QDialog):
             self._band.set_range(*remembered)
         self._band.setToolTip(
             _tr("clip_trim_hint",
-                "Opens on the last {n} seconds — drag the markers to change it, "
-                "or drag the playhead to scrub.")
+                "Opens on the last {n} seconds. Drag the lit block to move it, "
+                "its edges to resize it, or anywhere else to scrub.")
             .replace("{n}", f"{DEFAULT_TAIL_S:.0f}"))
         self._band.rangeChanged.connect(self._on_trim_changed)
         self._band.scrubbed.connect(self._seek)

@@ -240,16 +240,26 @@ class TrimBand(QWidget):
             self._scrub_to(x)
             return
         self._grab = target
+        if target == "range":
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
         if target == "playhead":
             self._scrub_to(x)
 
     def mouseMoveEvent(self, event) -> None:
         x = event.position().x()
         if self._grab is None:
-            self.setCursor(
-                Qt.CursorShape.SplitHCursor
-                if self._hit(x) in ("start", "end", "playhead")
-                else Qt.CursorShape.PointingHandCursor)
+            # Three cursors for three different things, because they were two
+            # and the selection looked exactly as draggable as the dimmed ends
+            # it sits between — which is to say, not at all. An open hand over
+            # the kept span is the whole hint that it can be picked up.
+            target = self._hit(x)
+            if target in ("start", "end", "playhead"):
+                shape = Qt.CursorShape.SplitHCursor
+            elif target == "range":
+                shape = Qt.CursorShape.OpenHandCursor
+            else:
+                shape = Qt.CursorShape.PointingHandCursor
+            self.setCursor(shape)
             return
         if not self._moved and abs(x - self._press_x) < _DRAG_SLOP_PX:
             return
@@ -271,6 +281,8 @@ class TrimBand(QWidget):
             self.set_range(start, start + span)
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._grab == "range":
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
         if self._grab == "range" and not self._moved:
             # A press inside the selection that never moved is a seek, not a
             # nudge: clicking the part you kept should play from there.
@@ -334,6 +346,7 @@ class TrimBand(QWidget):
 
         self._paint_marker(painter, x0, band, accent, leading=True)
         self._paint_marker(painter, x1, band, accent, leading=False)
+        self._paint_grip(painter, keep, accent)
         self._paint_playhead(painter, band)
         self._paint_span_label(painter, keep)
         painter.end()
@@ -389,6 +402,35 @@ class TrimBand(QWidget):
         painter.drawPolygon(QPolygonF([
             QPointF(x - 4, band.top()), QPointF(x + 4, band.top()),
             QPointF(x, band.top() + 6)]))
+
+    def _paint_grip(self, painter, keep, accent) -> None:
+        """Three short bars in the middle of the selection: the mark that says
+        "this block can be picked up".
+
+        The selection has always been draggable and nothing said so — it is
+        painted as a lit region between two dimmed ones, which reads as a
+        result, not as a control. People reached for the dimmed part instead,
+        where a drag scrubs and the trim stays put.
+
+        Drawn as a pair flanking the span label rather than one cluster in the
+        middle, because the middle is where the label already is: centred on it,
+        the bars struck through the text. Skipped entirely when the selection is
+        too narrow to hold both — the label is the more useful of the two, and
+        at that width the markers are what you aim at anyway.
+        """
+        if keep.width() < 150:
+            return
+        colour = QColor(accent)
+        colour.setAlpha(150)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(colour)
+        top = keep.top() + keep.height() * 0.30
+        height = keep.height() * 0.40
+        for side in (-1.0, 1.0):
+            cx = keep.center().x() + side * 34.0
+            for offset in (-4.0, 0.0, 4.0):
+                painter.drawRoundedRect(
+                    QRectF(cx + offset - 0.9, top, 1.8, height), 0.9, 0.9)
 
     def _paint_span_label(self, painter, keep) -> None:
         """The selection's length, written on it — but only when it fits."""
