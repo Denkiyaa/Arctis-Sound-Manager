@@ -48,6 +48,27 @@ def missing_checks() -> list:
     return missing
 
 
+def present_names() -> set[str]:
+    """The names of the dependency groups this machine currently has.
+
+    Compared before and after a removal, this is how the outcome is worked out
+    without asking each distro's package manager what it did: a group that has
+    stopped being detected is a group that went. Cheaper than parsing three
+    package managers' output, and it reports what is *true* rather than what a
+    command claimed.
+    """
+    from arctis_sound_manager.system_deps_checker import clip_dep_checks
+
+    present = set()
+    for check in clip_dep_checks():
+        try:
+            if check.detect():
+                present.add(check.name)
+        except Exception:  # noqa: BLE001
+            pass
+    return present
+
+
 def blocking_missing() -> list:
     """The missing checks that stop it recording at all — the ones that decide
     whether the feature works, as opposed to the ones that cost a thumbnail."""
@@ -143,12 +164,22 @@ class NoPkexec(RuntimeError):
     """polkit is not installed, so nothing can be elevated from here."""
 
 
-def run_batch(argvs: list[list[str]]) -> tuple[bool, str]:
+def run_batch(argvs: list[list[str]], keep_going: bool = False) -> tuple[bool, str]:
     """Run package commands as one elevated batch; return (ok, detail).
 
     One ``pkexec`` for the whole batch so the password is asked once rather than
     once per package group. Synchronous because the button has nothing useful to
     offer while it waits, and the result decides whether the feature is on.
+
+    *keep_going* is what removal needs and installing does not. Removing runs
+    commands the package manager is *expected* to refuse — every one of these
+    packages is shared, and a refusal means something else on the machine still
+    needs it, which is the outcome we want rather than an error. Chained with
+    ``&&`` the first such refusal abandoned the rest, so on a desktop where
+    anything at all depends on ffmpeg, nothing was ever removed: the first
+    command in the list took the whole batch down with it. Independent commands
+    let each package be judged on its own; the caller re-probes to find out what
+    actually went.
 
     Only ever hand this argv built from the Clips dependency group. It used to
     be reachable with an ``_internal`` remediation, which is how turning on a
@@ -162,13 +193,22 @@ def run_batch(argvs: list[list[str]]) -> tuple[bool, str]:
     def _quote(args: list[str]) -> str:
         return " ".join(f"'{a}'" if " " in a else a for a in args)
 
+    joiner = "; " if keep_going else " && "
     try:
         proc = subprocess.run(
-            ["pkexec", "sh", "-c", " && ".join(_quote(a) for a in argvs)],
+            ["pkexec", "sh", "-c", joiner.join(_quote(a) for a in argvs)],
             capture_output=True, text=True, timeout=_BATCH_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("clip package command failed: %s", exc)
         return False, str(exc)
+
+    # With keep_going the exit status is the last command's and says nothing
+    # about the others, so it is not an answer worth reporting — except for the
+    # one failure that matters here, an authentication the user dismissed.
+    if keep_going:
+        if proc.returncode == 126:  # pkexec: not authorised / dialog dismissed
+            return False, (proc.stderr or "").strip()
+        return True, ""
 
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip().splitlines()

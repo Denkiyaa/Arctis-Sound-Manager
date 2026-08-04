@@ -409,6 +409,39 @@ def test_uninstalling_from_the_tab_switches_off_and_asks_for_the_swap(
         page.deleteLater()
 
 
+def test_one_package_the_machine_still_needs_does_not_abandon_the_rest(
+        monkeypatch):
+    """Removal runs commands the package manager is *expected* to refuse.
+
+    Every clip package is shared: ffmpeg is required by firefox, mpv and vlc,
+    python-gobject by whatever else on the machine imports gi. A refusal is the
+    outcome we want. Chained with `&&` the first one abandoned the rest, so on
+    any desktop that plays video, pressing "yes, remove them" removed nothing at
+    all — the first command took the batch down before the one package that
+    *could* go was ever reached.
+    """
+    from arctis_sound_manager.gui import clips_setup
+
+    seen: list[str] = []
+
+    class _Proc:
+        returncode = 0
+        stdout = stderr = ""
+
+    def _fake_run(argv, **kwargs):
+        seen.append(argv[-1])
+        return _Proc()
+
+    monkeypatch.setattr(clips_setup.shutil, "which", lambda _: "/usr/bin/pkexec")
+    monkeypatch.setattr(clips_setup.subprocess, "run", _fake_run)
+
+    clips_setup.run_batch([["pacman", "-Rs", "a"], ["pacman", "-Rs", "b"]],
+                          keep_going=True)
+
+    assert "&&" not in seen[0]
+    assert seen[0].count(";") == 1
+
+
 # ── Packaging ─────────────────────────────────────────────────────────────────
 
 

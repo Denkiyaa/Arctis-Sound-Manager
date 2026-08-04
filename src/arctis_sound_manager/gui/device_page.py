@@ -732,7 +732,8 @@ class DevicePage(QWidget):
             # button says Repair, and repairing is installing.
             self._install_clips()
 
-    def _clips_pkexec(self, argvs: list[list[str]], busy_text: str) -> bool:
+    def _clips_pkexec(self, argvs: list[list[str]], busy_text: str,
+                      keep_going: bool = False) -> bool:
         """Run package commands as one elevated batch, and report the outcome.
 
         The running itself lives in `clips_setup.run_batch`, which the Video
@@ -745,7 +746,7 @@ class DevicePage(QWidget):
         self._clips_status.setText(busy_text)
         QApplication.processEvents()
         try:
-            ok, detail = clips_setup.run_batch(argvs)
+            ok, detail = clips_setup.run_batch(argvs, keep_going=keep_going)
         except clips_setup.NoPkexec:
             self._clips_status.setText(I18n.translate("ui", "clips_no_pkexec"))
             return False
@@ -824,7 +825,17 @@ class DevicePage(QWidget):
         self._apply_clips_visibility()
 
         if answer == QMessageBox.StandardButton.Yes:
-            self._clips_pkexec(argvs, I18n.translate("ui", "clips_removing"))
+            before = clips_setup.present_names()
+            if self._clips_pkexec(argvs, I18n.translate("ui", "clips_removing"),
+                                  keep_going=True):
+                kept = sorted(clips_setup.present_names() & before)
+                # A package the machine still needs is a refusal we asked for,
+                # not a failure — but silence here reads as "nothing happened".
+                self._clips_status.setText(
+                    I18n.translate("ui", "clips_removal_kept").format(
+                        ", ".join(kept)) if kept else
+                    I18n.translate("ui", "clips_removed").format(
+                        ", ".join(sorted(before))))
             self._refresh_clips_row()
 
     def _apply_clips_visibility(self) -> None:
