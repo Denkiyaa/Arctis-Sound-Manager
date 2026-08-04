@@ -266,3 +266,44 @@ def test_the_page_offers_exactly_what_capture_supports():
     assert clips_page._FPS_CHOICES == FPS_CHOICES
     assert clips_page._DEFAULT_FPS == DEFAULT_FPS
     assert DEFAULT_FPS in FPS_CHOICES
+
+
+# ── the ceiling that makes the chosen rate mean something ─────────────────────
+
+def test_the_chosen_rate_is_carried_as_a_ceiling_the_stream_understands():
+    """`videorate max-rate` alone did nothing, and the reason is the caps.
+
+    The portal negotiates `framerate=0/1` — a variable-rate stream, which is
+    what a screen is: it sends a frame only when something changes. With no
+    cadence to measure against, videorate dropped nothing, so a capture asked
+    for 15 fps kept 59 and clips came out at roughly twice the size the setting
+    implied. Measured on this machine: 53 and 61.6 fps in files recorded at the
+    30 fps setting.
+
+    `max-framerate` is the field a variable-rate stream carries its ceiling in.
+    Constraining it propagates upstream far enough that the portal itself
+    produces at the lower rate — the frames are never made rather than made and
+    dropped. `framerate` would force an exact cadence onto a stream that has
+    none, which is what used to make recordings look frozen.
+    """
+    from arctis_sound_manager.clip_capture import convert_chain
+
+    for chain in (convert_chain(needs_gl=True, max_fps=15),
+                  convert_chain(needs_gl=False, max_fps=15)):
+        assert chain, "no conversion path at all"
+        for stage in chain:
+            assert "max-framerate=15/1" in stage, stage
+            # Not the same field, and pinning it is the old bug.
+            assert "framerate=15/1" not in stage.replace("max-framerate=15/1", ""), stage
+
+
+def test_the_gl_path_keeps_a_system_memory_fallback():
+    """glupload cannot always import what the portal hands out. Without a
+    second chain a GL failure takes the video branch down silently and the clip
+    saves as audio-only."""
+    from arctis_sound_manager.clip_capture import convert_chain
+
+    chain = convert_chain(needs_gl=True, max_fps=30)
+    assert len(chain) == 2
+    assert "glupload" in chain[0]
+    assert "glupload" not in chain[1]
