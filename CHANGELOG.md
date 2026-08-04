@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.22] - 4 August 2026
+
+### Added
+
+- **Switch the microphone the Sonar Micro EQ uses between your headset and a desktop mic — by hand or automatically.** Picking the input by hand was already possible; this adds doing it on an event. Choose an alternate microphone and a trigger: switch to it **when the headset disconnects or powers off** (and back to the headset mic when it returns), or **when you mute the headset mic** (and back when you unmute). The change happens behind the Sonar Micro EQ, so an app — a Discord call — never sees its microphone disappear; it keeps recording from the same node while the source underneath it swaps. Manual switching works on every headset; the automatic triggers act on whatever a given headset actually reports, so one that never announces its mute state simply won't use that trigger rather than misbehaving.
+
+### Fixed
+
+- **The update button no longer runs a command that can't do anything.** When ASM was installed from a package you downloaded by hand — a `.deb`, `.rpm` or `.pkg` that no repository tracks — the in-app update ran your package manager's upgrade command, which found nothing to fetch, reported success, and left the version unchanged while the "update available" banner kept coming back. ASM now notices that case up front (on apt, dnf and pacman alike) and instead offers the one-line command to add its repository — after which updates apply normally — or a button to download the latest release. (#163)
+
 ## [1.2.21] - 3 August 2026
 
 ### Fixed
