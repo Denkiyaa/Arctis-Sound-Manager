@@ -507,6 +507,13 @@ def test_a_partial_upgrade_is_told_apart_from_an_ordinary_install_failure():
     assert clips_setup.looks_like_dependency_conflict(pacman) is True
     assert clips_setup.last_line(pacman).startswith(":: installing pipewire")
 
+    # And the screen has to be able to name the fix. Upgrading the whole machine
+    # is not something the Install button does on the user's behalf — it is far
+    # more than turning on a screen recorder asked for — so the command is
+    # offered, not run.
+    upgrade = clips_setup.system_upgrade_command()
+    assert upgrade is None or upgrade.startswith("sudo ")
+
     # A mirror that timed out is an ordinary failure, and must stay one.
     assert clips_setup.looks_like_dependency_conflict(
         "error: failed retrieving file from mirror : Connection timed out") is False
