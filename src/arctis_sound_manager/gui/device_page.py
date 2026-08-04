@@ -832,47 +832,9 @@ class DevicePage(QWidget):
         """
         from arctis_sound_manager.gui import clips_setup
 
-        argvs, packages = clips_setup.remove_argvs()
-
-        answer = QMessageBox.StandardButton.No
-        if argvs:
-            box = QMessageBox(self)
-            box.setWindowTitle(I18n.translate("ui", "clips_uninstall"))
-            box.setText(I18n.translate("ui", "clips_remove_packages_q"))
-            # The exact command as well as the names — see clips_page for why.
-            command = clips_setup.manual_command(argvs)
-            box.setInformativeText(
-                I18n.translate("ui", "clips_remove_packages_hint").format(
-                    ", ".join(packages))
-                + (("\n\n" + I18n.translate("ui", "clips_remove_command")
-                    + "\n" + command) if command else ""))
-            box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            box.setIcon(QMessageBox.Icon.Question)
-            box.setStandardButtons(QMessageBox.StandardButton.Yes
-                                   | QMessageBox.StandardButton.No
-                                   | QMessageBox.StandardButton.Cancel)
-            box.setDefaultButton(QMessageBox.StandardButton.No)
-            answer = box.exec()
-            if answer == QMessageBox.StandardButton.Cancel:
-                return
-
-        clips_setup.set_enabled(False)
+        clips_setup.confirm_and_remove(self)
         self._refresh_clips_row()
         self._apply_clips_visibility()
-
-        if answer == QMessageBox.StandardButton.Yes:
-            before = clips_setup.present_names()
-            if self._clips_pkexec(argvs, I18n.translate("ui", "clips_removing"),
-                                  keep_going=True):
-                kept = sorted(clips_setup.present_names() & before)
-                # A package the machine still needs is a refusal we asked for,
-                # not a failure — but silence here reads as "nothing happened".
-                self._clips_status.setText(
-                    I18n.translate("ui", "clips_removal_kept").format(
-                        ", ".join(kept)) if kept else
-                    I18n.translate("ui", "clips_removed").format(
-                        ", ".join(sorted(before))))
-            self._refresh_clips_row()
 
     def _apply_clips_visibility(self) -> None:
         """Ask the sidebar to show or hide the Clips entry.
