@@ -442,6 +442,32 @@ def test_one_package_the_machine_still_needs_does_not_abandon_the_rest(
     assert seen[0].count(";") == 1
 
 
+def test_a_partial_upgrade_is_told_apart_from_an_ordinary_install_failure():
+    """The failure a user on an Arch derivative actually hits.
+
+    `gst-plugin-pipewire` in the Arch repos depends on an exact pipewire
+    release, and a derivative that rebuilds pipewire under its own pkgrel ships
+    a version that does not match it. Installing then asks to downgrade the
+    whole audio stack, and pacman refuses. Nothing on the install screen can fix
+    that, and pacman's own wording does not lead anyone to the fix — so it must
+    not be reported as just another package-manager error.
+    """
+    from arctis_sound_manager.gui import clips_setup
+
+    pacman = (
+        "resolving dependencies...\n"
+        "error: failed to prepare transaction (could not satisfy dependencies)\n"
+        ":: installing pipewire (1:1.6.8-1) breaks dependency "
+        "'pipewire=1:1.6.8-1.2' required by pipewire-pulse")
+
+    assert clips_setup.looks_like_dependency_conflict(pacman) is True
+    assert clips_setup.last_line(pacman).startswith(":: installing pipewire")
+
+    # A mirror that timed out is an ordinary failure, and must stay one.
+    assert clips_setup.looks_like_dependency_conflict(
+        "error: failed retrieving file from mirror : Connection timed out") is False
+
+
 # ── Packaging ─────────────────────────────────────────────────────────────────
 
 
