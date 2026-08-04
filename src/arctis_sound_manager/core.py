@@ -59,6 +59,35 @@ _DERIVED_TOKENS = {
 }
 
 
+#: Auto mic-switch trigger, stored as an int in the ``micro_autoswitch`` setting.
+_MIC_AUTOSWITCH_MODES = {0: 'off', 1: 'connection', 2: 'mute'}
+
+
+def resolve_mic_autoswitch_target(
+    mode: str,
+    key: str,
+    online_var: str | None,
+    is_online: bool,
+    mic_muted: bool,
+    alt_source: str,
+) -> str | None:
+    """Decide which source the Sonar Micro EQ input should switch to.
+
+    Pure so it can be tested without a live device. Returns the target for
+    ``micro_input_source`` — ``"__auto__"`` (headset mic) or *alt_source* — or
+    ``None`` when *key* is not the trigger for *mode* (nothing to do). Returns
+    ``None`` too when the feature is off or no alternate is configured, which is
+    what keeps it inert on any headset that never reports the matching status.
+    """
+    if mode == 'off' or not alt_source:
+        return None
+    if mode == 'connection' and online_var is not None and key == online_var:
+        return alt_source if not is_online else '__auto__'
+    if mode == 'mute' and key == 'mic_status':
+        return alt_source if mic_muted else '__auto__'
+    return None
+
+
 class CoreEngine:
     logger: logging.Logger
     device_configurations: list[DeviceConfiguration]
@@ -1856,6 +1885,61 @@ class CoreEngine:
             band_index = self.device_status.get('eq_band_index')
             if band_index is not None:
                 self._update_eq_band_file(band_index - 1, value)  # device uses 1-based index
+
+        self._auto_switch_mic(key)
+
+    def _auto_switch_mic(self, key: str) -> None:
+        """Flip the Sonar Micro EQ input between the headset mic and a configured
+        alternate mic when the armed trigger fires (community request).
+
+        Works on every headset: the manual selector (``micro_input_source``)
+        always applies, and the automatic triggers act only on status keys the
+        device actually sends, so a headset that never reports mute (or that is
+        always-on and never "disconnects") simply doesn't auto-switch — it never
+        errors. Apps stay on ``effect_output.sonar-micro-eq`` throughout, so the
+        change is inaudible to a call in progress.
+        """
+        gs = getattr(self, 'general_settings', None)
+        if gs is None:
+            return
+        mode = _MIC_AUTOSWITCH_MODES.get(int(getattr(gs, 'micro_autoswitch', 0) or 0), 'off')
+        alt = getattr(gs, 'micro_alt_source', '') or ''
+        if mode == 'off' or not alt:
+            return
+
+        online_var = None
+        if self.device_config and self.device_config.online_status:
+            online_var = self.device_config.online_status.status_variable
+
+        mic_muted = False
+        if self.device_status is not None:
+            parsed = parsed_status({'mic_status': self.device_status.get('mic_status')},
+                                   self.device_config)
+            mic_muted = parsed.get('mic_status') == 'muted'
+
+        target = resolve_mic_autoswitch_target(
+            mode, key, online_var, self.is_device_online(), mic_muted, alt)
+        if target is None:
+            return
+
+        current = getattr(gs, 'micro_input_source', '__auto__') or '__auto__'
+        if current == target:
+            return  # already there — natural debounce, no relink churn
+
+        gs.micro_input_source = target
+        try:
+            gs.write_to_file()
+        except Exception as exc:  # noqa: BLE001 — never let a settings write break status handling
+            self.logger.warning("Auto mic-switch: could not persist source: %s", exc)
+            return
+        self.logger.info(
+            "Auto mic-switch (%s): Sonar Micro EQ input → %s",
+            mode, "alternate mic" if target != '__auto__' else "headset mic")
+        try:
+            from arctis_sound_manager.sonar_to_pipewire import ensure_micro_capture_link
+            ensure_micro_capture_link()
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("Auto mic-switch: relink failed: %s", exc)
 
     def _update_eq_band_file(self, index: int, raw_value: int) -> None:
         eq_file = Path.home() / '.config' / 'arctis_manager' / 'eq_bands.json'

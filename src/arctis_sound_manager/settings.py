@@ -134,6 +134,17 @@ class GeneralSettings(JsonSerializable):
     # is treated as the node.name of the source to pin the capture to.
     micro_input_source: str = "__auto__"
 
+    # Auto mic-switch (community request): flip the Sonar Micro EQ input between
+    # the headset mic and an alternate (e.g. desktop) mic on a device event.
+    # micro_alt_source is the alternate source's id (empty = feature inert).
+    micro_alt_source: str = ""
+    # Trigger: 0 = off (manual only, via micro_input_source); 1 = on headset
+    # connection/power (alternate when the headset is off/out of range, headset
+    # mic when it's on); 2 = on headset mic mute (alternate when muted, headset
+    # mic when not). Stays inert on any headset that doesn't report the matching
+    # status — manual switching via micro_input_source still works everywhere.
+    micro_autoswitch: int = 0
+
     # OLED display brightness (0–10)
     oled_brightness: int = 8
 
@@ -195,6 +206,8 @@ class GeneralSettings(JsonSerializable):
         ConfigSetting('external_output_device', SettingType.SELECT, None, options_source='external_audio_devices', options_mapping={ 'value': 'id', 'label': 'description' }),
         ConfigSetting('hrir_id', SettingType.SELECT, None, options_source='hrir_files', options_mapping={ 'value': 'id', 'label': 'name' }),
         ConfigSetting('micro_input_source', SettingType.SELECT, "__auto__", options_source='pulse_audio_sources', options_mapping={ 'value': 'id', 'label': 'name' }),
+        ConfigSetting('micro_alt_source', SettingType.SELECT, "", options_source='pulse_audio_sources', options_mapping={ 'value': 'id', 'label': 'name' }),
+        ConfigSetting('micro_autoswitch', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'micro_autoswitch_off', 1: 'micro_autoswitch_connection', 2: 'micro_autoswitch_mute'}),
         ConfigSetting('systray_show_battery', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
         ConfigSetting('systray_icon_color', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'systray_icon_color_auto', 1: 'systray_icon_color_white', 2: 'systray_icon_color_black'}),
     ]
