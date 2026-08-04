@@ -18,6 +18,8 @@ from arctis_sound_manager.update_checker import (
     PACKAGE_MANAGER_COMMANDS,
     InstallMethod,
     detect_all_install_methods,
+    repo_setup_command,
+    upgrade_source_available,
 )
 
 
@@ -351,3 +353,74 @@ def test_pacman_upgrade_survives_pacman_being_absent(monkeypatch):
     monkeypatch.setattr(uc, "installed_package_name", lambda method: "arctis-sound-manager")
 
     assert "arctis-sound-manager" in uc.package_manager_command(uc.InstallMethod.PACMAN)
+
+
+# ── Hand-installed vs repository-tracked (#163) ──────────────────────────────
+
+def _route(routes):
+    """subprocess.run side effect keyed on the executable (argv[0])."""
+    def _side(cmd, *a, **k):
+        key = cmd[0] if isinstance(cmd, (list, tuple)) else cmd
+        return routes.get(key, _fail(returncode=127))
+    return _side
+
+
+def test_upgrade_source_apt_hand_installed_is_false():
+    policy = ("arctis-sound-manager:\n  Installed: 1.2.20\n  Candidate: 1.2.20\n"
+              "  Version table:\n *** 1.2.20 100\n        100 /var/lib/dpkg/status\n")
+    with mock.patch("subprocess.run", side_effect=_route({"apt-cache": _ok(stdout=policy)})):
+        assert upgrade_source_available(InstallMethod.APT, "arctis-sound-manager") is False
+
+
+def test_upgrade_source_apt_ppa_is_true():
+    policy = ("  Version table:\n     1.2.21 500\n"
+              "        500 https://ppa.launchpadcontent.net/loteran/arctis/ubuntu\n"
+              " *** 1.2.20 100\n        100 /var/lib/dpkg/status\n")
+    with mock.patch("subprocess.run", side_effect=_route({"apt-cache": _ok(stdout=policy)})):
+        assert upgrade_source_available(InstallMethod.APT, "arctis-sound-manager") is True
+
+
+def test_upgrade_source_rpm_hand_installed_is_false():
+    with mock.patch("subprocess.run", side_effect=_route({"dnf": _ok(stdout="@commandline\n")})):
+        assert upgrade_source_available(InstallMethod.RPM, "arctis-sound-manager") is False
+
+
+def test_upgrade_source_rpm_copr_is_true():
+    repo = "copr:copr.fedorainfracloud.org:loteran:arctis-sound-manager\n"
+    with mock.patch("subprocess.run", side_effect=_route({"dnf": _ok(stdout=repo)})):
+        assert upgrade_source_available(InstallMethod.RPM, "arctis-sound-manager") is True
+
+
+def test_upgrade_source_pacman_sync_repo_is_true():
+    with mock.patch("subprocess.run", side_effect=_route({"pacman": _ok()})):
+        assert upgrade_source_available(InstallMethod.PACMAN, "arctis-sound-manager") is True
+
+
+def test_upgrade_source_pacman_aur_with_helper_is_true():
+    with mock.patch("subprocess.run", side_effect=_route({"pacman": _fail()})), \
+         mock.patch("shutil.which", side_effect=lambda b: "/usr/bin/paru" if b == "paru" else None):
+        assert upgrade_source_available(InstallMethod.PACMAN, "arctis-sound-manager") is True
+
+
+def test_upgrade_source_pacman_no_repo_no_helper_is_false():
+    with mock.patch("subprocess.run", side_effect=_route({"pacman": _fail()})), \
+         mock.patch("shutil.which", side_effect=lambda b: None):
+        assert upgrade_source_available(InstallMethod.PACMAN, "arctis-sound-manager") is False
+
+
+def test_upgrade_source_pip_is_always_true():
+    # No distro repo involved — pip upgrades itself, no subprocess needed.
+    assert upgrade_source_available(InstallMethod.PIP, "arctis-sound-manager") is True
+
+
+def test_upgrade_source_unknowable_apt_error_assumes_tracked():
+    # apt-cache failing must not falsely accuse a repo install of being hand-dropped.
+    with mock.patch("subprocess.run", side_effect=_route({"apt-cache": _fail()})):
+        assert upgrade_source_available(InstallMethod.APT, "arctis-sound-manager") is True
+
+
+def test_repo_setup_command_per_manager():
+    assert "add-apt-repository" in repo_setup_command(InstallMethod.APT)
+    assert "copr enable" in repo_setup_command(InstallMethod.RPM)
+    assert "install.sh" in repo_setup_command(InstallMethod.PACMAN)
+    assert repo_setup_command(InstallMethod.PIP) is None

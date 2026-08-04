@@ -1169,6 +1169,17 @@ class HomePage(QWidget):
         method = all_methods[0] if all_methods else InstallMethod.PIP
         cmd = package_manager_command(method)
 
+        # A hand-downloaded .deb/.rpm/.pkg is tracked by no repository, so the
+        # upgrade command would report success and change nothing, and the
+        # banner would come back forever (#163). Detect that and offer the
+        # repository-setup command or a release download instead.
+        if cmd and method in (InstallMethod.APT, InstallMethod.RPM, InstallMethod.PACMAN):
+            from arctis_sound_manager.update_checker import (
+                repo_setup_command, upgrade_source_available)
+            if not upgrade_source_available(method):
+                self._show_hand_installed_update_dialog(repo_setup_command(method))
+                return
+
         if cmd:
             # Package manager install — open a terminal with the command, or copy to clipboard
             from arctis_sound_manager.update_checker import build_terminal_cmd
@@ -1259,6 +1270,98 @@ class HomePage(QWidget):
         self._install_worker = UpdateInstallWorker(self._wheel_url)
         self._install_worker.finished.connect(self._on_install_finished)
         self._install_worker.start()
+
+    def _show_hand_installed_update_dialog(self, setup_cmd: str | None) -> None:
+        """ASM was installed from a hand-downloaded package that no repository
+        tracks, so the upgrade command would change nothing (#163). Offer the two
+        real ways forward instead: add the repository, or download the release."""
+        from PySide6.QtCore import QTimer, QUrl
+        from PySide6.QtGui import QClipboard, QDesktopServices
+        from PySide6.QtWidgets import (
+            QApplication, QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+        )
+        from arctis_sound_manager.gui.theme import (
+            ACCENT, BG_BUTTON, BG_BUTTON_HOVER, BG_CARD, BG_MAIN, BORDER,
+            TEXT_PRIMARY, TEXT_SECONDARY,
+        )
+
+        releases_url = "https://github.com/loteran/Arctis-Sound-Manager/releases/latest"
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Update available")
+        dlg.setMinimumWidth(520)
+        dlg.setStyleSheet(f"background-color: {BG_MAIN}; color: {TEXT_PRIMARY};")
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+
+        msg = QLabel(
+            "ASM was installed from a package you downloaded by hand, so it isn't "
+            "tracked by any repository — an automatic update has nowhere to fetch "
+            "the new version from, which is why running it changes nothing.\n\n"
+            "Two ways to update:")
+        msg.setWordWrap(True)
+        msg.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10pt; background: transparent;")
+        layout.addWidget(msg)
+
+        if setup_cmd:
+            opt1 = QLabel("1. Add the repository (recommended) — updates then apply automatically:")
+            opt1.setWordWrap(True)
+            opt1.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 10pt; background: transparent;")
+            layout.addWidget(opt1)
+
+            cmd_lbl = QLabel(setup_cmd)
+            cmd_lbl.setWordWrap(True)
+            cmd_lbl.setStyleSheet(
+                f"background-color: {BG_CARD}; color: {TEXT_PRIMARY}; font-family: monospace; "
+                f"font-size: 9.5pt; padding: 10px; border-radius: 6px; border: 1px solid {BORDER};")
+            cmd_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            layout.addWidget(cmd_lbl)
+
+        opt2 = QLabel("2. Or download the latest release and install it the same way you did before:")
+        opt2.setWordWrap(True)
+        opt2.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 10pt; background: transparent;")
+        layout.addWidget(opt2)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        if setup_cmd:
+            copy_btn = QPushButton("Copy command")
+            copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            copy_btn.setStyleSheet(
+                f"QPushButton {{ background-color: transparent; color: {TEXT_PRIMARY}; "
+                f"border: 1px solid {BORDER}; border-radius: 6px; padding: 8px 18px; font-size: 10pt; }}"
+                f"QPushButton:hover {{ background-color: {BG_BUTTON_HOVER}; }}")
+
+            def _copy():
+                QApplication.clipboard().setText(setup_cmd, QClipboard.Mode.Clipboard)
+                copy_btn.setText("Copied!")
+                copy_btn.setEnabled(False)
+                QTimer.singleShot(2000, copy_btn, lambda: (
+                    copy_btn.setText("Copy command"), copy_btn.setEnabled(True)))
+            copy_btn.clicked.connect(_copy)
+            btn_row.addWidget(copy_btn)
+
+        dl_btn = QPushButton("Download latest release")
+        dl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        dl_btn.setStyleSheet(
+            f"QPushButton {{ background-color: {ACCENT}; color: #fff; border: none; "
+            f"border-radius: 6px; padding: 8px 18px; font-size: 10pt; }}"
+            f"QPushButton:hover {{ background-color: {BG_BUTTON_HOVER}; }}")
+        dl_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(releases_url)))
+        btn_row.addWidget(dl_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setStyleSheet(
+            f"QPushButton {{ background-color: {BG_BUTTON}; color: {TEXT_PRIMARY}; border: none; "
+            f"border-radius: 6px; padding: 8px 18px; font-size: 10pt; }}"
+            f"QPushButton:hover {{ background-color: {BG_BUTTON_HOVER}; }}")
+        close_btn.clicked.connect(dlg.accept)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+        dlg.exec()
 
     @Slot(bool, str)
     def _on_install_finished(self, success: bool, error_msg: str):

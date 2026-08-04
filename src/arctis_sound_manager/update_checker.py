@@ -217,6 +217,98 @@ PACKAGE_MANAGER_COMMANDS: dict[InstallMethod, str] = {
     for method, template in _PACKAGE_MANAGER_TEMPLATES.items()
 }
 
+
+# ── Hand-installed vs repository-tracked ──────────────────────────────────────
+#
+# The in-app update runs a package-manager upgrade command. That only works when
+# the installed package is tracked by a repository the manager can pull a newer
+# version from. Install ASM from a hand-downloaded .deb / .rpm / .pkg and no
+# repository owns it — the upgrade command finds nothing, reports success, and
+# the version never changes, so the update banner comes back forever (#163).
+# These decide, per manager, whether the upgrade has a source at all, so the
+# dialog can offer to add the repository (or download the release) instead of a
+# command that quietly does nothing.
+
+#: Command that adds ASM's own repository for a manager, so updates apply after.
+_REPO_SETUP_COMMANDS: dict[InstallMethod, str] = {
+    InstallMethod.APT:
+        "sudo add-apt-repository ppa:loteran/arctis-sound-manager && "
+        "sudo apt update && sudo apt install arctis-sound-manager",
+    InstallMethod.RPM:
+        "sudo dnf copr enable loteran/arctis-sound-manager && "
+        "sudo dnf install arctis-sound-manager",
+    InstallMethod.PACMAN:
+        "curl -fsSL https://raw.githubusercontent.com/loteran/"
+        "Arctis-Sound-Manager/main/scripts/install.sh | bash",
+}
+
+
+def repo_setup_command(method: InstallMethod) -> str | None:
+    """The command that adds ASM's repository for *method* (or None for pip)."""
+    return _REPO_SETUP_COMMANDS.get(method)
+
+
+def _apt_repo_tracks(pkg: str) -> bool:
+    """True when a configured APT repository — not just the local dpkg status —
+    can supply *pkg*. A hand-installed .deb lists only `/var/lib/dpkg/status` as
+    its source; a PPA/repo shows an `http(s)://` (or `file:/`) source line."""
+    try:
+        r = subprocess.run(["apt-cache", "policy", pkg],
+                           capture_output=True, text=True, timeout=8)
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return True  # can't tell — never cry wolf
+    if r.returncode != 0:
+        return True
+    return "://" in r.stdout
+
+
+#: `from_repo` values that mean "not from a repository" across dnf4/dnf5.
+_DNF_HAND_ORIGINS = {"@commandline", "@@commandline", "@system", "@local", "commandline", ""}
+
+
+def _dnf_repo_tracks(pkg: str) -> bool:
+    """True when *pkg* was installed from a real dnf repository (COPR), not from
+    a hand-downloaded .rpm (whose origin reads `@commandline` / `@System`)."""
+    try:
+        r = subprocess.run(
+            ["dnf", "repoquery", "--installed", "--queryformat", "%{from_repo}", pkg],
+            capture_output=True, text=True, timeout=8)
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return True
+    if r.returncode != 0:
+        return True
+    origins = {ln.strip() for ln in r.stdout.splitlines() if ln.strip()}
+    if not origins:
+        return True
+    return any(o.lower() not in _DNF_HAND_ORIGINS for o in origins)
+
+
+def upgrade_source_available(method: InstallMethod, pkg: str | None = None) -> bool:
+    """Whether the manager can actually fetch a newer version for this install.
+
+    False means ASM was installed from a package no repository tracks, so the
+    upgrade command is a no-op — the caller should offer the repository-setup
+    command (``repo_setup_command``) or a release download instead. Unknowable
+    cases return True: a false "installed by hand" is worse than none.
+    """
+    pkg = pkg or installed_package_name(method) or "arctis-sound-manager"
+    if method is InstallMethod.APT:
+        return _apt_repo_tracks(pkg)
+    if method is InstallMethod.RPM:
+        return _dnf_repo_tracks(pkg)
+    if method is InstallMethod.PACMAN:
+        # A sync-db package is pacman's to upgrade; an AUR one a helper's. Either
+        # is a real source; only "no sync entry and no helper" is a dead end.
+        try:
+            if subprocess.run(["pacman", "-Si", pkg], capture_output=True,
+                              text=True, timeout=5).returncode == 0:
+                return True
+        except (FileNotFoundError, subprocess.SubprocessError, OSError):
+            pass
+        return any(shutil.which(h) for h in ("paru", "yay"))
+    # pip / pipx / unknown: the upgrade path doesn't depend on a distro repo.
+    return True
+
 log = logging.getLogger(__name__)
 
 _CACHE_FILE = Path.home() / ".config" / "arctis_manager" / ".update_check_cache"
