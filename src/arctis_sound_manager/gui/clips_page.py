@@ -635,9 +635,18 @@ class ClipsPage(QWidget):
             box.setWindowTitle(_tr("clips_uninstall", "Uninstall"))
             box.setText(_tr("clips_remove_packages_q",
                             "Also remove the packages Clips installed?"))
+            # The exact command, not just the package names. These are packages
+            # the rest of the desktop shares, and the line is what lets someone
+            # check it against their own machine before handing over a root
+            # password — or run it themselves instead.
+            command = clips_setup.manual_command(argvs)
             box.setInformativeText(
                 _tr("clips_remove_packages_hint", "Affected: {0}").format(
-                    ", ".join(packages)))
+                    ", ".join(packages))
+                + (("\n\n" + _tr("clips_remove_command",
+                                 "The command this runs:") + "\n" + command)
+                   if command else ""))
+            box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             box.setIcon(QMessageBox.Icon.Question)
             box.setStandardButtons(QMessageBox.StandardButton.Yes
                                    | QMessageBox.StandardButton.No
