@@ -337,9 +337,11 @@ def _reset_router_globals():
     _move_times.clear()
     _pending_moves.clear()
     video_router._power_cache = (0.0, HeadsetPower.UNKNOWN)
+    # No channel-output stub any more: the router does not enforce a channel's
+    # device at all. Sending a channel somewhere moves that channel's own last
+    # link, which sonar_to_pipewire owns — see the note in _process_tick.
     with patch.object(video_router, "_last_native_check", 0.0), \
-         patch("arctis_sound_manager.scripts.video_router.get_native_streams", return_value=[]), \
-         patch("arctis_sound_manager.scripts.video_router._load_channel_outputs", return_value={}):
+         patch("arctis_sound_manager.scripts.video_router.get_native_streams", return_value=[]):
         yield
     _pa_placed.clear()
     _native_placed.clear()
@@ -531,3 +533,36 @@ def test_get_headset_power_unreachable_daemon_is_unknown():
         result = video_router.get_headset_power(force=True)
 
     assert result == HeadsetPower.UNKNOWN
+
+
+def test_a_channels_device_never_drags_its_apps_off_the_channel():
+    """The bug that made the Output menu look inert.
+
+    The router used to walk the streams on a channel's virtual sink and move
+    them onto that channel's chosen device. In the same tick, the override
+    block above put them back — the log showed the pair one second apart, over
+    and over, and picking a device appeared to do nothing at all.
+
+    Winning was no better than losing: a stream dragged off Arctis_Media leaves
+    the channel entirely, past the Sonar EQ and the HeSuVi stage, which is the
+    reason the channel exists. Sending a channel somewhere moves that channel's
+    own last link, and `sonar_to_pipewire.ensure_physical_output_links` owns it.
+
+    So with a device chosen for Media and Chrome sitting on Arctis_Media, the
+    router must leave the stream exactly where it is.
+    """
+    media = _FakeSink(0, "Arctis_Media")
+    earbuds = _FakeSink(1, "bluez_output.30_96_10_49_54_E2.1")
+    si = _FakeSinkInput(10, sink=media.index,
+                        proplist={"application.name": "Google Chrome"})
+    pulse = _FakePulse([media, earbuds], [si], default_sink_name=media.name)
+
+    with patch("arctis_sound_manager.scripts.video_router.get_headset_power",
+               return_value=HeadsetPower.ON), \
+         patch("arctis_sound_manager.scripts.video_router.load_overrides",
+               return_value={"Google Chrome": "Arctis_Media"}), \
+         patch("arctis_sound_manager.scripts.video_router.save_overrides"):
+        _process_tick(pulse)
+
+    assert pulse.moves == []
+    assert si.sink == media.index
