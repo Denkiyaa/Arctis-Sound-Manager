@@ -6,9 +6,14 @@
 Three screens ask the same questions: the Settings row, the Video tab's install
 page, and the recorder's own Uninstall. Before this module each carried its own
 copy of the ``pkexec`` batch, and the copies had already drifted — one of them
-re-probed after installing and one trusted the exit code. Nothing here draws
-anything: callers own their dialogs and their status text, so the same answers
-can be rendered as a settings row or as a full page.
+re-probed after installing and one trusted the exit code.
+
+Most of it draws nothing — callers own their status text, so the same answers
+render as a settings row or as a full page. The exception is
+:func:`confirm_and_remove`, which owns the removal confirmation itself: what it
+has to say (these packages are shared, here is the exact command, here is what
+was kept and why) is the same wherever it is asked from, and three copies of
+that conversation is how the wording drifts apart.
 
 Deliberately free of any ``gi`` / GStreamer import: this runs on machines where
 the whole point is that none of that is installed yet.
@@ -277,3 +282,99 @@ def run_batch(argvs: list[list[str]], keep_going: bool = False) -> tuple[bool, s
         # be able to tell a dependency conflict from a mirror that timed out.
         return False, (proc.stderr or proc.stdout or "").strip()
     return True, ""
+
+
+# ── the removal conversation ──────────────────────────────────────────────────
+
+def _tr(key: str, fallback: str) -> str:
+    from arctis_sound_manager.i18n import I18n
+    try:
+        value = I18n.translate("ui", key)
+    except Exception:  # noqa: BLE001
+        return fallback
+    return fallback if not value or value == key else value
+
+
+def confirm_and_remove(parent) -> bool:
+    """Ask whether to remove the Clips packages, do it, and say what happened.
+
+    Returns False only when the user called the whole thing off; answering "no,
+    keep the packages" is a yes to being done with Clips, which is the question
+    the caller asked.
+
+    Removing is asked separately from switching off, and defaults to no: every
+    one of these packages is shared with the rest of the desktop — video players
+    and browsers use ffmpeg and GStreamer too — so "I am done with clips" is not
+    the same statement as "nothing else here needs ffmpeg". The exact command is
+    shown before anything is elevated, and the removal never forces, so a
+    package something else depends on makes the package manager refuse.
+
+    Saved clips are never touched. This removes software, not recordings.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    argvs, packages = remove_argvs()
+
+    answer = QMessageBox.StandardButton.No
+    if argvs:
+        command = manual_command(argvs)
+        box = QMessageBox(parent)
+        box.setWindowTitle(_tr("clips_uninstall", "Uninstall"))
+        box.setText(_tr("clips_remove_packages_q",
+                        "Also remove the packages Clips installed?"))
+        box.setInformativeText(
+            _tr("clips_remove_packages_hint", "Affected: {0}").format(
+                ", ".join(packages))
+            + (("\n\n" + _tr("clips_remove_command", "The command this runs:")
+                + "\n" + command) if command else ""))
+        box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setStandardButtons(QMessageBox.StandardButton.Yes
+                               | QMessageBox.StandardButton.No
+                               | QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        answer = box.exec()
+        if answer == QMessageBox.StandardButton.Cancel:
+            return False
+
+    set_enabled(False)
+
+    if answer != QMessageBox.StandardButton.Yes:
+        return True
+
+    before = present_names()
+    QApplication.processEvents()
+    try:
+        ok, detail = run_batch(argvs, keep_going=True)
+    except NoPkexec:
+        ok, detail = False, _tr(
+            "clips_no_pkexec",
+            "pkexec not found — install polkit, or remove the packages "
+            "yourself.")
+    if not ok:
+        logger.info("clip package removal did not run: %s", detail)
+        return True
+
+    # Said out loud rather than left to be discovered: "kept, because something
+    # else needs it" is a different outcome from "removal failed", and the user
+    # should not have to open a terminal to tell them apart.
+    after = present_names()
+    gone = sorted(before - after)
+    kept = sorted(after & before)
+    lines = []
+    if gone:
+        lines.append(_tr("clips_removed", "Removed: {0}").format(", ".join(gone)))
+    if kept:
+        lines.append(_tr(
+            "clips_removal_kept",
+            "Kept, because other software on this machine still needs them: "
+            "{0}").format(", ".join(kept)))
+    if lines:
+        done = QMessageBox(parent)
+        done.setWindowTitle(_tr("clips_uninstall", "Uninstall"))
+        done.setText("\n\n".join(lines))
+        done.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        done.setIcon(QMessageBox.Icon.Information)
+        done.exec()
+    return True
