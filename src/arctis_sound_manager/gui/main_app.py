@@ -388,39 +388,26 @@ class QMainApp(QBaseDesktopApp):
             btn.set_active(i == active_idx)
 
     def apply_clips_visibility(self) -> None:
-        """Show or hide the Clips sidebar entry to match the Settings toggle.
+        """Make sure the Video tab is present, and showing the right face.
 
-        The button is hidden rather than removed, and the page stays in the
-        stack: every sidebar index is also its stack index, so dropping one
-        entry would silently renumber Settings and Help. Keeping both costs
-        nothing — ClipsPage builds no capture in its constructor (`_capture` is
-        None until Start is pressed) and no clip module imports GStreamer at
-        module level, which is what lets a machine without any of it still
-        build this window.
+        The entry is never hidden. When Clips is off the tab *is* the
+        explanation and the way to turn it on, so there is no state in which
+        hiding it would be right — and hiding it was how the feature stayed
+        invisible to everyone who did not already know it existed.
 
-        Called again by the toggle, so switching the feature on does not need a
-        restart to be visible.
+        The button is kept in place rather than removed for the same reason it
+        always was: every sidebar index is also its stack index, so dropping an
+        entry would silently renumber Settings and Help. Keeping the page costs
+        nothing — ClipsPage builds no capture in its constructor and no clip
+        module imports GStreamer at module level, which is what lets a machine
+        without any of it still build this window.
         """
-        from arctis_sound_manager.settings import GeneralSettings
-
-        try:
-            enabled = bool(GeneralSettings.read_from_file().clips_enabled)
-        except Exception as exc:  # noqa: BLE001 — never lose the window over a setting
-            self.logger.debug("could not read clips_enabled, hiding Clips: %s", exc)
-            enabled = False
-
-        # The Video tab is always visible: when Clips is off the tab *is* the
-        # explanation and the way to turn it on, so there is no state in which
-        # hiding it is the right call. `enabled` is still read (above) so a bad
-        # settings file is logged, but it no longer gates the button. No
-        # redirect either — the page always leads somewhere.
-        del enabled
         buttons = getattr(self, "_sidebar_buttons", None) or []
         if PAGE_CLIPS < len(buttons):
             buttons[PAGE_CLIPS].setVisible(True)
 
-        # Settings can turn Clips on or off while the window is open, and the
-        # tab has to follow without a restart.
+        # Clips can be switched on or off from the tab itself while the window
+        # is open, and the tab has to follow without a restart.
         self._sync_clips_page()
 
     def _build_clips_page(self):
