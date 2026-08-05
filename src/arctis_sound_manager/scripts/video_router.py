@@ -250,6 +250,43 @@ def _sink_name(sinks, index: int) -> str | None:
     return s.name if s else None
 
 
+CHANNEL_OUTPUTS_FILE = (Path.home() / ".config" / "arctis_manager"
+                        / "channel_output_devices.json")
+
+# The virtual sink each channel's applications sit on.
+_CHANNEL_SINKS = {"game": "Arctis_Game", "chat": "Arctis_Chat",
+                  "media": "Arctis_Media"}
+
+
+def live_channel_sinks(present_sinks: set[str]) -> set[str]:
+    """The channel sinks that still reach a device while the headset is off.
+
+    "Headset off means every Arctis channel is dead" was true when a channel
+    could only ever come out of the headset. It stopped being true when
+    channels got their own output devices: a Game channel pointed at a pair of
+    earbuds plays perfectly well with the headset powered down, and the router
+    treating it as dead is why a game launched in that state was left on the
+    default sink, out of its channel and out of the mixer.
+
+    Read from the same file the GUI writes and checked against the sinks that
+    are actually in the graph, because a channel pointed at earbuds that are
+    switched off is dead again — and so is one pointed back at the headset.
+    """
+    try:
+        prefs = json.loads(CHANNEL_OUTPUTS_FILE.read_text())
+    except (OSError, ValueError):
+        return set()
+
+    live = set()
+    for channel, target in (prefs or {}).items():
+        sink = _CHANNEL_SINKS.get(channel)
+        if not sink or not target or _is_physical_arctis(target):
+            continue
+        if target in present_sinks:
+            live.add(sink)
+    return live
+
+
 def _is_physical_arctis(sink_name: str) -> bool:
     """Return True for the physical Arctis hardware output.
 
@@ -336,13 +373,18 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
     # UNKNOWN power state (daemon down, D-Bus unreachable) fails safe to
     # "touch nothing" (R3).
     headset_power = get_headset_power()
-    if headset_power == HeadsetPower.OFF:
-        # Headset is off: its virtual sinks are effectively dead, so pull
-        # any stream still parked on one of them onto the current default
-        # sink. This is a transient move, not a user choice — never
-        # persisted as an override (R5). When the headset comes back online
-        # the normal enforcement pass below reapplies the saved override and
-        # brings the app back.
+    # Which channels still lead somewhere audible with the headset down. A
+    # channel with its own output device is not dead just because the headset
+    # is, and everything below has to stop assuming otherwise.
+    live_sinks = (live_channel_sinks({s.name for s in sinks})
+                  if headset_power == HeadsetPower.OFF else set())
+    if headset_power == HeadsetPower.OFF and not live_sinks:
+        # Headset is off and no channel has an output of its own to fall back
+        # on: its virtual sinks are effectively dead, so pull any stream still
+        # parked on one of them onto the current default sink. This is a
+        # transient move, not a user choice — never persisted as an override
+        # (R5). When the headset comes back online the normal enforcement pass
+        # below reapplies the saved override and brings the app back.
         #
         # Skip entirely when the default sink is ITSELF an Arctis sink — a
         # virtual channel (ARCTIS_VIRTUAL_SINKS) or the physical SteelSeries
@@ -377,6 +419,39 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
     sink_inputs = pulse.sink_input_list()
     sink_map = {s.name: s.index for s in sinks}
     sink_idx_to_name = {s.index: s.name for s in sinks}
+
+    def _reachable(sink_name: str) -> bool:
+        """Whether putting a stream on *sink_name* would be audible right now.
+
+        Only ever False with the headset off, and only for the channels that
+        have nowhere else to go: with a device of their own they are as alive
+        as the headset ever made them. Enforcing an override onto a channel
+        that leads to a powered-down headset would be moving audio into
+        silence, which is what the whole headset-off branch exists to avoid.
+        """
+        if headset_power != HeadsetPower.OFF:
+            return True
+        if sink_name in live_sinks:
+            return True
+        return not (sink_name in ARCTIS_VIRTUAL_SINKS
+                    or _is_physical_arctis(sink_name))
+
+    if (headset_power == HeadsetPower.OFF and default_sink
+            and _reachable(default_sink_name)):
+        # Some channels are alive and some are not. Clear out only the dead
+        # ones, and leave everything on a live channel exactly where it is.
+        # Nothing to clear them onto when the default sink is itself the
+        # silent headset, which is the state this machine is usually in.
+        for si in sink_inputs:
+            current = sink_idx_to_name.get(si.sink, "")
+            if not si.proplist.get("application.name") or not current:
+                continue
+            if current in live_sinks or _reachable(current):
+                continue
+            if si.sink != default_sink.index:
+                log.info("Headset off: '%s' -> %s (its channel leads nowhere)",
+                         si.proplist.get("application.name"), default_sink_name)
+                pulse.sink_input_move(si.index, default_sink.index)
 
     # ── PulseAudio streams ────────────────────────────────────────────────
     pa_now = time.monotonic()
@@ -444,7 +519,12 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
                 save_overrides(overrides)
                 wanted = auto
 
-        if wanted is not None:
+        if wanted is not None and not _reachable(wanted):
+            # The override names a channel that leads to a headset which is
+            # off. Leave the stream where it is rather than moving it into
+            # silence; the next tick with the headset on puts it back.
+            _pa_placed[key] = si.sink
+        elif wanted is not None:
             wanted_index = sink_map.get(wanted)
             if wanted_index is not None and si.sink != wanted_index:
                 log.info("Override: moving '%s' -> %s", app, wanted)
@@ -524,7 +604,11 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
                 save_overrides(overrides)
                 wanted = auto
 
-        if wanted is not None:
+        if wanted is not None and not _reachable(wanted):
+            # Same as the PA path: a channel that leads to a headset which is
+            # off is not somewhere to move audio to.
+            _native_placed[key] = s["sink_name"]
+        elif wanted is not None:
             if s["sink_name"] is None or s["sink_name"] != wanted:
                 log.info("Override native: moving '%s' -> %s", app, wanted)
                 move_native_stream(s["id"], wanted)
