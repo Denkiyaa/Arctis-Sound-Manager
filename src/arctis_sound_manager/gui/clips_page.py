@@ -679,9 +679,25 @@ class ClipsPage(QWidget):
     # ── library ───────────────────────────────────────────────────────────────
 
     def refresh_clips(self) -> None:
-        """Rebuild the grid from disk, newest first."""
+        """Rebuild the grid from disk, newest first.
+
+        Three things are carried across the rebuild, because the grid is thrown
+        away and built again on every save, delete and editor close, and losing
+        any of them is felt immediately:
+
+        * **Where the list was scrolled to.** Deleting the fourth clip from the
+          bottom of a long library used to jump back to the top, so deleting
+          several in a row meant scrolling back down after each one.
+        * **Which clip was selected**, when it is still there.
+        * **The place in the list**, when it is not — the clip that took the
+          deleted one's position is selected instead, so the next Delete is
+          already aimed. Only when something was selected to begin with:
+          refreshing after a save must not select anything on its own.
+        """
         selected = self._list.currentItem()
         keep = selected.data(Qt.ItemDataRole.UserRole) if selected else None
+        keep_row = self._list.row(selected) if selected else -1
+        scroll = self._list.verticalScrollBar().value()
 
         from arctis_sound_manager.clip_library import list_clips
 
@@ -718,6 +734,16 @@ class ClipsPage(QWidget):
             self._list.addItem(item)
             if str(clip) == keep:
                 self._list.setCurrentItem(item)
+
+        if keep is not None and self._list.currentItem() is None and self._list.count():
+            # The selected clip is gone — deleted, renamed, or moved away.
+            # Whatever now sits in its place is what the user is looking at.
+            self._list.setCurrentRow(min(keep_row, self._list.count() - 1))
+
+        # Restored after any selection change, because selecting an item scrolls
+        # to it and would otherwise undo this.
+        bar = self._list.verticalScrollBar()
+        bar.setValue(min(scroll, bar.maximum()))
 
         self._update_selection_actions()
 

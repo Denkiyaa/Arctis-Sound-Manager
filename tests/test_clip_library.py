@@ -245,3 +245,59 @@ def test_one_failure_does_not_abandon_the_rest(tmp_path, no_trash):
     assert gone == 1
     assert failed == [missing]
     assert not good.exists()
+
+
+# ── the grid survives a rebuild ───────────────────────────────────────────────
+
+def test_deleting_a_clip_does_not_throw_the_list_back_to_the_top(tmp_path,
+                                                                 monkeypatch):
+    """Reported from use: right-click a clip near the bottom of a long library,
+    delete it, and the grid jumps to the top — so deleting several in a row
+    means scrolling back down after each one. The grid is rebuilt from disk on
+    every change, and the scroll position was not carried across."""
+    import os
+    from pathlib import Path
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from arctis_sound_manager.gui import clips_page
+
+    for index in range(40):
+        (tmp_path / f"clip_2026-08-01_10-00-{index:02d}.mkv").write_bytes(b"video")
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(clips_page, "CLIP_DIR", tmp_path)
+    # No poster frames: forty fake files would each start an ffmpeg run that
+    # can only fail, and the failures land in Qt's worker threads.
+    monkeypatch.setattr(clips_page.ClipsPage, "_queue_thumbnail",
+                        lambda self, clip: None)
+
+    page = clips_page.ClipsPage()
+    try:
+        page.resize(700, 420)
+        page.show()
+        app.processEvents()
+        page.refresh_clips()
+        app.processEvents()
+
+        bar = page._list.verticalScrollBar()
+        assert bar.maximum() > 0, "the fixture library is too short to scroll"
+
+        bar.setValue(bar.maximum())
+        parked = bar.value()
+        page._list.setCurrentRow(page._list.count() - 1)
+        doomed = Path(page._list.currentItem().data(Qt.ItemDataRole.UserRole))
+
+        # What a delete does: the file goes, then the grid is rebuilt.
+        doomed.unlink()
+        page.refresh_clips()
+        app.processEvents()
+
+        assert bar.value() == min(parked, bar.maximum())
+        assert page._list.currentItem() is not None, \
+            "nothing is selected, so the next Delete has nothing to aim at"
+    finally:
+        page.deleteLater()
