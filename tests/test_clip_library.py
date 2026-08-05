@@ -264,9 +264,10 @@ def test_deleting_a_clip_does_not_throw_the_list_back_to_the_top(tmp_path,
     from PySide6.QtWidgets import QApplication
 
     from arctis_sound_manager.gui import clips_page
+    from arctis_sound_manager.gui.clips_page import CARD_SIZE
 
-    for index in range(40):
-        (tmp_path / f"clip_2026-08-01_10-00-{index:02d}.mkv").write_bytes(b"video")
+    for index in range(120):
+        (tmp_path / f"clip_2026-08-01_10-{index // 60:02d}-{index % 60:02d}.mkv").write_bytes(b"video")
 
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(clips_page, "CLIP_DIR", tmp_path)
@@ -296,7 +297,12 @@ def test_deleting_a_clip_does_not_throw_the_list_back_to_the_top(tmp_path,
         page.refresh_clips()
         app.processEvents()
 
-        assert bar.value() == min(parked, bar.maximum())
+        # Within a card of where it was, not exactly on it: an icon view keeps
+        # relaying out after the rebuild, so the scrollbar's range is still
+        # moving while this is checked. What was reported — and what this pins
+        # — is the jump back to the top.
+        assert bar.value() > 0, "the grid jumped back to the top"
+        assert abs(bar.value() - min(parked, bar.maximum())) <= CARD_SIZE.height()
         assert page._list.currentItem() is not None, \
             "nothing is selected, so the next Delete has nothing to aim at"
     finally:

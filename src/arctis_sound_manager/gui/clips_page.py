@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from PySide6.QtCore import (QMimeData, QObject, QPointF, QRunnable, QSize, Qt,
@@ -24,6 +25,7 @@ from PySide6.QtGui import (QColor, QDesktopServices, QIcon, QKeySequence,
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QInputDialog,
@@ -35,8 +37,10 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 import arctis_sound_manager.gui.theme as _theme
@@ -63,6 +67,24 @@ _THUMB_THREADS = 2
 # rule the module docstring sets out. test_clip_rate keeps the two in step.
 _FPS_CHOICES = (30, 60)
 _DEFAULT_FPS = 30
+
+
+# How often the page asks whether a game is playing, and how long a game has to
+# be gone before the capture follows it. The poll is cheap (one PulseAudio round
+# trip) and the grace is what keeps a loading screen or a silent cutscene from
+# tearing the buffer down mid-session — losing it would cost the user the very
+# seconds they came back for.
+_GAME_POLL_MS = 5_000
+_GAME_GONE_GRACE_S = 45.0
+
+
+def _autostart_enabled() -> bool:
+    try:
+        from arctis_sound_manager.settings import GeneralSettings
+        return bool(GeneralSettings.read_from_file().clips_autostart)
+    except Exception:  # noqa: BLE001 — a broken settings file is not worth the page
+        logger.debug("could not read clips_autostart, assuming on", exc_info=True)
+        return True
 
 
 def _tr(key: str, fallback: str) -> str:
@@ -300,6 +322,17 @@ class ClipsPage(QWidget):
 
         actions.addStretch(1)
 
+        # Everything you set once, in one place, out of the way of the two
+        # buttons above. A tool button rather than a plain one so the menu opens
+        # on a click rather than needing the arrow.
+        self._settings_btn = QToolButton()
+        self._settings_btn.setText("⚙")
+        self._settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._settings_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._settings_btn.setToolTip(_tr("clips_settings", "Capture settings"))
+        self._settings_btn.setStyleSheet("QToolButton::menu-indicator { image: none; }")
+        actions.addWidget(self._settings_btn)
+
         self._folder_btn = QPushButton(_tr("clips_open_folder", "Open folder"))
         self._folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._folder_btn.clicked.connect(
@@ -321,24 +354,41 @@ class ClipsPage(QWidget):
 
         root.addLayout(actions)
 
-        settings = QHBoxLayout()
+        # ── settings, behind a gear ───────────────────────────────────────────
+        # These used to be a second row across the page: five labels and five
+        # controls that are set once and then never looked at again, carrying
+        # the same weight as Start and Save. Behind a gear they stop competing
+        # with the two buttons that are actually pressed while playing, and the
+        # page gets the room back for the library, which is what people open it
+        # for. One row per setting rather than a line of them, because a popup
+        # is read down, not across.
+        settings_box = QWidget()
+        settings = QVBoxLayout(settings_box)
+        settings.setContentsMargins(14, 12, 14, 12)
         settings.setSpacing(10)
 
-        settings.addWidget(QLabel(_tr("clips_length", "Length:")))
+        def _row(label_key: str, fallback: str, *widgets) -> None:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            label = QLabel(_tr(label_key, fallback))
+            label.setMinimumWidth(96)
+            row.addWidget(label)
+            for widget in widgets:
+                row.addWidget(widget)
+            row.addStretch(1)
+            settings.addLayout(row)
+
         self._seconds = QSpinBox()
         self._seconds.setRange(5, 300)
         self._seconds.setValue(30)
         self._seconds.setSuffix(" s")
-        settings.addWidget(self._seconds)
-
-        settings.addSpacing(12)
+        _row("clips_length", "Length:", self._seconds)
 
         # A ceiling, not a target — see clip_capture.FPS_CHOICES. It is offered
         # because it decides the keyframe interval and the encoder's budget, and
         # locked while capturing because both are fixed when the pipeline is
         # built: changing it live would mean tearing the capture down, and the
         # buffer with it.
-        settings.addWidget(QLabel(_tr("clips_fps", "Frame rate:")))
         self._fps = QComboBox()
         for value in _FPS_CHOICES:
             self._fps.addItem(f"{value} fps", value)
@@ -348,14 +398,11 @@ class ClipsPage(QWidget):
             "The most this will record. The screen is only captured when it "
             "changes, so the real rate is usually lower — a clip can be set to "
             "an exact rate when you export it."))
-        settings.addWidget(self._fps)
-
-        settings.addSpacing(12)
+        _row("clips_fps", "Frame rate:", self._fps)
 
         # What is being captured cannot be *shown* — the choice lives in the
         # portal and Wayland never tells the app what was picked — so this
         # offers the only honest thing: the way back to the picker.
-        settings.addWidget(QLabel(_tr("clips_source", "Capture:")))
         self._source_btn = QPushButton(_tr("clips_change_source", "Change…"))
         self._source_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._source_btn.setToolTip(_tr(
@@ -364,25 +411,42 @@ class ClipsPage(QWidget):
             "once and the answer is remembered, so this is the way to change "
             "it."))
         self._source_btn.clicked.connect(self._on_change_source)
-        settings.addWidget(self._source_btn)
+        _row("clips_source", "Capture:", self._source_btn)
 
-        settings.addSpacing(12)
-
-        settings.addWidget(QLabel(_tr("clips_shortcut", "Shortcut:")))
         self._shortcut_lbl = QLabel("")
         self._shortcut_lbl.setStyleSheet(
             f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 9pt; "
             f"background: transparent;")
-        settings.addWidget(self._shortcut_lbl)
-
         self._shortcut_btn = QPushButton(_tr("clips_change_shortcut", "Change…"))
         self._shortcut_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._shortcut_btn.setEnabled(False)
         self._shortcut_btn.clicked.connect(self._on_configure_shortcut)
-        settings.addWidget(self._shortcut_btn)
+        _row("clips_shortcut", "Shortcut:", self._shortcut_lbl, self._shortcut_btn)
+
+        # Left on, because someone who installed a clip recorder wants the last
+        # thirty seconds of the game they just started, and a buffer that has to
+        # be armed by hand is armed after the moment worth keeping. It is a
+        # switch rather than a rule for the people who would rather decide
+        # themselves when their screen is being read.
+        self._autostart = QCheckBox(_tr(
+            "clips_autostart", "Capture automatically while a game is running"))
+        self._autostart.setToolTip(_tr(
+            "clips_autostart_hint",
+            "Starts the buffer when a game starts playing audio and stops it "
+            "when the game is gone — a capture nothing is using costs CPU and "
+            "battery for a recording no one will ask for."))
+        self._autostart.setChecked(_autostart_enabled())
+        self._autostart.toggled.connect(self._on_autostart_toggled)
+        settings.addWidget(self._autostart)
 
         settings.addStretch(1)
-        root.addLayout(settings)
+
+        self._settings_menu = QMenu(self)
+        holder = QWidgetAction(self._settings_menu)
+        holder.setDefaultWidget(settings_box)
+        self._settings_menu.addAction(holder)
+
+        self._settings_btn.setMenu(self._settings_menu)
 
         self._status = QLabel("")
         self._status.setStyleSheet(
@@ -483,10 +547,24 @@ class ClipsPage(QWidget):
         self._timer.timeout.connect(self._tick)
         self._timer.start()
 
+        # Following the game runs on its own, slower timer: detect_game() is a
+        # PulseAudio round trip and the second-by-second one above is for the
+        # buffer read-out.
+        self._auto_started = False
+        self._game_gone_since: float | None = None
+        self._game_timer = QTimer(self)
+        self._game_timer.setInterval(_GAME_POLL_MS)
+        self._game_timer.timeout.connect(self._poll_game)
+        self._game_timer.start()
+
         self._shortcut = None
         self._bind_shortcut()
         self.refresh_clips()
         self._update_status()
+        # Asked once at startup as well as on the timer: a page opened while a
+        # game is already running should arm the buffer now, not in five
+        # seconds.
+        QTimer.singleShot(0, self._poll_game)
 
     # ── global shortcut ───────────────────────────────────────────────────────
 
@@ -526,8 +604,9 @@ class ClipsPage(QWidget):
     def _update_shortcut_label(self) -> None:
         trigger = self._shortcut.current_trigger() if self._shortcut else None
         if trigger:
-            self._shortcut_lbl.setText(
-                _tr("clips_shortcut", "Shortcut:") + f"  {trigger}")
+            # Just the combination: the row it sits in is already labelled
+            # "Shortcut:", and repeating it read as "Shortcut: Shortcut: Alt+F".
+            self._shortcut_lbl.setText(str(trigger))
         elif self._shortcut is not None and self._shortcut.available:
             # Bound, but the compositor has not reported the combination yet.
             self._shortcut_lbl.setText(_tr(
@@ -632,6 +711,74 @@ class ClipsPage(QWidget):
         self._save_btn.setEnabled(False)
         self._fps.setEnabled(True)
         self._update_status()
+
+    # ── following the game ────────────────────────────────────────────────────
+
+    def _on_autostart_toggled(self, on: bool) -> None:
+        try:
+            from arctis_sound_manager.settings import GeneralSettings
+            settings = GeneralSettings.read_from_file()
+            settings.clips_autostart = bool(on)
+            settings.write_to_file()
+        except Exception:  # noqa: BLE001
+            logger.warning("could not persist clips_autostart", exc_info=True)
+        self._game_gone_since = None
+        if on:
+            self._poll_game()
+
+    def _poll_game(self) -> None:
+        """Start the capture when a game shows up, drop it when the game goes.
+
+        A rolling buffer is only useful if it is already running when something
+        worth keeping happens, and the thing people forget is arming it. The
+        game is found the same way a clip is labelled — `detect_game()`, which
+        asks what the user routed to the Game channel before it guesses — so
+        this needs no list of titles to maintain.
+
+        Stopping matters as much as starting: a capture with no game behind it
+        holds a screen's worth of frames in memory and keeps an encoder busy for
+        a recording nobody is going to ask for. It is not immediate, though. A
+        game goes quiet for a loading screen or a cutscene, and tearing the
+        pipeline down there would throw away the buffer and take a portal
+        prompt to rebuild — so silence has to last `_GAME_GONE_GRACE_S` first.
+
+        Only the capture this started is stopped. Someone who pressed Start
+        themselves gets to decide when it ends.
+        """
+        if self._closing or not self._autostart.isChecked():
+            return
+
+        try:
+            from arctis_sound_manager.clip_capture import detect_game
+            game = detect_game()
+        except Exception:  # noqa: BLE001 — a probe failure is not worth the page
+            logger.debug("could not look for a game", exc_info=True)
+            return
+
+        if game:
+            self._game_gone_since = None
+            if self._capture is None:
+                logger.info("clips: '%s' is playing — starting the capture", game)
+                self._on_toggle()
+                if self._capture is not None:
+                    self._auto_started = True
+            return
+
+        if self._capture is None or not self._auto_started:
+            return
+
+        now = time.monotonic()
+        if self._game_gone_since is None:
+            self._game_gone_since = now
+            return
+        if now - self._game_gone_since < _GAME_GONE_GRACE_S:
+            return
+
+        logger.info("clips: no game for %.0fs — stopping the capture",
+                    _GAME_GONE_GRACE_S)
+        self._game_gone_since = None
+        self._auto_started = False
+        self._stop_capture()
 
     def _on_uninstall(self) -> None:
         """Switch Clips off from the tab, and offer to remove its packages.
@@ -741,9 +888,16 @@ class ClipsPage(QWidget):
             self._list.setCurrentRow(min(keep_row, self._list.count() - 1))
 
         # Restored after any selection change, because selecting an item scrolls
-        # to it and would otherwise undo this.
-        bar = self._list.verticalScrollBar()
-        bar.setValue(min(scroll, bar.maximum()))
+        # to it and would otherwise undo this — and then again once the event
+        # loop has run, because an icon view lays its cards out lazily: the
+        # scrollbar's range is still the old one at this point, so a position
+        # near the end gets clamped to a maximum that is about to grow.
+        def _restore_scroll(value: int = scroll) -> None:
+            bar = self._list.verticalScrollBar()
+            bar.setValue(min(value, bar.maximum()))
+
+        _restore_scroll()
+        QTimer.singleShot(0, _restore_scroll)
 
         self._update_selection_actions()
 

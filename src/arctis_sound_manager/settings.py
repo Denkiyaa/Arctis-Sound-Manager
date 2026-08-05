@@ -146,6 +146,14 @@ class GeneralSettings(JsonSerializable):
     # a surprise, and this one holds a rolling buffer of the screen.
     clips_enabled: bool = False
 
+    # Arm the rolling buffer while a game is running, and let it go when the
+    # game does. On, because a buffer that has to be armed by hand is armed
+    # after the moment worth keeping — which is the one thing this feature
+    # exists to catch. It only ever applies once Clips itself has been switched
+    # on above, so nothing here records a screen the user did not ask it to;
+    # the switch is for people who would rather decide each time.
+    clips_autostart: bool = True
+
     # OLED display brightness (0–10)
     oled_brightness: int = 8
 
