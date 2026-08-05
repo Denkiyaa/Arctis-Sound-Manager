@@ -143,3 +143,56 @@ def test_placeholder_fills_the_card_while_the_frame_is_extracted(app):
     icon = _placeholder_icon()
     assert not icon.isNull()
     assert icon.pixmap(THUMB_SIZE).size() == THUMB_SIZE
+
+
+# ── the right-click menu ──────────────────────────────────────────────────────
+#
+# The menu's contents are asked of ClipsPage.context_actions rather than of a
+# built page, for the reason in this file's docstring: constructing ClipsPage
+# registers a global shortcut through the desktop portal.
+
+def _labels(entries):
+    return [label for name, label, _ in entries if name]
+
+
+def test_right_clicking_a_clip_offers_what_to_do_with_it():
+    """Right-click is where everyone looks first for what to do with a file.
+    The buttons above the grid stay — they are how the actions are discovered —
+    but a grid that does nothing on right-click reads as unfinished."""
+    from arctis_sound_manager.gui.clips_page import ClipsPage
+
+    assert _labels(ClipsPage.context_actions(1)) == [
+        "Open", "Rename\u2026", "Delete", "Open folder"]
+
+
+def test_right_clicking_empty_space_offers_only_the_folder():
+    """Nothing under the cursor means nothing to act on — offering Delete there
+    would be offering to delete whatever happened to still be selected."""
+    from arctis_sound_manager.gui.clips_page import ClipsPage
+
+    assert _labels(ClipsPage.context_actions(0)) == ["Open folder"]
+
+
+def test_a_multi_selection_can_be_deleted_but_not_renamed():
+    """Renaming several files to one name is not a thing, and opening several
+    clips at once is several editors — but deleting them is exactly what a
+    multi-selection is for, and the menu says how many."""
+    from arctis_sound_manager.gui.clips_page import ClipsPage
+
+    entries = {label: enabled
+               for name, label, enabled in ClipsPage.context_actions(3) if name}
+
+    assert entries["Open"] is False
+    assert entries["Rename\u2026"] is False
+    assert entries["Delete 3 clips"] is True
+
+
+def test_the_menu_keeps_its_shape_whatever_is_selected():
+    """Entries are disabled rather than dropped: a menu whose items move around
+    depending on the selection is one you have to read every time."""
+    from arctis_sound_manager.gui.clips_page import ClipsPage
+
+    one = [name for name, _, _ in ClipsPage.context_actions(1)]
+    many = [name for name, _, _ in ClipsPage.context_actions(4)]
+
+    assert one == many
