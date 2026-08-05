@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QListView,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -434,6 +435,11 @@ class ClipsPage(QWidget):
         delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self._list)
         delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
         delete_shortcut.activated.connect(self._on_delete)
+        # Right-click, because that is where everyone looks first for what to do
+        # with a file. The buttons above stay: they are how the actions are
+        # discovered at all, and they show at a glance what a selection can do.
+        self._list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._list.customContextMenuRequested.connect(self._on_context_menu)
         root.addWidget(self._list, stretch=1)
 
         self._empty = QLabel(_tr(
@@ -768,6 +774,73 @@ class ClipsPage(QWidget):
         self._selection_lbl.setText(
             "" if count == 0 else
             _tr("clips_selected", "{n} selected").replace("{n}", str(count)))
+
+    @staticmethod
+    def context_actions(selected: int) -> list[tuple[str, str, bool]]:
+        """What the right-click menu offers for *selected* clips.
+
+        ``(handler name, label, enabled)`` per entry, with ``""`` for a
+        separator. Kept apart from the menu it fills so it can be tested without
+        building the page — constructing ClipsPage registers a global shortcut
+        through the desktop portal, which is a real request to the compositor of
+        whoever runs the suite.
+        """
+        if selected == 0:
+            # Nothing under the cursor: the only thing left to offer is the
+            # folder itself.
+            return [("folder", _tr("clips_open_folder", "Open folder"), True)]
+
+        one = selected == 1
+        return [
+            # Opening several clips at once would be several editors, and
+            # renaming several to one name is not a thing — so both are shown
+            # and disabled rather than hidden, which would make the menu change
+            # shape depending on how much is selected.
+            ("open", _tr("clips_open", "Open"), one),
+            ("rename", _tr("clips_rename_menu", "Rename…"), one),
+            ("", "", True),
+            ("delete",
+             _tr("clips_delete_one_menu", "Delete") if one else
+             _tr("clips_delete_many_menu", "Delete {n} clips")
+             .replace("{n}", str(selected)), True),
+            ("", "", True),
+            ("folder", _tr("clips_open_folder", "Open folder"), True),
+        ]
+
+    def _on_context_menu(self, point) -> None:
+        """The right-click menu for a clip, or for the empty space around them.
+
+        Right-clicking a card that is not in the current selection selects it
+        first, and does not clear a selection the click landed inside. That is
+        how every file manager behaves, and getting it wrong is how a menu
+        deletes the wrong five files: without it, right-clicking one card while
+        five are selected would act on the five.
+
+        Rename asks for exactly one clip, so it is offered only when one is
+        selected rather than silently renaming the first of many.
+        """
+        item = self._list.itemAt(point)
+        if item is not None and not item.isSelected():
+            self._list.setCurrentItem(item)
+
+        handlers = {
+            "open": lambda: self._on_open_clip(self._list.selectedItems()[0]),
+            "rename": self._on_rename,
+            "delete": self._on_delete,
+            "folder": lambda: QDesktopServices.openUrl(
+                QUrl.fromLocalFile(str(CLIP_DIR))),
+        }
+
+        menu = QMenu(self._list)
+        for name, label, enabled in self.context_actions(len(self._selected_clips())):
+            if not name:
+                menu.addSeparator()
+                continue
+            action = menu.addAction(label)
+            action.setEnabled(enabled)
+            action.triggered.connect(handlers[name])
+
+        menu.exec(self._list.viewport().mapToGlobal(point))
 
     def _on_select_all(self) -> None:
         self._list.selectAll()
