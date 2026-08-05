@@ -566,3 +566,105 @@ def test_a_channels_device_never_drags_its_apps_off_the_channel():
 
     assert pulse.moves == []
     assert si.sink == media.index
+
+
+# ── a channel with its own device outlives the headset ────────────────────────
+
+def _channel_prefs(tmp_path, prefs):
+    import json as _json
+    path = tmp_path / "channel_output_devices.json"
+    path.write_text(_json.dumps(prefs))
+    return path
+
+
+def test_a_game_launched_with_the_headset_off_still_reaches_its_channel(tmp_path):
+    """Reported as "Genshin does not show under Game".
+
+    The headset was off and the Game channel was pointed at a pair of earbuds.
+    "Headset off means every Arctis channel is dead" predates channels having
+    their own output devices, and it made the tick return before enforcing
+    anything — so a game launched in that state was left on the default sink,
+    out of its channel and out of the mixer, while an app placed *before* the
+    headset went off simply stayed where it was. Hence one app visible in the
+    channels and the other not.
+    """
+    earbuds = _FakeSink(0, "bluez_output.30_96_10_49_54_E2.1")
+    game = _FakeSink(1, "Arctis_Game")
+    physical = _FakeSink(2, "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo")
+    si = _FakeSinkInput(10, sink=physical.index,
+                        proplist={"application.name": "GenshinImpact.exe",
+                                  "application.process.binary": "wine64-preloader"})
+    pulse = _FakePulse([earbuds, game, physical], [si],
+                       default_sink_name=physical.name)
+
+    with patch("arctis_sound_manager.scripts.video_router.CHANNEL_OUTPUTS_FILE",
+               _channel_prefs(tmp_path, {"game": earbuds.name})), \
+         patch("arctis_sound_manager.scripts.video_router.get_headset_power",
+               return_value=HeadsetPower.OFF), \
+         patch("arctis_sound_manager.scripts.video_router.load_overrides",
+               return_value={"GenshinImpact.exe": "Arctis_Game"}), \
+         patch("arctis_sound_manager.scripts.video_router.save_overrides"):
+        _process_tick(pulse)
+
+    assert si.sink == game.index, "the game never reached its channel"
+
+
+def test_a_channel_that_leads_to_the_silent_headset_is_still_left_alone(tmp_path):
+    """The other half of the same rule: with no device of its own, a channel
+    with the headset off leads nowhere, and moving audio onto it would be
+    moving it into silence."""
+    hdmi = _FakeSink(0, "alsa_output.hdmi-stereo")
+    game = _FakeSink(1, "Arctis_Game")
+    si = _FakeSinkInput(10, sink=hdmi.index,
+                        proplist={"application.name": "GenshinImpact.exe"})
+    pulse = _FakePulse([hdmi, game], [si], default_sink_name=hdmi.name)
+
+    with patch("arctis_sound_manager.scripts.video_router.CHANNEL_OUTPUTS_FILE",
+               _channel_prefs(tmp_path, {})), \
+         patch("arctis_sound_manager.scripts.video_router.get_headset_power",
+               return_value=HeadsetPower.OFF), \
+         patch("arctis_sound_manager.scripts.video_router.load_overrides",
+               return_value={"GenshinImpact.exe": "Arctis_Game"}), \
+         patch("arctis_sound_manager.scripts.video_router.save_overrides"):
+        _process_tick(pulse)
+
+    assert si.sink == hdmi.index
+
+
+def test_only_the_channels_that_lead_nowhere_are_cleared(tmp_path):
+    """Media points at the earbuds and Chat does not. With the headset off,
+    clearing both would take the user's Media placement away for no reason."""
+    earbuds = _FakeSink(0, "bluez_output.30_96_10_49_54_E2.1")
+    media = _FakeSink(1, "Arctis_Media")
+    chat = _FakeSink(2, "Arctis_Chat")
+    hdmi = _FakeSink(3, "alsa_output.hdmi-stereo")
+    on_media = _FakeSinkInput(10, sink=media.index,
+                              proplist={"application.name": "Google Chrome"})
+    on_chat = _FakeSinkInput(11, sink=chat.index,
+                             proplist={"application.name": "Discord"})
+    pulse = _FakePulse([earbuds, media, chat, hdmi], [on_media, on_chat],
+                       default_sink_name=hdmi.name)
+
+    with patch("arctis_sound_manager.scripts.video_router.CHANNEL_OUTPUTS_FILE",
+               _channel_prefs(tmp_path, {"media": earbuds.name})), \
+         patch("arctis_sound_manager.scripts.video_router.get_headset_power",
+               return_value=HeadsetPower.OFF), \
+         patch("arctis_sound_manager.scripts.video_router.load_overrides",
+               return_value={}), \
+         patch("arctis_sound_manager.scripts.video_router.save_overrides"):
+        _process_tick(pulse)
+
+    assert on_media.sink == media.index, "a live channel was cleared"
+    assert on_chat.sink == hdmi.index, "a dead channel was not cleared"
+
+
+def test_earbuds_that_are_switched_off_do_not_keep_a_channel_alive(tmp_path):
+    """The saved device has to actually be in the graph. A channel pointed at
+    earbuds that are not connected is as dead as one pointed at the headset."""
+    from arctis_sound_manager.scripts import video_router as vr
+
+    with patch("arctis_sound_manager.scripts.video_router.CHANNEL_OUTPUTS_FILE",
+               _channel_prefs(tmp_path, {"game": "bluez_output.gone"})):
+        assert vr.live_channel_sinks({"Arctis_Game"}) == set()
+        assert vr.live_channel_sinks({"Arctis_Game", "bluez_output.gone"}) == \
+            {"Arctis_Game"}
