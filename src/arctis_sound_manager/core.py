@@ -1144,7 +1144,14 @@ class CoreEngine:
             return
 
         try:
-            read_input: list[int] = list(await asyncio.to_thread(usb_device.read, endpoint, max_packet_size, 200))
+            # 1 s read timeout, not 200 ms: an interrupt IN read returns the
+            # instant the device sends a frame, so a longer timeout does NOT add
+            # latency — it only lowers how often the loop wakes on an idle
+            # endpoint. Paired with the timeout no longer triggering a back-off
+            # (see the except below), this is what makes a turned dial land in
+            # milliseconds instead of every second or two (GameDAC 2 volume /
+            # ChatMix responsiveness).
+            read_input: list[int] = list(await asyncio.to_thread(usb_device.read, endpoint, max_packet_size, 1000))
             self._eio_count = 0  # transfer succeeded, clear any EIO recovery state
             with self._device_lock:
                 if self.device_config is None:
@@ -1182,7 +1189,17 @@ class CoreEngine:
 
             await asyncio.sleep(0.1)
         except usb.core.USBError as e:
-            if e.errno in (16, 110):  # EBUSY / ETIMEDOUT — back off to avoid spam
+            if isinstance(e, usb.core.USBTimeoutError) or e.errno == 110:  # ETIMEDOUT
+                # A plain interrupt-read timeout is the NORMAL idle state — no
+                # frame was pending — not an error, so it must not be backed off
+                # from. The old 1 s sleep here left the endpoint deaf for a full
+                # second at a time, so a dial's real-time push frames (0x0725
+                # volume, 0x0745 ChatMix) were only picked up about once a
+                # second — the "updates every few seconds / turn it back the
+                # other way to register" the GameDAC 2 users saw. The read
+                # timeout paces the loop on its own; just read again.
+                pass
+            elif e.errno == 16:  # EBUSY — interface genuinely busy, back off
                 await asyncio.sleep(1.0)
             elif e.errno in (19, 2):  # ENODEV / ENOENT — dongle present, RF link gone
                 self._enodev_count = getattr(self, '_enodev_count', 0) + 1
