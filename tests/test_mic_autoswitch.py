@@ -52,3 +52,26 @@ def test_mute_unmuted_switches_to_headset():
 
 def test_mute_ignores_other_keys():
     assert R("mute", "headset_power_status", "headset_power_status", False, True, ALT) is None
+
+
+# ── mode "both": either condition engages the alternate (community request) ──
+
+def test_both_offline_switches_to_alt_regardless_of_mute():
+    assert R("both", "headset_power_status", "headset_power_status", False, False, ALT) == ALT
+
+
+def test_both_online_and_unmuted_switches_to_headset():
+    assert R("both", "headset_power_status", "headset_power_status", True, False, ALT) == "__auto__"
+
+
+def test_both_online_but_muted_switches_to_alt():
+    assert R("both", "mic_status", "headset_power_status", True, True, ALT) == ALT
+
+
+def test_both_offline_via_mic_key_still_switches_to_alt():
+    # Either status key can carry the trigger in "both" mode.
+    assert R("both", "mic_status", "headset_power_status", False, False, ALT) == ALT
+
+
+def test_both_ignores_unrelated_keys():
+    assert R("both", "eq_band_value", "headset_power_status", False, True, ALT) is None

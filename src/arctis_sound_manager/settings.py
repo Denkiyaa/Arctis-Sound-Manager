@@ -141,8 +141,11 @@ class GeneralSettings(JsonSerializable):
     # Trigger: 0 = off (manual only, via micro_input_source); 1 = on headset
     # connection/power (alternate when the headset is off/out of range, headset
     # mic when it's on); 2 = on headset mic mute (alternate when muted, headset
-    # mic when not). Stays inert on any headset that doesn't report the matching
-    # status — manual switching via micro_input_source still works everywhere.
+    # mic when not); 3 = either (alternate when the headset is off OR the mic is
+    # muted, headset mic only when it's on AND unmuted). Stays inert on any
+    # headset that doesn't report the matching status — a headset that never
+    # reports mute makes mode 3 behave like mode 1. Manual switching via
+    # micro_input_source still works everywhere.
     micro_autoswitch: int = 0
 
     # OLED display brightness (0–10)
@@ -207,7 +210,7 @@ class GeneralSettings(JsonSerializable):
         ConfigSetting('hrir_id', SettingType.SELECT, None, options_source='hrir_files', options_mapping={ 'value': 'id', 'label': 'name' }),
         ConfigSetting('micro_input_source', SettingType.SELECT, "__auto__", options_source='pulse_audio_sources', options_mapping={ 'value': 'id', 'label': 'name' }),
         ConfigSetting('micro_alt_source', SettingType.SELECT, "", options_source='pulse_audio_sources', options_mapping={ 'value': 'id', 'label': 'name' }),
-        ConfigSetting('micro_autoswitch', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'micro_autoswitch_off', 1: 'micro_autoswitch_connection', 2: 'micro_autoswitch_mute'}),
+        ConfigSetting('micro_autoswitch', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'micro_autoswitch_off', 1: 'micro_autoswitch_connection', 2: 'micro_autoswitch_mute', 3: 'micro_autoswitch_both'}),
         ConfigSetting('systray_show_battery', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
         ConfigSetting('systray_icon_color', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'systray_icon_color_auto', 1: 'systray_icon_color_white', 2: 'systray_icon_color_black'}),
     ]

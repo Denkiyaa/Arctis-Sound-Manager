@@ -60,7 +60,7 @@ _DERIVED_TOKENS = {
 
 
 #: Auto mic-switch trigger, stored as an int in the ``micro_autoswitch`` setting.
-_MIC_AUTOSWITCH_MODES = {0: 'off', 1: 'connection', 2: 'mute'}
+_MIC_AUTOSWITCH_MODES = {0: 'off', 1: 'connection', 2: 'mute', 3: 'both'}
 
 
 def resolve_mic_autoswitch_target(
@@ -85,6 +85,10 @@ def resolve_mic_autoswitch_target(
         return alt_source if not is_online else '__auto__'
     if mode == 'mute' and key == 'mic_status':
         return alt_source if mic_muted else '__auto__'
+    if mode == 'both' and ((online_var is not None and key == online_var) or key == 'mic_status'):
+        # Either condition engages the alternate; the headset mic returns only
+        # when it is both connected and unmuted (community request).
+        return alt_source if (not is_online or mic_muted) else '__auto__'
     return None
 
 
