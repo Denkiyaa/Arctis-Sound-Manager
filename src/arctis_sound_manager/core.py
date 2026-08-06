@@ -166,6 +166,11 @@ class CoreEngine:
         self._logged_no_device: bool = False   # throttle the "no device" warning
         self._warned_no_out_endpoint: bool = False  # log once per device attach
         self._last_recreate_loopbacks: float = 0.0  # debounce rapid D-Bus calls
+        # Serialises Spatial Audio applies (#169): a filter-chain restart is
+        # blocking, so a second slider-driven call arriving mid-restart is
+        # dropped rather than overlapped — the conf already reflects the latest
+        # JSON, so the in-flight restart loads it.
+        self._spatial_apply_lock = threading.Lock()
 
         # Channels whose persisted virtual-sink volume still needs to be
         # re-asserted after a (re)creation, mapped to remaining retry ticks
@@ -494,6 +499,38 @@ class CoreEngine:
             self.logger.warning("recreate_loopback_single: spec for channel=%r not found", channel)
         except Exception as exc:
             self.logger.error("recreate_loopback_single: unexpected error: %r", exc)
+
+    def apply_spatial_audio(self) -> None:
+        """Regenerate the HeSuVi chains from saved Spatial Audio JSON and, if a
+        conf changed, restart the filter-chain so PipeWire applies it (#169).
+
+        The GUI can't do this itself: its process has no device registered, so
+        ``generate_hesuvi_conf()`` no-ops there — moving an Immersion/Distance
+        slider only rewrites sonar_spatial_audio*.json. This daemon-side call
+        (device attached) rebuilds the on-disk conf(s) and, only when something
+        actually changed, restarts the ``filter-chain`` service to reload them.
+        Runs off the D-Bus event loop (blocking restart). No-op when no device
+        is attached or when the confs already match the JSON.
+        """
+        if not device_state.is_device_set():
+            return
+        if not self._spatial_apply_lock.acquire(blocking=False):
+            # An apply is already restarting the filter-chain; it will pick up
+            # the latest conf (regenerated from the newest JSON). Drop this one.
+            self.logger.debug("apply_spatial_audio: already in flight — skipping")
+            return
+        try:
+            from arctis_sound_manager.sonar_to_pipewire import apply_spatial_audio_change
+            # Regenerates the HeSuVi confs and, only if one changed, restarts the
+            # filter-chain (quiesced/#100-safe) and re-owns the links. All the
+            # filter-chain knowledge (quiesce, crash-loop → safe mode) lives in
+            # that helper, alongside apply_hrir_choice's identical restart path.
+            if apply_spatial_audio_change():
+                self.logger.info("Spatial Audio changed — filter-chain restarted to apply (#169)")
+        except Exception as exc:
+            self.logger.warning("apply_spatial_audio failed: %r", exc)
+        finally:
+            self._spatial_apply_lock.release()
 
     async def _loopback_watchdog(self) -> None:
         """Periodically check for dead or mislinked loopback processes.

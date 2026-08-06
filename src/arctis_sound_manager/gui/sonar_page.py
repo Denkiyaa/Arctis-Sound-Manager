@@ -465,28 +465,18 @@ class _ApplyWorker(QThread):
                     target_override=self._target_override,
                 )
 
-            # ── Regenerate HeSuVi config with current Spatial Audio parameters ──
-            # Phase 3 (issue #100/#88): HeSuVi is now generated unconditionally
-            # — no longer gated on spatial_state["enabled"] — so the node stays
-            # present (idle when nothing feeds it) whatever the toggle state,
-            # ready for ensure_spatial_eq_links() below to move the EQ→target
-            # link onto it live, with no filter-chain restart.
+            # ── HeSuVi (Spatial Audio) is owned by the DAEMON, not here (#169) ──
+            # generate_hesuvi_conf() can only write in a process where a device
+            # is registered (device_state) — and that's the daemon, never this
+            # GUI process. Calling it here therefore always no-ops, which is why
+            # Immersion/Distance slider moves used to be dead. SonarPage now
+            # sends the daemon a debounced ApplySpatialAudio D-Bus call, which
+            # regenerates the per-channel HeSuVi chains and restarts the
+            # filter-chain only when they changed. So from the EQ worker's point
+            # of view HeSuVi never changes: a Spatial Audio toggle produces a
+            # byte-identical EQ conf and is applied purely by moving the
+            # EQ→{HeSuVi,physical} link below — no restart, no #100/#88 exposure.
             _hesuvi_unchanged = True
-            if self._channel in ("game", "media"):
-                spatial_state = _load_spatial_audio(self._channel)
-                from arctis_sound_manager.sonar_to_pipewire import generate_hesuvi_conf
-                _hesuvi_path = _conf_dir / "sink-virtual-surround-7.1-hesuvi.conf"
-                _old_hesuvi = _hesuvi_path.read_text() if _hesuvi_path.exists() else None
-                _new_hesuvi = generate_hesuvi_conf(
-                    immersion_pct=spatial_state.get("immersion", 50),
-                    distance_pct=spatial_state.get("distance", 50),
-                )
-                # generate_hesuvi_conf returns "" when no device is attached
-                # (skips write) — treat as unchanged in that case.
-                if _new_hesuvi:
-                    _hesuvi_unchanged = (
-                        _old_hesuvi is not None and _new_hesuvi == _old_hesuvi
-                    )
 
             # ── Guard: skip filter-chain restart if nothing changed on disk ──
             if _old_eq_conf is not None and _new_eq_conf == _old_eq_conf and _hesuvi_unchanged:
@@ -3188,6 +3178,17 @@ class SonarPage(QWidget):
         # Load external output target from settings
         self._load_output_target()
 
+        # Debounce the daemon-side Spatial Audio apply (#169): the Immersion/
+        # Distance sliders emit state_changed on every tick while dragged, but
+        # the daemon has to regenerate the HeSuVi conf and (if it changed)
+        # restart the filter-chain — far too heavy to run per tick. Coalesce to
+        # a single call once the user settles, shared by both channels since the
+        # daemon regenerates game AND media from their JSON in one pass.
+        self._spatial_apply_timer = QTimer(self)
+        self._spatial_apply_timer.setSingleShot(True)
+        self._spatial_apply_timer.setInterval(_APPLY_DELAY)
+        self._spatial_apply_timer.timeout.connect(self._apply_spatial_audio_daemon)
+
         # ── Connect settings signals from tab widgets ────────────────────────
         self._game_widget._spatial.state_changed.connect(self._on_spatial_changed)
         self._game_widget._boost.state_changed.connect(self._on_boost_changed)
@@ -3312,12 +3313,26 @@ class SonarPage(QWidget):
             pass
 
     def _on_spatial_changed(self):
-        """Spatial audio toggle changed — re-apply game channel conf."""
+        """Game Spatial Audio changed — move the EQ→HeSuVi link for the toggle,
+        and (debounced) have the daemon apply any Immersion/Distance change."""
         self._game_widget._schedule_apply()
+        self._spatial_apply_timer.start()
 
     def _on_media_spatial_changed(self):
-        """Media spatial audio toggle changed — re-apply media channel conf."""
+        """Media Spatial Audio changed — same as game, on the media chain (#169)."""
         self._media_widget._schedule_apply()
+        self._spatial_apply_timer.start()
+
+    def _apply_spatial_audio_daemon(self):
+        """Debounced: ask the daemon to regenerate the HeSuVi chains from the
+        saved Immersion/Distance and restart the filter-chain if they changed.
+
+        Only the daemon can write these confs (the GUI process has no device
+        registered, so generate_hesuvi_conf no-ops there — issue #169). The
+        daemon self-guards: a pure toggle, which leaves Immersion/Distance
+        untouched, produces an identical conf and triggers no restart."""
+        from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
+        DbusWrapper.apply_spatial_audio()
 
     def _on_boost_changed(self):
         """Boost changed — re-apply all EQ channels via a single ApplyAll restart."""

@@ -87,6 +87,22 @@ class ArctisManagerDbusConfigService(ServiceInterface):
             None, self.core_engine.reset_filter_chain_safe_mode
         )
 
+    @method('ApplySpatialAudio')
+    async def apply_spatial_audio(self) -> 'b':  # type: ignore
+        """Regenerate the HeSuVi chains from the saved Spatial Audio JSON and
+        restart the filter-chain if anything changed (issue #169).
+
+        The GUI process can't write these confs (no device registered there —
+        generate_hesuvi_conf no-ops), so a moved Immersion/Distance slider only
+        lands in JSON. The GUI calls this after debouncing so the daemon (which
+        owns the device) rebuilds the on-disk conf(s) and applies them. Runs off
+        the event loop since it may restart the filter-chain service.
+        """
+        await asyncio.get_running_loop().run_in_executor(
+            None, self.core_engine.apply_spatial_audio
+        )
+        return True
+
 class ArctisManagerDbusStatusService(ServiceInterface):
     def __init__(self, core: CoreEngine):
         super().__init__(DBUS_STATUS_INTERFACE_NAME)

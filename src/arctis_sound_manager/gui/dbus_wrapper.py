@@ -489,3 +489,34 @@ class DbusWrapper(QObject):
         except Exception as e:
             DbusWrapper.logger.error('Error in reset_filter_chain_safe_mode_sync: %s', e)
             return False
+
+    @staticmethod
+    async def _apply_spatial_audio_async() -> None:
+        dbus_bus = None
+        try:
+            dbus_bus = await MessageBus().connect()
+            await dbus_bus.call(Message(
+                destination=DBUS_BUS_NAME,
+                path=DBUS_CONFIG_OBJECT_PATH,
+                interface=DBUS_CONFIG_INTERFACE_NAME,
+                member='ApplySpatialAudio',
+                message_type=MessageType.METHOD_CALL,
+            ))
+        except Exception as e:
+            DbusWrapper.logger.error('Error in apply_spatial_audio: %s', e)
+        finally:
+            if dbus_bus is not None:
+                dbus_bus.disconnect()
+
+    @staticmethod
+    def apply_spatial_audio() -> None:
+        """Tell the daemon to regenerate the HeSuVi chains from the saved
+        Immersion/Distance and restart the filter-chain if they changed (#169).
+
+        The GUI can't write these confs itself (no device registered in its
+        process). Fire-and-forget, off the UI thread; the daemon self-guards so
+        a no-op change (e.g. the Spatial Audio toggle, which leaves
+        Immersion/Distance untouched) triggers no restart."""
+        DbusWrapper._executor.submit(
+            lambda: asyncio.run(DbusWrapper._apply_spatial_audio_async())
+        )

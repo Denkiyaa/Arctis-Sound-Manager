@@ -8,9 +8,14 @@ One config per channel (game / chat / micro).  Each config inserts a chain of
 biquad nodes between the virtual capture sink and its playback target.
 
 Routing (targets resolved at generation time from the currently-attached device):
-  game  → effect_input.virtual-surround-7.1-hesuvi     (8ch 7.1 → HeSuVi)
-  chat  → physical ALSA output of the current Arctis   (2ch stereo)
-  micro → virtual source backed by the physical mic    (1ch mono)
+  game  → effect_input.virtual-surround-7.1-hesuvi        (8ch 7.1 → HeSuVi)
+  media → effect_input.virtual-surround-7.1-hesuvi-media  (8ch 7.1 → HeSuVi, #169)
+  chat  → physical ALSA output of the current Arctis      (2ch stereo)
+  micro → virtual source backed by the physical mic       (1ch mono)
+
+Game and Media each own a SEPARATE HeSuVi chain (issue #169) so their
+Immersion/Distance are independent; both surround chains drive the same
+physical GAME output. Game keeps the historical un-suffixed names.
 
 All configs are written to filter-chain.conf.d/ and loaded by the filter-chain service.
 Restarting only filter-chain (not pipewire) preserves active audio streams.
@@ -169,9 +174,20 @@ def _conf_has_bare_ladspa(content: str) -> bool:
 #       staleness checks in check_and_fix_stale_configs() ever matched it, so
 #       the fix was silently inert for every existing install. This mechanism
 #       exists so that class of bug can't recur.
-_CONF_VERSION = 1
+#   2 — issue #169: the Media channel gained its OWN HeSuVi chain
+#       (sink-virtual-surround-7.1-hesuvi-media.conf) so Game and Media carry
+#       independent Immersion/Distance. Bumping forces the daemon to rebuild
+#       the (still un-suffixed) Game conf once so both chains are regenerated
+#       from their per-channel JSON — lossless, sourced from sonar_spatial_audio*.json.
+_CONF_VERSION = 2
 
 _CONF_VERSION_RE = re.compile(r"^\s*#\s*ASM-CONF-VERSION:\s*(\d+)\s*$", re.MULTILINE)
+
+# Header line every HeSuVi conf carries: "… Immersion: N%  |  Distance: N%".
+# check_and_fix_stale_configs() reads it back to tell whether the saved
+# Immersion/Distance in sonar_spatial_audio*.json still matches what's baked
+# into the conf on disk — the drift trigger that makes the sliders live (#169).
+_HESUVI_HEADER_RE = re.compile(r"Immersion:\s*(\d+)%\s*\|\s*Distance:\s*(\d+)%")
 
 
 def _channel_node_description(channel: str) -> str:
@@ -213,9 +229,77 @@ def _conf_is_outdated(content: str) -> bool:
         return True
 
 
+def _load_spatial_pct(channel: str) -> tuple[int, int]:
+    """Return the saved ``(immersion_pct, distance_pct)`` for *channel*.
+
+    Reads the same per-channel files the GUI writes — sonar_spatial_audio.json
+    (game) / sonar_spatial_audio_media.json (media). Missing or unparseable
+    files fall back to the 50/50 default used everywhere else in this module.
+    """
+    suffix = "" if channel == "game" else f"_{channel}"
+    path = Path.home() / ".config" / "arctis_manager" / f"sonar_spatial_audio{suffix}.json"
+    try:
+        import json as _json
+        data = _json.loads(path.read_text()) if path.exists() else {}
+        return int(data.get("immersion", 50)), int(data.get("distance", 50))
+    except Exception:
+        return 50, 50
+
+
+def _hesuvi_conf_has_spatial_drift(
+    content: str, immersion_pct: int, distance_pct: int
+) -> bool:
+    """True if the conf's baked Immersion/Distance differ from the saved JSON.
+
+    The header carries the two percentages verbatim; if it's missing (older
+    conf shape) or the numbers no longer match the current
+    sonar_spatial_audio*.json, the conf is stale and must be regenerated. This
+    is the trigger that makes a slider move actually reach the running
+    filter-chain (#169) instead of only landing in the JSON file.
+    """
+    match = _HESUVI_HEADER_RE.search(content)
+    if not match:
+        return True
+    return (
+        int(match.group(1)) != int(immersion_pct)
+        or int(match.group(2)) != int(distance_pct)
+    )
+
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _SURROUND = "effect_input.virtual-surround-7.1-hesuvi"
+# Per-channel HeSuVi chains (issue #169). Game keeps the historical, un-suffixed
+# node/conf names so an existing install's Game chain is byte-identical and the
+# #100/#88-sensitive path is untouched. Media gets its own parallel chain so the
+# two channels can carry independent Immersion/Distance profiles (e.g. reverb on
+# Game, none on Media) instead of sharing one shared chain fed by the Game JSON.
+_SURROUND_MEDIA = "effect_input.virtual-surround-7.1-hesuvi-media"
+
+
+def _hesuvi_suffix(channel: str) -> str:
+    """Filename/node suffix for a channel's HeSuVi chain.
+
+    Empty for ``game`` (historical, un-suffixed names — keeps the Game chain
+    identical to pre-#169 installs); ``-<channel>`` otherwise.
+    """
+    return "" if channel == "game" else f"-{channel}"
+
+
+def _hesuvi_conf_name(channel: str) -> str:
+    """Conf filename in ``filter-chain.conf.d`` for *channel*'s HeSuVi chain."""
+    return f"sink-virtual-surround-7.1-hesuvi{_hesuvi_suffix(channel)}.conf"
+
+
+def _hesuvi_input_node(channel: str) -> str:
+    """The ``capture.props`` node.name — the sink EQ output links INTO."""
+    return f"effect_input.virtual-surround-7.1-hesuvi{_hesuvi_suffix(channel)}"
+
+
+def _hesuvi_output_node(channel: str) -> str:
+    """The ``playback.props`` node.name — links OUT to the physical output."""
+    return f"effect_output.virtual-surround-7.1-hesuvi{_hesuvi_suffix(channel)}"
+
 
 # Bundled HRIR profile used when the user has not picked one, so the HeSuVi
 # convolver always has a WAV to load and Spatial Audio is never silent (#100).
@@ -449,6 +533,9 @@ _ASM_CONF_NAMES = frozenset({
     "sonar-output-eq.conf",
     "sonar-micro-eq.conf",
     "sink-virtual-surround-7.1-hesuvi.conf",
+    # Media's own HeSuVi chain (issue #169) — must be moved aside in safe mode
+    # too, or a crash in the media convolver would survive the #88 quiesce.
+    "sink-virtual-surround-7.1-hesuvi-media.conf",
 })
 
 # Backup dir for safe mode: a sibling of _CONF_DIR. PipeWire's filter-chain
@@ -1960,71 +2047,138 @@ def check_and_fix_stale_configs() -> tuple[bool, bool]:
         # the file at load), so flag `fixed` to trigger one.
         if ensure_hrir_materialized():
             fixed = True
-        try:
-            import json as _json
-            _spatial_file = Path.home() / ".config" / "arctis_manager" / "sonar_spatial_audio.json"
-            _spatial = _json.loads(_spatial_file.read_text()) if _spatial_file.exists() else {}
-        except Exception:
-            _spatial = {}
-        hesuvi_path = _CONF_DIR / "sink-virtual-surround-7.1-hesuvi.conf"
-        if not hesuvi_path.exists():
-            if not _device_attached():
-                # generate_hesuvi_conf() itself would skip the write and
-                # return "" — checking here avoids repeatedly reporting
-                # "fixed" on every call while no device is attached.
-                log.debug("HeSuVi config missing but no device attached yet — skipping")
-            else:
-                log.warning("HeSuVi config missing — generating (Phase 3: always present)")
+        # Regenerate each channel's HeSuVi chain (issue #169). Game keeps the
+        # historical un-suffixed conf; Media has its own …-hesuvi-media.conf.
+        # Each is sourced from its own sonar_spatial_audio*.json, so the two
+        # channels carry independent Immersion/Distance. This loop is also what
+        # makes the sliders LIVE: a slider move only rewrites the JSON (in the
+        # GUI process, where generate_hesuvi_conf can't write — no device is
+        # registered there), so the daemon detects the drift here, regenerates,
+        # and the caller restarts the filter-chain (see `fixed`).
+        _dev = _device_attached()
+        for _hz_channel in ("game", "media"):
+            immersion_pct, distance_pct = _load_spatial_pct(_hz_channel)
+            hesuvi_path = _CONF_DIR / _hesuvi_conf_name(_hz_channel)
+            if not hesuvi_path.exists():
+                if not _dev:
+                    # generate_hesuvi_conf() would skip the write and return ""
+                    # — checking here avoids repeatedly reporting "fixed" while
+                    # no device is attached.
+                    log.debug("HeSuVi %s config missing but no device attached yet — skipping", _hz_channel)
+                    continue
+                log.warning("HeSuVi %s config missing — generating (Phase 3: always present)", _hz_channel)
                 generate_hesuvi_conf(
-                    immersion_pct=_spatial.get("immersion", 50),
-                    distance_pct=_spatial.get("distance", 50),
+                    immersion_pct=immersion_pct, distance_pct=distance_pct, channel=_hz_channel,
                 )
                 fixed = True
-        else:
+                continue
+
             hesuvi_content = hesuvi_path.read_text()
+            _reason = None
             if f'node.target        = "{_get_physical_out_game()}"' not in hesuvi_content:
-                log.warning("HeSuVi config has stale node.target, regenerating")
-                generate_hesuvi_conf(
-                    immersion_pct=_spatial.get("immersion", 50),
-                    distance_pct=_spatial.get("distance", 50),
-                )
-                fixed = True
+                _reason = "stale node.target"
             elif _conf_has_bare_ladspa(hesuvi_content):
                 # A plate plugin written by bare name (pre-#100 container
                 # fallback) fails to load on a distrobox host without
                 # swh-plugins, so the whole HeSuVi module — and its surround
                 # node — never comes up. Regenerate so it picks up the staged
                 # ~/.ladspa absolute path (or drops the plate if unavailable).
-                log.warning("HeSuVi config references a bare-name LADSPA plugin "
-                            "(fails on a host without the plugin), regenerating (issue #100)")
-                generate_hesuvi_conf(
-                    immersion_pct=_spatial.get("immersion", 50),
-                    distance_pct=_spatial.get("distance", 50),
-                )
-                fixed = True
+                _reason = "bare-name LADSPA plugin (issue #100)"
             elif _conf_is_outdated(hesuvi_content):
                 # Covers config-shape changes shipped in a later ASM version
-                # that this file predates — e.g. v1.2.5 added an output
-                # limiter node to this exact chain (see _CONF_VERSION's
-                # history), but a user upgrading from 1.2.4 kept their old
-                # limiter-less conf forever because none of the checks above
-                # ever matched it. Regenerating with the saved
-                # Immersion/Distance values keeps the user's settings intact.
-                log.warning(
-                    "HeSuVi config predates ASM-CONF-VERSION %d, regenerating",
-                    _CONF_VERSION,
+                # that this file predates — e.g. v1.2.5 added an output limiter
+                # node, v1.2.x (#169) split Media into its own chain. Regenerating
+                # with the saved Immersion/Distance keeps the user's settings.
+                _reason = f"predates ASM-CONF-VERSION {_CONF_VERSION}"
+            elif _hesuvi_conf_has_spatial_drift(hesuvi_content, immersion_pct, distance_pct):
+                # The user moved an Immersion/Distance slider: the JSON changed
+                # but the conf on disk still bakes the old percentages. This is
+                # the trigger that finally makes the sliders do something (#169).
+                _reason = "Immersion/Distance changed (issue #169)"
+
+            if _reason is None:
+                continue  # conf is current — no needless regen/restart.
+            if not _dev:
+                log.debug(
+                    "HeSuVi %s needs regen (%s) but no device attached — deferring",
+                    _hz_channel, _reason,
                 )
-                generate_hesuvi_conf(
-                    immersion_pct=_spatial.get("immersion", 50),
-                    distance_pct=_spatial.get("distance", 50),
-                )
-                fixed = True
+                continue
+            log.warning("HeSuVi %s config: %s — regenerating", _hz_channel, _reason)
+            generate_hesuvi_conf(
+                immersion_pct=immersion_pct, distance_pct=distance_pct, channel=_hz_channel,
+            )
+            fixed = True
 
     # Ensure sonar EQ nodes exist when in Sonar mode
     if sonar and ensure_sonar_eq_configs():
         fixed = True
 
     return fixed, needs_pw_restart
+
+
+def regenerate_hesuvi_if_changed() -> bool:
+    """Rewrite each HeSuVi chain from its saved JSON and report if anything changed.
+
+    Runs in the DAEMON (device attached) so :func:`generate_hesuvi_conf` can
+    actually write — the GUI process has no device registered, so the same call
+    there no-ops (issue #169). That is exactly why moving an Immersion/Distance
+    slider needs this daemon-side round-trip to take effect: the slider only
+    rewrites sonar_spatial_audio*.json; this regenerates the on-disk conf(s)
+    from it.
+
+    For each of Game and Media it regenerates the conf and compares the result
+    to what was on disk. A returned value that differs — a moved slider, a stale
+    ``node.target``, a bare-name LADSPA reference, an outdated conf shape, or a
+    missing file — is reported as changed. When it returns True the caller must
+    restart the ``filter-chain`` service so PipeWire reloads the new conf.
+
+    Returns False (nothing to do) when no device is attached.
+    """
+    if not device_state.is_device_set():
+        return False
+    # A slider move can't require a new HRIR, but keep this idempotent with the
+    # daemon-init path so a first-ever generation here still has its WAV staged.
+    ensure_hrir_materialized()
+    changed = False
+    for channel in ("game", "media"):
+        immersion_pct, distance_pct = _load_spatial_pct(channel)
+        path = _CONF_DIR / _hesuvi_conf_name(channel)
+        old = path.read_text() if path.exists() else None
+        new = generate_hesuvi_conf(
+            immersion_pct=immersion_pct, distance_pct=distance_pct, channel=channel,
+        )
+        # generate_hesuvi_conf returns "" only when no device is attached, which
+        # the guard above already excludes; treat any real diff as a change.
+        if new and new != (old or ""):
+            changed = True
+    return changed
+
+
+def apply_spatial_audio_change() -> bool:
+    """Make an Immersion/Distance slider move take effect on the live pipeline (#169).
+
+    Regenerates the per-channel HeSuVi confs from the saved JSON and, only when
+    a conf actually changed, restarts the filter-chain — through
+    :func:`_restart_filter_chain`, which quiesces the graph first (the #100 SEGV
+    guard) and arms safe mode if the restart crash-loops (#88) — then re-owns the
+    EQ→{HeSuVi,physical} and HeSuVi→physical links the restart tore down.
+
+    Runs in the DAEMON (device attached); a no-op change (e.g. a pure Spatial
+    Audio toggle, which leaves Immersion/Distance untouched) regenerates an
+    identical conf and returns False without ever touching the service.
+
+    Returns True when it restarted the filter-chain, False otherwise.
+    """
+    if not regenerate_hesuvi_if_changed():
+        return False
+    _restart_filter_chain()
+    # Same recovery as apply_hrir_choice()'s restart: re-establish ASM-owned
+    # links immediately for a responsive slider; the loopback watchdog also
+    # heals these on its next tick if a node is still coming up.
+    ensure_spatial_eq_links(("game", "media"))
+    ensure_physical_output_links()
+    return True
 
 
 def ensure_sonar_eq_configs() -> bool:
@@ -2219,8 +2373,12 @@ def ensure_spatial_eq_links(
         if channel not in ("game", "media"):
             continue
         enabled = _spatial_enabled(channel)
-        target = _SURROUND if enabled else _get_physical_out_game()
-        if enabled and not pw_node_exists(_SURROUND, data):
+        # Each channel links to its OWN HeSuVi chain (issue #169): Game keeps the
+        # historical un-suffixed node, Media routes to effect_input.…-hesuvi-media,
+        # so their independent Immersion/Distance never bleed into each other.
+        surround_node = _SURROUND if channel == "game" else _SURROUND_MEDIA
+        target = surround_node if enabled else _get_physical_out_game()
+        if enabled and not pw_node_exists(surround_node, data):
             # HeSuVi is not in the graph. If its HRIR WAV is missing the
             # convolver can never load and the node will never appear —
             # targeting it here would be permanent silence, so fall back to
@@ -2248,6 +2406,7 @@ def ensure_spatial_eq_links(
 
 
 _HESUVI_OUTPUT_NAME = "effect_output.virtual-surround-7.1-hesuvi"
+_HESUVI_OUTPUT_NAME_MEDIA = "effect_output.virtual-surround-7.1-hesuvi-media"
 _CHAT_OUTPUT_NAME = "effect_output.sonar-chat-eq"
 _OUTPUT_EQ_OUTPUT_NAME = "effect_output.sonar-output-eq"
 
@@ -2345,9 +2504,9 @@ def ensure_physical_output_links(data: list | None = None) -> dict[str, bool]:
     Returns
     -------
     dict[str, bool]
-        ``{"chat": bool, "hesuvi": bool, "output": bool}`` — only hops whose
-        target is currently known (device attached / external sink
-        configured) are included at all.
+        ``{"chat": bool, "hesuvi": bool, "hesuvi_media": bool, "output": bool}``
+        — only hops whose target is currently known (device attached / external
+        sink configured) are included at all.
     """
     from arctis_sound_manager.pw_utils import ensure_loopback_link
 
@@ -2360,6 +2519,12 @@ def ensure_physical_output_links(data: list | None = None) -> dict[str, bool]:
     game_target = _get_physical_out_game()
     if game_target:
         results["hesuvi"] = ensure_loopback_link(_HESUVI_OUTPUT_NAME, game_target, data=data)
+        # Media's parallel HeSuVi chain (issue #169) shares the physical GAME
+        # output — same unconditional last hop, its own node. Skipped cleanly
+        # when the media chain isn't up yet (self-heals next tick).
+        results["hesuvi_media"] = ensure_loopback_link(
+            _HESUVI_OUTPUT_NAME_MEDIA, game_target, data=data
+        )
 
     # The Output channel's last hop (EQ → external sink: HDMI, TV, speakers)
     # was owned by nobody at all. Unlike chat/game/media it is not covered by
@@ -2512,6 +2677,7 @@ def generate_hesuvi_conf(
     immersion_pct: int = 50,
     distance_pct: int = 50,
     output_path: Path | None = None,
+    channel: str = "game",
 ) -> str:
     """Generate a dynamic HeSuVi 7.1 virtual surround PipeWire filter-chain config.
 
@@ -2525,7 +2691,14 @@ def generate_hesuvi_conf(
         applied *after* the stereo mixers.
     output_path:
         Where to write the config.  Defaults to
-        ``_CONF_DIR / "sink-virtual-surround-7.1-hesuvi.conf"``.
+        ``_CONF_DIR / _hesuvi_conf_name(channel)``.
+    channel:
+        ``"game"`` (default) writes the historical, un-suffixed chain
+        (``effect_input/output.virtual-surround-7.1-hesuvi``,
+        ``sink-virtual-surround-7.1-hesuvi.conf``) so an existing Game chain is
+        byte-identical. ``"media"`` writes a parallel ``…-hesuvi-media`` chain
+        so the two channels carry independent Immersion/Distance (issue #169).
+        Both chains target the same physical GAME output.
 
     Returns
     -------
@@ -2537,11 +2710,13 @@ def generate_hesuvi_conf(
         return ""
 
     if output_path is None:
-        output_path = _CONF_DIR / "sink-virtual-surround-7.1-hesuvi.conf"
+        output_path = _CONF_DIR / _hesuvi_conf_name(channel)
+    if channel == "game":
         # Remove any static copy from pipewire.conf.d to avoid duplicate node name conflict.
         # install.sh places the static HeSuVi config there; ASM's dynamic version (here)
         # supersedes it when Sonar mode is active. Having both causes the game channel to
         # go silent because PipeWire and filter-chain both try to register the same node name.
+        # Only the Game chain ever had a static counterpart — Media is ASM-only.
         _pw_static = _SINKS_CONF_DIR / "sink-virtual-surround-7.1-hesuvi.conf"
         if _pw_static.exists():
             _log.warning(
@@ -2670,6 +2845,16 @@ def generate_hesuvi_conf(
     links_text = "\n".join(link_lines)
     outputs_line = f'        outputs = [ "{out_l}" "{out_r}" ]'
 
+    # Per-channel identity (issue #169). Game keeps the historical names so its
+    # chain is byte-identical to pre-#169 installs; Media gets the -media suffix.
+    _in_node = _hesuvi_input_node(channel)
+    _out_node = _hesuvi_output_node(channel)
+    _sink_desc = (
+        "Virtual Surround Sink"
+        if channel == "game"
+        else f"Virtual Surround Sink ({channel.capitalize()})"
+    )
+
     text = f"""\
 # Auto-generated by Arctis Sound Manager — DO NOT EDIT
 {_conf_version_header()}
@@ -2678,8 +2863,8 @@ context.modules = [
   {{ name = libpipewire-module-filter-chain
     flags = [ nofail ]
     args = {{
-      node.description = "Virtual Surround Sink"
-      media.name       = "Virtual Surround Sink"
+      node.description = "{_sink_desc}"
+      media.name       = "{_sink_desc}"
       filter.graph = {{
         nodes = [
 {nodes_text}
@@ -2691,13 +2876,13 @@ context.modules = [
 {outputs_line}
       }}
       capture.props = {{
-        node.name      = "effect_input.virtual-surround-7.1-hesuvi"
+        node.name      = "{_in_node}"
         media.class    = Audio/Sink/Internal
         audio.channels = 8
         audio.position = [ FL FR FC LFE RL RR SL SR ]
       }}
       playback.props = {{
-        node.name          = "effect_output.virtual-surround-7.1-hesuvi"
+        node.name          = "{_out_node}"
         node.target        = "{_get_physical_out_game()}"
         target.object      = "{_get_physical_out_game()}"
         node.dont-fallback = true

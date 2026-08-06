@@ -2101,6 +2101,176 @@ def test_check_and_fix_regenerates_pre_1_2_5_hesuvi_conf_with_limiter(tmp_path, 
     assert "Distance: 40%" in regenerated
 
 
+# ── Per-channel HeSuVi chains (issue #169) ────────────────────────────────────
+
+def test_hesuvi_conf_name_and_nodes_per_channel():
+    """Game keeps the historical un-suffixed identity; Media gets -media so the
+    two chains coexist without a duplicate node-name conflict."""
+    assert _s2p._hesuvi_conf_name("game") == "sink-virtual-surround-7.1-hesuvi.conf"
+    assert _s2p._hesuvi_conf_name("media") == "sink-virtual-surround-7.1-hesuvi-media.conf"
+    assert _s2p._hesuvi_input_node("game") == "effect_input.virtual-surround-7.1-hesuvi"
+    assert _s2p._hesuvi_input_node("media") == "effect_input.virtual-surround-7.1-hesuvi-media"
+    assert _s2p._hesuvi_output_node("game") == "effect_output.virtual-surround-7.1-hesuvi"
+    assert _s2p._hesuvi_output_node("media") == "effect_output.virtual-surround-7.1-hesuvi-media"
+
+
+def test_generate_hesuvi_media_channel_uses_suffixed_node_names(monkeypatch):
+    """The Media chain's capture/playback nodes carry the -media suffix, while
+    the Game chain stays byte-identical to pre-#169 (un-suffixed)."""
+    monkeypatch.setattr(_s2p, "_device_attached", lambda: True)
+    monkeypatch.setattr(_s2p, "_get_physical_out_game", lambda: "alsa_output.test-game")
+    monkeypatch.setattr(_s2p, "_write_conf", lambda path, text: None)
+    monkeypatch.setattr(_s2p, "_ladspa_plugin_ref", lambda name: None)
+
+    game = _s2p.generate_hesuvi_conf(channel="game", output_path=Path("/dev/null"))
+    media = _s2p.generate_hesuvi_conf(channel="media", output_path=Path("/dev/null"))
+
+    assert 'node.name      = "effect_input.virtual-surround-7.1-hesuvi"' in game
+    assert 'node.name          = "effect_output.virtual-surround-7.1-hesuvi"' in game
+    assert 'node.name      = "effect_input.virtual-surround-7.1-hesuvi-media"' in media
+    assert 'node.name          = "effect_output.virtual-surround-7.1-hesuvi-media"' in media
+    # Both chains still drive the same physical GAME output.
+    assert 'node.target        = "alsa_output.test-game"' in media
+    # Media's sink description is distinct so the two are tellable apart.
+    assert 'node.description = "Virtual Surround Sink (Media)"' in media
+
+
+def test_ensure_spatial_eq_links_media_targets_media_hesuvi(monkeypatch):
+    """Media EQ links to its OWN HeSuVi chain, not the Game one (#169)."""
+    monkeypatch.setattr(_s2p_p3, "_spatial_enabled", lambda ch: True)
+    calls = []
+    monkeypatch.setattr(
+        "arctis_sound_manager.pw_utils.ensure_loopback_link",
+        lambda playback, target, data=None: calls.append((playback, target)) or True,
+    )
+    result = _s2p_p3.ensure_spatial_eq_links(("media",))
+    assert result == {"media": True}
+    assert calls == [("effect_output.sonar-media-eq",
+                      "effect_input.virtual-surround-7.1-hesuvi-media")]
+
+
+def test_hesuvi_conf_spatial_drift_detection():
+    """The drift check compares the conf header's baked percentages against the
+    saved JSON — the trigger that makes the sliders live (#169)."""
+    conf = "# HeSuVi 7.1 Virtual Surround  |  Immersion: 35%  |  Distance: 59%\n"
+    # Same values → no drift.
+    assert _s2p._hesuvi_conf_has_spatial_drift(conf, 35, 59) is False
+    # A moved slider → drift.
+    assert _s2p._hesuvi_conf_has_spatial_drift(conf, 50, 59) is True
+    assert _s2p._hesuvi_conf_has_spatial_drift(conf, 35, 50) is True
+    # A conf with no header (older shape) is always treated as stale.
+    assert _s2p._hesuvi_conf_has_spatial_drift("no header here", 50, 50) is True
+
+
+def test_regenerate_hesuvi_if_changed_on_slider_drift(tmp_path, monkeypatch):
+    """regenerate_hesuvi_if_changed rewrites the conf and reports True when the
+    saved Immersion/Distance no longer matches the on-disk conf, and False when
+    they already agree."""
+    import arctis_sound_manager.sonar_to_pipewire as stp
+    monkeypatch.setattr(stp, "_CONF_DIR", tmp_path)
+    monkeypatch.setattr(stp, "_SINKS_CONF_DIR", tmp_path / "pipewire.conf.d")
+    (tmp_path / "pipewire.conf.d").mkdir()
+    monkeypatch.setattr(stp, "_device_attached", lambda: True)
+    monkeypatch.setattr(stp.device_state, "is_device_set", lambda: True)
+    monkeypatch.setattr(stp, "_get_physical_out_game", lambda: "alsa_output.test-game")
+    monkeypatch.setattr(stp, "_ladspa_plugin_ref", lambda name: None)
+    hrir = tmp_path / "hrir.wav"
+    hrir.write_bytes(b"RIFFWAVE-stub")
+    monkeypatch.setattr(stp, "_HRIR_DEST", hrir)
+    monkeypatch.setattr(stp, "ensure_hrir_materialized", lambda *a, **kw: False)
+
+    home = tmp_path / "home"
+    (home / ".config" / "arctis_manager").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    spatial = home / ".config" / "arctis_manager" / "sonar_spatial_audio.json"
+    spatial.write_text('{"immersion": 50, "distance": 50}')
+
+    # First run creates both confs from scratch → changed.
+    assert stp.regenerate_hesuvi_if_changed() is True
+    game_conf = tmp_path / "sink-virtual-surround-7.1-hesuvi.conf"
+    assert "Immersion: 50%" in game_conf.read_text()
+
+    # No change in JSON → nothing rewritten → False.
+    assert stp.regenerate_hesuvi_if_changed() is False
+
+    # Move the Game slider → drift → rewritten, reported True.
+    spatial.write_text('{"immersion": 35, "distance": 59}')
+    assert stp.regenerate_hesuvi_if_changed() is True
+    assert "Immersion: 35%" in game_conf.read_text()
+    assert "Distance: 59%" in game_conf.read_text()
+
+
+def test_regenerate_hesuvi_if_changed_noop_without_device(monkeypatch):
+    """No device attached → generate_hesuvi_conf can't write, so the function
+    reports no change rather than churning 'fixed' forever (#169)."""
+    import arctis_sound_manager.sonar_to_pipewire as stp
+    monkeypatch.setattr(stp.device_state, "is_device_set", lambda: False)
+    assert stp.regenerate_hesuvi_if_changed() is False
+
+
+def test_apply_spatial_audio_change_restarts_only_when_changed(monkeypatch):
+    """apply_spatial_audio_change restarts the filter-chain (quiesced, #100-safe)
+    and re-owns the links ONLY when a conf actually changed — a pure toggle
+    (no Immersion/Distance change) must not restart."""
+    import arctis_sound_manager.sonar_to_pipewire as stp
+    restarts, spatial_links, phys_links = [], [], []
+    monkeypatch.setattr(stp, "_restart_filter_chain", lambda: restarts.append(1))
+    monkeypatch.setattr(stp, "ensure_spatial_eq_links", lambda *a, **kw: spatial_links.append(a) or {})
+    monkeypatch.setattr(stp, "ensure_physical_output_links", lambda *a, **kw: phys_links.append(1) or {})
+
+    # Nothing changed → no restart, no relink.
+    monkeypatch.setattr(stp, "regenerate_hesuvi_if_changed", lambda: False)
+    assert stp.apply_spatial_audio_change() is False
+    assert restarts == [] and spatial_links == [] and phys_links == []
+
+    # A slider moved → exactly one restart, both link-owners re-run.
+    monkeypatch.setattr(stp, "regenerate_hesuvi_if_changed", lambda: True)
+    assert stp.apply_spatial_audio_change() is True
+    assert restarts == [1]
+    assert spatial_links == [(("game", "media"),)]
+    assert phys_links == [1]
+
+
+def test_check_and_fix_regenerates_media_hesuvi_on_slider_drift(tmp_path, monkeypatch):
+    """A moved MEDIA Immersion slider must regenerate the media chain from
+    sonar_spatial_audio_media.json — the per-channel half of #169."""
+    import arctis_sound_manager.sonar_to_pipewire as stp
+    monkeypatch.setattr(stp, "_CONF_DIR", tmp_path)
+    monkeypatch.setattr(stp, "_SINKS_CONF_DIR", tmp_path / "pipewire.conf.d")
+    (tmp_path / "pipewire.conf.d").mkdir()
+    monkeypatch.setattr(stp, "_filter_chain_safe_mode", False)
+    monkeypatch.setattr(stp, "_SAFE_MODE_MARKER", tmp_path / "marker.json")
+    monkeypatch.setattr(stp, "_device_attached", lambda: True)
+    monkeypatch.setattr(stp, "_get_physical_out_game", lambda: "alsa_output.test-headset")
+    monkeypatch.setattr(stp, "_get_physical_out_chat", lambda: "alsa_output.test-headset")
+    monkeypatch.setattr(stp, "_ladspa_plugin_ref", lambda name: None)
+    hrir = tmp_path / "hrir.wav"
+    hrir.write_bytes(b"RIFFWAVE-stub")
+    monkeypatch.setattr(stp, "_HRIR_DEST", hrir)
+
+    home = tmp_path / "home"
+    (home / ".config" / "arctis_manager").mkdir(parents=True)
+    (home / ".config" / "arctis_manager" / ".eq_mode").write_text("sonar")
+    (home / ".config" / "arctis_manager" / "sonar_spatial_audio.json").write_text(
+        '{"immersion": 50, "distance": 50}'
+    )
+    (home / ".config" / "arctis_manager" / "sonar_spatial_audio_media.json").write_text(
+        '{"immersion": 25, "distance": 49}'
+    )
+    monkeypatch.setattr(Path, "home", lambda: home)
+
+    fixed, _ = stp.check_and_fix_stale_configs()
+    assert fixed is True
+    media_conf = (tmp_path / "sink-virtual-surround-7.1-hesuvi-media.conf").read_text()
+    # Media chain reflects the MEDIA JSON, not the Game 50/50.
+    assert "Immersion: 25%" in media_conf
+    assert "Distance: 49%" in media_conf
+    assert 'node.name      = "effect_input.virtual-surround-7.1-hesuvi-media"' in media_conf
+    # Game chain stays on its own values.
+    game_conf = (tmp_path / "sink-virtual-surround-7.1-hesuvi.conf").read_text()
+    assert "Immersion: 50%" in game_conf
+
+
 def test_missing_version_marker_never_regenerates_eq_confs(tmp_path, monkeypatch):
     """A marker-less but otherwise valid EQ conf must be left ALONE.
 

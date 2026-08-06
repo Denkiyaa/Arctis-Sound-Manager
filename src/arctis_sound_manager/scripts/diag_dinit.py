@@ -319,12 +319,17 @@ def check_pipewire() -> dict:
     pipewire_conf_candidates = [
         Path.home() / ".config" / "pipewire" / "pipewire.conf.d" / "10-arctis-virtual-sinks.conf",
     ]
+    _fc_dir = Path.home() / ".config" / "pipewire" / "filter-chain.conf.d"
     fc_conf_candidates = [
-        Path.home() / ".config" / "pipewire" / "filter-chain.conf.d" / "sink-virtual-surround-7.1-hesuvi.conf",
+        _fc_dir / "sink-virtual-surround-7.1-hesuvi.conf",
+        # Media's own HeSuVi chain (issue #169) — dumped so bug reports show
+        # both chains' state on the #100/#88-sensitive path.
+        _fc_dir / "sink-virtual-surround-7.1-hesuvi-media.conf",
     ]
     for p, label in [
         (pipewire_conf_candidates[0], "virtual-sinks conf"),
         (fc_conf_candidates[0], "filter-chain HeSuVi conf"),
+        (fc_conf_candidates[1], "filter-chain HeSuVi media conf"),
     ]:
         exists = p.exists()
         result[f"{label.replace(' ', '_')}_exists"] = exists
