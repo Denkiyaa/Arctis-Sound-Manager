@@ -1130,6 +1130,34 @@ class CoreEngine:
         except Exception as exc:
             self.logger.warning("stop(): error stopping loopbacks: %r", exc)
 
+    # The ChatMix dial is an analogue control, and an analogue control that
+    # nobody is touching still reports a position wobbling by a point: a
+    # headset left alone on the desk sends 100, 99, 100, 99 … for as long as it
+    # is on. Every one of those used to be written to the virtual sinks, which
+    # on a desktop whose default output *is* one of them (Arctis_Game, the
+    # usual setup) means the system volume OSD popping up over whatever the
+    # user is doing, every few seconds, on its own. A move this small is noise,
+    # not an intent: a hand on the dial moves it further than this.
+    _MIX_JITTER_TOLERANCE = 1
+
+    def _mix_is_jitter(self, new_media_mix: int, new_chat_mix: int) -> bool:
+        """Whether a new dial reading is too small a move to be a real one.
+
+        Both channels have to be within tolerance — a genuine turn moves at
+        least one of them further. The travel ends (0 and 100) are always taken
+        as real even when they are one point away: those are the positions the
+        user can feel, and stopping a point short of silence (or of full
+        volume) is exactly the kind of "not quite right" the dial is used to
+        fix.
+        """
+        for new, current in ((new_media_mix, self.media_mix),
+                             (new_chat_mix, self.chat_mix)):
+            if new != current and new in (0, 100):
+                return False
+            if abs(new - current) > self._MIX_JITTER_TOLERANCE:
+                return False
+        return True
+
     def manage_mix_change(self):
         if not self.device_status or not self.device_config:
             return
@@ -1139,14 +1167,25 @@ class CoreEngine:
 
         if new_media_mix is None or new_chat_mix is None:
             return
-        
+
         new_media_mix = parsed_status({'media_mix': new_media_mix}, self.device_config).get('media_mix', self.media_mix)
         new_chat_mix = parsed_status({'chat_mix': new_chat_mix}, self.device_config).get('chat_mix', self.chat_mix)
 
-        if new_media_mix != self.media_mix or new_chat_mix != self.chat_mix:
-            self.media_mix = new_media_mix
-            self.chat_mix = new_chat_mix
-            self.pa_audio_manager.set_mix(self.media_mix, self.chat_mix)
+        if new_media_mix == self.media_mix and new_chat_mix == self.chat_mix:
+            return
+        if self._mix_is_jitter(new_media_mix, new_chat_mix):
+            # Deliberately not stored: keeping the settled values as the
+            # reference is what lets a slow, real turn accumulate past the
+            # tolerance instead of drifting one ignored point at a time.
+            self.logger.debug(
+                "Ignoring ChatMix jitter: media %d→%d, chat %d→%d",
+                self.media_mix, new_media_mix, self.chat_mix, new_chat_mix,
+            )
+            return
+
+        self.media_mix = new_media_mix
+        self.chat_mix = new_chat_mix
+        self.pa_audio_manager.set_mix(self.media_mix, self.chat_mix)
     
     async def listen_endpoint_loop(self, interface_id: int):
         with self._device_lock:
