@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.23] - 6 August 2026
+
+### Added
+
+- **Auto mic-switch can now trigger on disconnect *or* mute together.** The microphone-switching feature added in 1.2.22 let you pick one trigger — headset disconnects, or headset mic muted. There is now a combined option: switch to your alternate microphone whenever the headset is **either** powered off **or** muted, and back to the headset mic only once it is both connected and unmuted. Handy if you want the desk mic to take over the moment you step away *or* mute, without choosing between the two.
+
+### Fixed
+
+- **The Spatial Audio Immersion and Distance sliders now actually do something — on both Game and Media.** Moving a slider only ever wrote the new value to a settings file; the virtual-surround chain was never rebuilt, so the sound never changed unless you deleted the config by hand and restarted the daemon. The reason was subtle: the slider handler asked to regenerate the chain from the GUI process, which — unlike the background daemon — has no headset registered, so the request quietly did nothing. The daemon now rebuilds the chain when a slider moves and applies it live. On top of that, **Game and Media each get their own independent Immersion/Distance** instead of sharing one chain fed only by the Game values, so you can run, say, more reverb on Game and none on Media. Moving a slider briefly restarts the surround chain (a short audio glitch), which is the cost of applying it. Reported with a precise root-cause analysis by @cookiekiller. (#169)
+- **Nova Pro Wireless / GameDAC 2: the volume and ChatMix dial responds immediately again.** Turning the dial only registered every few seconds, because the daemon's endpoint listener treated a normal "nothing to read yet" timeout as a fault and backed off for a full second before listening again — so most of the dial's rapid updates arrived during the back-off and were dropped. A routine read timeout is no longer treated as an error, so dial movements come through as you make them. Reported on Discord.
+
 ## [1.2.22] - 4 August 2026
 
 ### Added
