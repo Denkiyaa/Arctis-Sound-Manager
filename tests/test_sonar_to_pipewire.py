@@ -221,6 +221,99 @@ def test_chat_targets_physical_output():
     assert "audio.channels = 2" in text
 
 
+def test_chat_keeps_its_target_when_the_writer_cannot_see_the_device(tmp_path):
+    """The GUI rewrites this conf on every EQ edit and never has a device
+    state (only the daemon fills it), so a regenerated conf must not throw
+    away the target the file already carries. Losing it leaves the chat EQ
+    output floating with autoconnect on, and WirePlumber retries routing it
+    to the default sink — one of ASM's own loopbacks — on every graph change
+    from then on, which is audible on the other channels."""
+    from arctis_sound_manager import device_state
+
+    conf = tmp_path / "sonar-chat-eq.conf"
+    phys = "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo"
+    device_state.set_current_device(
+        physical_out_game=phys, physical_out_chat=phys, physical_in="",
+        spatial_engine="hesuvi", device_name="SteelSeries Arctis Nova 7",
+    )
+    try:
+        generate_sonar_eq_conf("chat", [], 0.0, 0.0, 0.0, output_path=conf)
+    finally:
+        device_state.clear()
+    assert phys in conf.read_text()
+
+    # Now regenerate exactly as the GUI does: no device state at all.
+    bands = [EqBand(freq=100, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
+    text = generate_sonar_eq_conf("chat", bands, 0.0, 0.0, 0.0, output_path=conf)
+    assert f'node.target         = "{phys}"' in text
+    assert f'target.object       = "{phys}"' in text
+
+
+def test_chat_target_stays_empty_when_nothing_knows_it(tmp_path):
+    """No device and no conf on disk — there is nothing to preserve, and an
+    empty target must not become the literal string of a missing one."""
+    text = generate_sonar_eq_conf("chat", [], 0.0, 0.0, 0.0,
+                                  output_path=tmp_path / "sonar-chat-eq.conf")
+    assert "node.target" not in text
+
+
+def test_micro_keeps_its_capture_target_when_the_writer_is_in_the_dark(tmp_path):
+    """Same fallback on the mic conf's capture hint."""
+    from arctis_sound_manager import device_state
+
+    conf = tmp_path / "sonar-micro-eq.conf"
+    mic = "alsa_input.usb-SteelSeries_Arctis_Nova_7-00.mono-fallback"
+    bands = [EqBand(freq=300, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
+    device_state.set_current_device(
+        physical_out_game="alsa_output.x", physical_out_chat="alsa_output.x",
+        physical_in=mic, spatial_engine="hesuvi", device_name="Arctis Nova 7",
+    )
+    try:
+        generate_sonar_micro_conf(bands, 0.0, 0.0, 0.0, output_path=conf)
+    finally:
+        device_state.clear()
+
+    text = generate_sonar_micro_conf(bands, 1.0, 0.0, 0.0, output_path=conf)
+    assert f'target.object  = "{mic}"' in text
+
+
+def test_a_conf_that_already_lost_its_target_gets_it_back_with_its_eq(tmp_path, monkeypatch):
+    """The daemon's repair for a conf written before the fix. Regenerating it
+    would write a bypass and take the user's chat EQ with it, so the target
+    goes back in place instead."""
+    import arctis_sound_manager.sonar_to_pipewire as _s2p
+    from arctis_sound_manager import device_state
+
+    conf_dir = tmp_path / "filter-chain.conf.d"
+    conf_dir.mkdir(parents=True)
+    monkeypatch.setattr(_s2p, "_CONF_DIR", conf_dir)
+
+    phys = "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo"
+    bands = [EqBand(freq=100, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
+    # Written by a GUI in the dark: real EQ, no target.
+    for channel in ("game", "media", "chat"):
+        generate_sonar_eq_conf(channel, bands, 0.0, 0.0, 0.0,
+                               output_path=conf_dir / f"sonar-{channel}-eq.conf")
+    chat_conf = conf_dir / "sonar-chat-eq.conf"
+    assert "node.target" not in chat_conf.read_text()
+
+    device_state.set_current_device(
+        physical_out_game=phys, physical_out_chat=phys, physical_in="",
+        spatial_engine="hesuvi", device_name="SteelSeries Arctis Nova 7",
+    )
+    try:
+        _s2p.ensure_sonar_eq_configs()
+    finally:
+        device_state.clear()
+
+    repaired = chat_conf.read_text()
+    assert f'node.target         = "{phys}"' in repaired
+    assert f'target.object       = "{phys}"' in repaired
+    # …and the EQ is still there: the bypass path would have dropped it.
+    assert "bq0" in repaired
+    assert "Gain = 2.0" in repaired
+
+
 def test_chat_target_has_target_object():
     """Chat EQ playback.props must include both node.target and target.object (WP 0.5)."""
     from arctis_sound_manager import device_state
