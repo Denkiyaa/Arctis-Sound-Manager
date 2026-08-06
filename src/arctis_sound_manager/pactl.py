@@ -418,8 +418,26 @@ class PulseAudioManager:
         media = next((s for s in sinks if s.proplist.get('node.name', '') == PULSE_MEDIA_NODE_NAME), None)
         chat = next((s for s in sinks if s.proplist.get('node.name', '') == PULSE_CHAT_NODE_NAME), None)
 
-        if media:
+        # Only the channel that actually moved is written. Writing a sink the
+        # level it already has is not free: the server still announces a volume
+        # change, and the desktop still shows its volume OSD for it — so
+        # nudging one end of the dial used to flash the other channel's sink
+        # too. See CoreEngine._mix_is_jitter for the other half of this.
+        if media and not self._sink_is_at(media, media_mix):
             self.pulse.volume_set_all_chans(media, media_mix / 100)
-        if chat:
+        if chat and not self._sink_is_at(chat, chat_mix):
             self.pulse.volume_set_all_chans(chat, chat_mix / 100)
+
+    @staticmethod
+    def _sink_is_at(sink, pct: int) -> bool:
+        """Whether *sink* already sits at *pct*, as the server would report it.
+
+        Compared in whole percent because that is the resolution the caller
+        works in: a level set from a percentage and read back is a float that
+        need not come home to the same digits.
+        """
+        try:
+            return round(sink.volume.value_flat * 100) == pct
+        except Exception:
+            return False
 
