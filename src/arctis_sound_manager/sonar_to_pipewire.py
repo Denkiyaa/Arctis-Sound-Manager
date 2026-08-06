@@ -2807,6 +2807,25 @@ def _get_micro_input_source_setting() -> str:
     return value or "__auto__"
 
 
+def resolve_micro_input_source() -> str:
+    """Return the source ``node.name`` that should feed the Sonar Micro EQ.
+
+    Resolves the three shapes ``micro_input_source`` can take into a single
+    answer: ``"__auto__"`` becomes the attached Arctis microphone, a concrete
+    node name is returned as-is, and ``"__manual__"`` — along with auto mode
+    with no headset attached — returns ``""``, meaning "ASM is not feeding the
+    micro EQ". Callers that act on the mic chain (the capture-link enforcement
+    below, the daemon claiming the default input) ask here first, so they can
+    only ever agree about who owns the mic.
+    """
+    setting = _get_micro_input_source_setting()
+    if setting == "__manual__":
+        return ""
+    if setting == "__auto__":
+        return _get_physical_in()
+    return setting
+
+
 def ensure_micro_capture_link(data: list | None = None) -> bool:
     """Ensure the Sonar Micro EQ's capture is fed by the configured source.
 
@@ -2854,20 +2873,11 @@ def ensure_micro_capture_link(data: list | None = None) -> bool:
     """
     from arctis_sound_manager.pw_utils import ensure_capture_link
 
-    setting = _get_micro_input_source_setting()
-
-    if setting == "__manual__":
-        # User has taken manual control (qpwgraph, …) — don't touch the link.
-        return False
-
-    if setting == "__auto__":
-        source = _get_physical_in()
-    else:
-        source = setting
-
+    # "" covers both "user has taken manual control (qpwgraph, …), don't touch
+    # the link" and "auto mode with no device attached" — either way there is
+    # nothing to enforce, and the watchdog retries on the next tick.
+    source = resolve_micro_input_source()
     if not source:
-        # No device attached — skip, the watchdog will retry on the next
-        # tick once a headset is connected.
         return False
     return ensure_capture_link(source, _MICRO_CAPTURE_NAME, data=data)
 

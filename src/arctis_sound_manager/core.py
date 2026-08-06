@@ -371,6 +371,52 @@ class CoreEngine:
                 "watchdog: %s", len(pending), list(pending),
             )
 
+    _MICRO_CAPTURE_OUT = "effect_output.sonar-micro-eq"
+
+    def _claim_default_source(self) -> None:
+        """Make the Sonar Micro EQ the system's default input — if it carries a mic.
+
+        This used to fire unconditionally at every device init, and that is how
+        a machine ends up with a microphone that records nothing: the micro EQ
+        chain is only a microphone once ASM has linked one into it, and there
+        are two ordinary cases where it hasn't.
+
+        - ``micro_input_source`` is ``"__manual__"``: the user routes the chain
+          themselves, so ASM has no business deciding what the default input is
+          either — taking it over contradicts the very setting that told us to
+          keep our hands off.
+        - The configured source is not in the graph (unplugged, or a name that
+          no longer resolves): the chain is fed by nothing, and pointing the
+          default input at it makes every app pick a silent mic.
+
+        In both cases the default input is left exactly where the user (or
+        WirePlumber) put it, and a later device init retries — by then the
+        chain usually has its source and the takeover is correct.
+        """
+        from arctis_sound_manager.sonar_to_pipewire import resolve_micro_input_source
+
+        try:
+            source = resolve_micro_input_source()
+        except Exception as exc:
+            self.logger.warning("Could not resolve the micro EQ input source: %r", exc)
+            return
+
+        if not source:
+            self.logger.info(
+                "Leaving the default input alone: nothing is feeding %s "
+                "(manual routing, or no microphone attached)",
+                self._MICRO_CAPTURE_OUT,
+            )
+            return
+        if not self.pa_audio_manager.has_source(source):
+            self.logger.info(
+                "Leaving the default input alone: '%s' feeds %s but is not in "
+                "the graph", source, self._MICRO_CAPTURE_OUT,
+            )
+            return
+
+        self.pa_audio_manager.set_default_source(self._MICRO_CAPTURE_OUT)
+
     _RECREATE_DEBOUNCE_S = 5.0
 
     def recreate_loopbacks(self) -> None:
@@ -1595,7 +1641,7 @@ class CoreEngine:
             # filter-chain; node.target by name binds when the node appears, so
             # the ordering here is tolerant of filter-chain not being up yet.
             self.setup_loopbacks()
-            self.pa_audio_manager.set_default_source("effect_output.sonar-micro-eq")
+            self._claim_default_source()
 
             # Configure the device
             self.init_device()
