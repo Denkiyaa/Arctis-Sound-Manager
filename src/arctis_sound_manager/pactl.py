@@ -354,6 +354,20 @@ class PulseAudioManager:
                     and s.proplist.get('device.class', '') != 'monitor']
         return physical[0] if physical else None
 
+    def has_source(self, node_name: str) -> bool:
+        """Whether a source with ``node.name`` *node_name* is in the graph.
+
+        Used before claiming a source as the system default: pointing the
+        default input at a node that isn't there leaves the machine with a
+        microphone nobody can hear.
+        """
+        try:
+            return any(s.proplist.get('node.name', '') == node_name
+                       for s in self.pulse.source_list())
+        except Exception as e:
+            self.logger.warning("has_source(%s) failed: %r", node_name, e)
+            return False
+
     def set_default_source(self, name: str) -> None:
         """Set the default PipeWire/PulseAudio source by node name."""
         try:
