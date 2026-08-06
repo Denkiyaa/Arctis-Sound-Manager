@@ -3,9 +3,9 @@
 
 """Tests for gui.sonar_page._ApplyWorker's live-apply path (Phase 2, issue
 #100/#88): a pure gain/macro/boost value change must be pushed to the running
-filter-chain via pw_utils.set_filter_gain instead of restarting the service,
-since a SIGTERM to filter-chain while it is processing audio SEGVs it on
-PipeWire 1.6.7 (coredump, issue #100)."""
+filter-chain via pw_utils.set_filter_controls instead of restarting the
+service, since a SIGTERM to filter-chain while it is processing audio SEGVs it
+on PipeWire 1.6.7 (coredump, issue #100)."""
 
 import os
 from pathlib import Path
@@ -40,7 +40,7 @@ def _stub_settings(monkeypatch):
 def test_apply_worker_gain_only_change_skips_restart(monkeypatch, tmp_path):
     """Changing only a macro slider value (basses 0.0 -> 3.0) on an unchanged
     band set must NOT call sc.restart — it must live-apply via
-    pw_utils.set_filter_gain instead."""
+    pw_utils.set_filter_controls instead."""
     _prepare_conf_dir(monkeypatch, tmp_path)
     _stub_settings(monkeypatch)
 
@@ -54,8 +54,10 @@ def test_apply_worker_gain_only_change_skips_restart(monkeypatch, tmp_path):
 
     set_gain_calls = []
     monkeypatch.setattr(
-        "arctis_sound_manager.pw_utils.set_filter_gain",
-        lambda node, control, value: set_gain_calls.append((node, control, value)) or True,
+        "arctis_sound_manager.pw_utils.set_filter_controls",
+        lambda node, controls: set_gain_calls.extend(
+            (node, key, value) for key, value in controls.items()
+        ) or True,
     )
 
     worker = sp._ApplyWorker("chat", bands, 3.0, 0.0, 0.0)
@@ -86,8 +88,10 @@ def test_apply_worker_micro_gain_only_change_skips_restart(monkeypatch, tmp_path
     monkeypatch.setattr(sp.sc, "restart", lambda *a, **kw: restart_calls.append(a) or True)
     set_gain_calls = []
     monkeypatch.setattr(
-        "arctis_sound_manager.pw_utils.set_filter_gain",
-        lambda node, control, value: set_gain_calls.append((node, control, value)) or True,
+        "arctis_sound_manager.pw_utils.set_filter_controls",
+        lambda node, controls: set_gain_calls.extend(
+            (node, key, value) for key, value in controls.items()
+        ) or True,
     )
 
     worker = sp._ApplyWorker("micro", bands, 0.0, 2.0, 0.0)  # voix 0.0 -> 2.0
@@ -100,10 +104,9 @@ def test_apply_worker_micro_gain_only_change_skips_restart(monkeypatch, tmp_path
     assert ("effect_input.sonar-micro-eq", "macro_voix:Gain", 2.0) in set_gain_calls
 
 
-def test_apply_worker_structural_change_still_restarts(monkeypatch, tmp_path):
-    """Adding a second band (a real structural change) must still go through
-    the full sc.restart() path — diff_filter_conf correctly refuses to
-    live-apply a topology change."""
+def test_apply_worker_band_added_skips_restart(monkeypatch, tmp_path):
+    """Phase 4: adding a band lands in a free rack slot, so it reaches the
+    running graph as control values — no sc.restart, no audio drop."""
     _prepare_conf_dir(monkeypatch, tmp_path)
     _stub_settings(monkeypatch)
 
@@ -114,8 +117,74 @@ def test_apply_worker_structural_change_still_restarts(monkeypatch, tmp_path):
 
     restart_calls = []
     monkeypatch.setattr(sp.sc, "restart", lambda *a, **kw: restart_calls.append(a) or True)
+    set_gain_calls = []
     monkeypatch.setattr(
-        "arctis_sound_manager.pw_utils.set_filter_gain",
+        "arctis_sound_manager.pw_utils.set_filter_controls",
+        lambda node, controls: set_gain_calls.extend(
+            (node, key, value) for key, value in controls.items()
+        ) or True,
+    )
+
+    worker = sp._ApplyWorker("chat", band_two, 0.0, 0.0, 0.0)
+    results = []
+    worker.done.connect(lambda ok: results.append(ok))
+    worker.run()
+
+    assert results == [True]
+    assert restart_calls == [], "an added band must not restart filter-chain"
+    # The new band took slot 1, which held a unity passthrough before.
+    assert ("effect_input.sonar-chat-eq", "bq1_L:Freq", 2000.0) in set_gain_calls
+    assert ("effect_input.sonar-chat-eq", "bq1_R:Gain", 1.0) in set_gain_calls
+    touched = {control.split(":")[0] for _, control, _ in set_gain_calls}
+    assert touched == {"bq1_L", "bq1_R"}
+
+
+def test_apply_worker_band_removed_skips_restart(monkeypatch, tmp_path):
+    """Deleting a band frees its rack slot back to unity — also live."""
+    _prepare_conf_dir(monkeypatch, tmp_path)
+    _stub_settings(monkeypatch)
+
+    band_one = [EqBand(freq=100, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
+    band_two = band_one + [EqBand(freq=2000, gain=1.0, q=0.7, type="peakingEQ", enabled=True)]
+
+    stp.generate_sonar_eq_conf("chat", band_two, 0.0, 0.0, 0.0)
+
+    restart_calls = []
+    monkeypatch.setattr(sp.sc, "restart", lambda *a, **kw: restart_calls.append(a) or True)
+    set_gain_calls = []
+    monkeypatch.setattr(
+        "arctis_sound_manager.pw_utils.set_filter_controls",
+        lambda node, controls: set_gain_calls.extend(
+            (node, key, value) for key, value in controls.items()
+        ) or True,
+    )
+
+    worker = sp._ApplyWorker("chat", band_one, 0.0, 0.0, 0.0)
+    results = []
+    worker.done.connect(lambda ok: results.append(ok))
+    worker.run()
+
+    assert results == [True]
+    assert restart_calls == [], "a removed band must not restart filter-chain"
+    assert ("effect_input.sonar-chat-eq", "bq1_L:Gain", 0.0) in set_gain_calls
+
+
+def test_apply_worker_structural_change_still_restarts(monkeypatch, tmp_path):
+    """A band changing filter type retypes its node's label — a real topology
+    change that diff_filter_conf still refuses to live-apply, so it goes
+    through the full sc.restart() path."""
+    _prepare_conf_dir(monkeypatch, tmp_path)
+    _stub_settings(monkeypatch)
+
+    band_one = [EqBand(freq=100, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
+    band_two = [EqBand(freq=100, gain=2.0, q=0.7, type="highPass", enabled=True)]
+
+    stp.generate_sonar_eq_conf("chat", band_one, 0.0, 0.0, 0.0)
+
+    restart_calls = []
+    monkeypatch.setattr(sp.sc, "restart", lambda *a, **kw: restart_calls.append(a) or True)
+    monkeypatch.setattr(
+        "arctis_sound_manager.pw_utils.set_filter_controls",
         lambda *a, **kw: True,
     )
     # The full restart path recreates loopbacks etc. via D-Bus — not under
@@ -136,7 +205,7 @@ def test_apply_worker_structural_change_still_restarts(monkeypatch, tmp_path):
     worker.run()
 
     assert results == [True]
-    assert len(restart_calls) == 1, "a band-count change must go through a full restart"
+    assert len(restart_calls) == 1, "a band type change must go through a full restart"
 
 
 def test_apply_worker_spatial_toggle_skips_restart(monkeypatch, tmp_path):

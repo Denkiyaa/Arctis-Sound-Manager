@@ -304,8 +304,8 @@ def quiesce_filter_chain() -> int:
     return destroyed
 
 
-def set_filter_gain(node_name: str, control: str, value: float) -> bool:
-    """Live-apply a single filter-chain control value, no restart required.
+def set_filter_controls(node_name: str, controls: dict[str, float]) -> bool:
+    """Live-apply filter-chain control values in one shot, no restart required.
 
     *node_name* is the ``node.name`` of the filter-chain's own outer node
     (e.g. ``"effect_input.sonar-game-eq"``) — the individual biquad/LADSPA
@@ -319,12 +319,19 @@ def set_filter_gain(node_name: str, control: str, value: float) -> bool:
 
         $ pw-cli enum-params <id> Props | grep bq0
               String "bq0:Freq" / "bq0:Q" / "bq0:Gain" ...
-        $ pw-cli set-param <id> Props '{ params = [ "bq0:Gain" 6.0 ] }'
-        # readback via enum-params confirms the value took effect immediately
+        $ pw-cli set-param <id> Props '{ params = [ "bq0:Freq" 31.25 "bq0:Q" 0.707 "bq0:Gain" 6.0 ] }'
+        # readback via enum-params confirms every value took effect immediately
 
     This sidesteps the SIGTERM-during-DSP race that SEGVs filter-chain on
     PipeWire 1.6.7 when a control value change is instead applied by
     regenerating the config and restarting the service (issue #100/#88).
+
+    The whole batch goes in a single ``set-param``, and the node is resolved
+    once for it. That matters: a curve edit routinely moves several controls
+    at a time (deleting a band shifts every band below it down a rack slot,
+    three controls each, doubled on the stereo channels), and a dump plus a
+    ``pw-cli`` spawn per control turned a 25 ms apply into a second and a
+    half of "pending" — long enough for the next edit to land on top of it.
 
     Parameters
     ----------
@@ -333,22 +340,23 @@ def set_filter_gain(node_name: str, control: str, value: float) -> bool:
         PipeWire object id via a fresh ``pw-dump`` (Correctif — issue #123:
         the lookup goes through ``_pw_dump()``/``_pw_run()``, never a raw
         subprocess spawn).
-    control:
-        The internal control key, e.g. ``"bq3:Gain"``, ``"macro_voix:Gain"``,
-        ``"boost:Freq"``.
-    value:
-        The new numeric value.
+    controls:
+        ``{control_key: value}``, e.g. ``{"bq3:Gain": -2.0, "bq3:Freq": 900.0}``.
+        An empty mapping is a no-op and succeeds.
 
     Returns
     -------
     bool
         True when *node_name* was found in the graph and ``pw-cli set-param``
         exited 0. False when the node is not currently present (filter-chain
-        not up yet, or this control belongs to a node that does not exist in
+        not up yet, or these controls belong to a node that does not exist in
         the running graph) or the call failed — the caller should treat this
         as "cannot live-apply" and fall back to regenerating the conf +
         ``ensure_filter_chain_healthy()`` rather than forcing a raw restart.
     """
+    if not controls:
+        return True
+
     data = _pw_dump()
     node_id: int | None = None
     for obj in data:
@@ -360,28 +368,34 @@ def set_filter_gain(node_name: str, control: str, value: float) -> bool:
             break
 
     if node_id is None:
-        logger.debug("set_filter_gain: node '%s' not in graph", node_name)
+        logger.debug("set_filter_controls: node '%s' not in graph", node_name)
         return False
 
+    params = " ".join(f'"{key}" {value}' for key, value in controls.items())
     try:
         r = _pw_run(
             ["pw-cli", "set-param", str(node_id), "Props",
-             f'{{ params = [ "{control}" {value} ] }}'],
+             f'{{ params = [ {params} ] }}'],
             capture_output=True, text=True, timeout=3,
         )
         if r.returncode != 0:
             logger.warning(
-                "set_filter_gain: pw-cli set-param on '%s' (%s=%s) failed: %s",
-                node_name, control, value, (r.stderr or "").strip(),
+                "set_filter_controls: pw-cli set-param on '%s' (%s) failed: %s",
+                node_name, params, (r.stderr or "").strip(),
             )
             return False
         return True
     except Exception as exc:
         logger.warning(
-            "set_filter_gain: exception setting '%s' %s=%s: %s",
-            node_name, control, value, exc,
+            "set_filter_controls: exception setting '%s' (%s): %s",
+            node_name, params, exc,
         )
         return False
+
+
+def set_filter_gain(node_name: str, control: str, value: float) -> bool:
+    """Live-apply one filter-chain control. See :func:`set_filter_controls`."""
+    return set_filter_controls(node_name, {control: value})
 
 
 def pw_node_exists(name: str, data: list | None = None) -> bool:
