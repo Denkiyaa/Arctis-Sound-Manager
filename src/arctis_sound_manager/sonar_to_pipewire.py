@@ -915,22 +915,21 @@ def generate_sonar_eq_conf(
     if channel not in ("game", "chat", "media", "output"):
         raise ValueError(f"channel must be 'game', 'chat', 'media' or 'output', got {channel!r}")
 
-    # Only chat still targets the physical Arctis output directly from this
-    # conf and therefore needs a connected device to resolve a target. Game
-    # and media always target HeSuVi (frozen hint, see docstring) regardless
-    # of device-attach state — HeSuVi's OWN conf is what needs the device.
-    needs_physical = channel == "chat"
-    if needs_physical and not _device_attached():
-        _log.info(
-            "%s EQ config: device not attached, writing with empty target — "
-            "PipeWire will bind on device arrival.",
-            channel,
-        )
-
     owns_link = channel in ("game", "media")
+    sink_name = f"effect_input.sonar-{channel}-eq"
+
+    if output_path is None:
+        output_path = _CONF_DIR / f"sonar-{channel}-eq.conf"
 
     if channel == "chat":
+        # Only chat still targets the physical Arctis output directly from
+        # this conf and therefore needs a connected device to resolve a
+        # target. Game and media always target HeSuVi (frozen hint, see
+        # docstring) regardless of device-attach state — HeSuVi's OWN conf is
+        # what needs the device.
         target = target_override or (_get_physical_out_chat() if _device_attached() else "")
+        if not target:
+            target = _target_already_written(output_path)
         channels = _CHANNEL_CHANNELS[channel]
         position = _CHANNEL_POSITION[channel]
     elif channel == "output":
@@ -940,11 +939,6 @@ def generate_sonar_eq_conf(
         target = target_override or _CHANNEL_TARGET.get(channel, "")
         channels = _CHANNEL_CHANNELS[channel]
         position = _CHANNEL_POSITION[channel]
-
-    sink_name = f"effect_input.sonar-{channel}-eq"
-
-    if output_path is None:
-        output_path = _CONF_DIR / f"sonar-{channel}-eq.conf"
 
     boost_db = max(-12.0, min(12.0, boost_db))
 
@@ -1260,14 +1254,22 @@ def generate_sonar_micro_conf(
     as a documentary hint only; :func:`ensure_micro_capture_link` is what
     actually (re)establishes and enforces the link.
     """
-    if not _device_attached():
-        _log.info(
-            "micro EQ config: device not attached, writing with empty target — "
-            "PipeWire will bind on device arrival."
-        )
-
     if output_path is None:
         output_path = _CONF_DIR / "sonar-micro-eq.conf"
+
+    # Same "this process cannot see the device" fallback the chat channel
+    # needs — see _target_already_written. Harmless here where it is missed
+    # (the capture side runs autoconnect=false and ensure_micro_capture_link
+    # owns the link, issue #127), but there is no reason to throw the hint
+    # away every time the GUI rewrites this conf.
+    capture_target = _get_physical_in() if _device_attached() else ""
+    if not capture_target:
+        capture_target = _target_already_written(output_path)
+    if not capture_target:
+        _log.info(
+            "micro EQ config: no device and no target on disk, writing with "
+            "empty target — the capture link is established on device arrival."
+        )
 
     boost_db = max(-12.0, min(12.0, boost_db))
 
@@ -1489,7 +1491,7 @@ context.modules = [
         node.passive   = true
         node.autoconnect     = false
         state.restore-target = false
-        target.object  = "{_get_physical_in()}"
+        target.object  = "{capture_target}"
         audio.rate     = 48000
         audio.channels = 1
         audio.position = [ MONO ]
@@ -1688,6 +1690,62 @@ def generate_virtual_sinks_conf(sonar: bool) -> str:
 def _write_conf(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
+
+
+_WRITTEN_TARGET_RE = re.compile(
+    r'^\s*(?:node\.target|target\.object)\s*=\s*"([^"]+)"', re.MULTILINE
+)
+
+
+def _restore_missing_target(content: str, channel: str, target: str) -> str | None:
+    """Put *target* back into a generated conf that carries none, or ``None``.
+
+    The repair for a conf already written without a target, which
+    :func:`_target_already_written` cannot help with — there is nothing left
+    on disk to preserve. Only the daemon knows the device, so only the daemon
+    can do this; it runs from ensure_sonar_eq_configs().
+
+    ``None`` when the conf is not in that state at all: it already names a
+    target (a *wrong* one is a different problem — the device moved, and the
+    caller regenerates), or it does not have the playback node this expects.
+    """
+    anchor = f'        node.name           = "effect_output.sonar-{channel}-eq"\n'
+    if not target or "node.target" in content or anchor not in content:
+        return None
+    return content.replace(
+        anchor,
+        f'{anchor}        node.target         = "{target}"\n'
+        f'        target.object       = "{target}"\n',
+        1,
+    )
+
+
+def _target_already_written(path: Path) -> str:
+    """The target the conf at *path* already carries, or ``""``.
+
+    A fallback for the case where the process regenerating a conf cannot see
+    the device. Only ``core.py`` fills :mod:`device_state`, and it runs in the
+    daemon — so the GUI, which rewrites these confs every time the user edits
+    an EQ, always believes no device is attached. Writing the target out empty
+    there is not the harmless "PipeWire will bind on device arrival" the old
+    comment claimed: an output node with no target and ``autoconnect`` on is
+    handed to WirePlumber, which tries to route it to the default sink, finds
+    that sink is one of ASM's own loopbacks (linking there would close a
+    cycle), gives up — and retries on every graph change from then on. The
+    chat channel lost its target exactly this way, and the retry storm was
+    audible on the other channels.
+
+    What the file already says is the best answer a process in the dark has,
+    and it is right in the case that matters: the device has not moved, only
+    this process cannot see it. It is no worse in the case it isn't — a target
+    naming an absent node leaves the node unlinked until it returns, which is
+    what an unresolvable target is supposed to mean.
+    """
+    try:
+        match = _WRITTEN_TARGET_RE.search(path.read_text())
+    except OSError:
+        return ""
+    return match.group(1) if match else ""
 
 
 # ── Live-apply diff (Phase 2, issue #100/#88) ────────────────────────────────
@@ -2111,6 +2169,20 @@ def ensure_sonar_eq_configs() -> bool:
                 )
                 needs_regen = True
             elif exp["target"] and tgt_str not in content:
+                # A conf with NO target at all is repairable without touching
+                # anything else, and that is worth doing: regenerating writes
+                # a bypass, which would silently flatten the user's EQ for
+                # this channel. Only a conf naming the *wrong* target — the
+                # device genuinely moved — falls through to that.
+                patched = _restore_missing_target(content, channel, exp["target"])
+                if patched is not None:
+                    log.warning(
+                        "sonar-%s-eq.conf lost its target — putting %r back, "
+                        "keeping the EQ", channel, exp["target"],
+                    )
+                    _write_conf(conf_path, patched)
+                    generated = True
+                    continue
                 log.warning(
                     "sonar-%s-eq.conf has wrong target (expected %r) — regenerating",
                     channel, exp["target"],
