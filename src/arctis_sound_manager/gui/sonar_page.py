@@ -106,6 +106,11 @@ _RAW_DIR      = Path(__file__).parent / "presets"
 _CHANNEL_TAG  = {"game": "[Game]", "media": "[Game]", "chat": "[Chat]", "micro": "[Mic]", "output": "[Game]"}
 _FAV_ROW_SIZE = 9   # slots per row before wrapping to a new row
 _APPLY_DELAY  = 600   # ms debounce before restarting filter-chain
+# Curve edits ride the live-apply path (a handful of pw-cli set-param calls,
+# no restart) and only land when the drag ends, so they get a much shorter
+# debounce — long enough to coalesce a burst of inspector edits, short enough
+# that the curve you drew is what you hear.
+_BAND_APPLY_DELAY = 120
 
 # ── Preset I/O ────────────────────────────────────────────────────────────────
 
@@ -512,18 +517,21 @@ class _ApplyWorker(QThread):
             if _old_eq_conf is not None and _hesuvi_unchanged:
                 node_diff = diff_filter_conf(_old_eq_conf, _new_eq_conf)
                 if node_diff is not None:
-                    from arctis_sound_manager.pw_utils import set_filter_gain
+                    from arctis_sound_manager.pw_utils import set_filter_controls
                     sink_name = f"effect_input.sonar-{self._channel}-eq"
-                    all_ok = True
-                    for internal_name, fields in node_diff.items():
-                        for control, val in fields.items():
-                            if not set_filter_gain(sink_name, f"{internal_name}:{control}", val):
-                                all_ok = False
-                    if all_ok:
+                    # One set-param for the whole edit. Per-control calls each
+                    # cost a pw-dump and a pw-cli spawn, and an edit that
+                    # shifts a rack slot moves a dozen or more of them.
+                    controls = {
+                        f"{internal_name}:{control}": val
+                        for internal_name, fields in node_diff.items()
+                        for control, val in fields.items()
+                    }
+                    if set_filter_controls(sink_name, controls):
                         log.debug(
                             "_ApplyWorker: live-applied %d control change(s) on "
                             "channel=%s, no filter-chain restart needed",
-                            sum(len(f) for f in node_diff.values()), self._channel,
+                            len(controls), self._channel,
                         )
                         if self._channel in ("game", "media"):
                             from arctis_sound_manager.sonar_to_pipewire import ensure_spatial_eq_links
@@ -1496,8 +1504,12 @@ class SonarChannelWidget(QWidget):
         self._target_override: str | None = None
         self._worker: _ApplyWorker | None = None
         self._pending_apply = False
+        # The curve as it stands, and as the active preset holds it — the
+        # second is what Revert goes back to. There is no third "applied"
+        # copy anymore: every edit applies itself, so the curve on screen is
+        # the curve in the graph.
         self._cur_bands: list = []
-        self._committed_bands: list = []
+        self._preset_bands: list = []
         self._apply_timer = QTimer(self)
         self._apply_timer.setSingleShot(True)
         self._apply_timer.setInterval(_APPLY_DELAY)
@@ -1554,23 +1566,6 @@ class SonarChannelWidget(QWidget):
         self._revert_btn.setStyleSheet(self._revert_btn_ss())
         self._revert_btn.clicked.connect(self._on_revert_eq)
         eq_header.addWidget(self._revert_btn)
-
-        self._apply_btn = QPushButton(_t("apply_eq"))
-        self._apply_btn.setVisible(False)
-        self._apply_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {ACCENT};
-                color: #fff;
-                border: none;
-                border-radius: 6px;
-                padding: 4px 14px;
-                font-size: 10pt;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background: #7a5af8; }}
-        """)
-        self._apply_btn.clicked.connect(self._on_apply_eq)
-        eq_header.addWidget(self._apply_btn)
 
         self._status_lbl = QLabel()
         self._status_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 9pt;")
@@ -1741,21 +1736,6 @@ class SonarChannelWidget(QWidget):
         if hasattr(self, "_eq_widget"):
             self._eq_widget.apply_theme(t)
 
-        # Apply button
-        if hasattr(self, "_apply_btn"):
-            self._apply_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {_theme.c('ACCENT')};
-                    color: #fff;
-                    border: none;
-                    border-radius: 6px;
-                    padding: 4px 14px;
-                    font-size: 10pt;
-                    font-weight: bold;
-                }}
-                QPushButton:hover {{ background: {_theme.c('BG_BUTTON_HOVER')}; }}
-            """)
-
         # Revert button (outline, secondary)
         if hasattr(self, "_revert_btn"):
             self._revert_btn.setStyleSheet(self._revert_btn_ss())
@@ -1774,7 +1754,7 @@ class SonarChannelWidget(QWidget):
         else:
             bands = []
         self._cur_bands = bands
-        self._committed_bands = list(bands)
+        self._preset_bands = list(bands)
         self._eq_widget.set_bands(bands)
         self._update_macro_curve()
 
@@ -1783,32 +1763,35 @@ class SonarChannelWidget(QWidget):
     @Slot(str, list)
     def _on_preset_selected(self, name: str, bands: list):
         self._cur_bands = bands
-        self._committed_bands = list(bands)
+        self._preset_bands = list(bands)
         self._eq_widget.set_bands(bands)
         self._update_macro_curve()
-        self._apply_btn.setVisible(False)
         self._revert_btn.setVisible(False)
         self._schedule_apply()
 
     def _on_bands_changed(self, bands: list):
-        self._cur_bands = bands
-        self._apply_btn.setVisible(True)
-        self._revert_btn.setVisible(True)
-        self._status_lbl.setText(_t("eq_pending"))
+        """A curve edit is applied as soon as it happens, no Apply in the way.
 
-    def _on_apply_eq(self):
-        self._committed_bands = list(self._cur_bands)
-        self._apply_btn.setVisible(False)
-        self._revert_btn.setVisible(False)
-        self._do_apply()
+        It used to sit behind that button because every edit meant
+        regenerating the conf and restarting filter-chain, which drops the
+        audio for a few seconds; a button at least made the drop the user's
+        own doing. The band rack (_band_slot_rack, sonar_to_pipewire) removed
+        that cost: moving, adding, deleting or muting a point now only
+        rewrites control values, which _ApplyWorker pushes straight into the
+        running graph. So the curve applies itself, the way the macro sliders
+        next to it always have. Retyping a band still relabels its node and
+        so still restarts — the one edit that keeps the old cost.
+        """
+        self._cur_bands = bands
+        self._revert_btn.setVisible(bands != self._preset_bands)
+        self._schedule_apply(_BAND_APPLY_DELAY)
 
     def _on_revert_eq(self):
-        """Discard unapplied curve edits, restoring the last-applied bands (#152)."""
-        self._cur_bands = list(self._committed_bands)
-        self._eq_widget.set_bands(self._committed_bands)
-        self._apply_btn.setVisible(False)
+        """Drop the curve edits and go back to what the preset holds (#152)."""
+        self._cur_bands = list(self._preset_bands)
+        self._eq_widget.set_bands(self._preset_bands)
         self._revert_btn.setVisible(False)
-        self._status_lbl.setText("")
+        self._schedule_apply(_BAND_APPLY_DELAY)
 
     def _write_preset(self, name: str) -> None:
         """Persist the current EQ curve + macros + settings under *name*."""
@@ -1826,8 +1809,8 @@ class SonarChannelWidget(QWidget):
             macros={"basses": basses, "voix": voix, "aigus": aigus},
             settings=settings or None,
         )
-        self._committed_bands = list(bands)
-        self._apply_btn.setVisible(False)
+        self._cur_bands = list(bands)
+        self._preset_bands = list(bands)
         self._revert_btn.setVisible(False)
         self._preset_bar.notify_saved(name)
 
@@ -1871,7 +1854,6 @@ class SonarChannelWidget(QWidget):
         _save_output_passthrough(on)
         self._set_eq_controls_enabled(not on)
         # Regenerate the output config immediately in the new mode.
-        self._committed_bands = list(self._cur_bands)
         self._do_apply()
 
     def _set_eq_controls_enabled(self, enabled: bool) -> None:
@@ -1896,9 +1878,9 @@ class SonarChannelWidget(QWidget):
 
     # ── Apply ─────────────────────────────────────────────────────────────────
 
-    def _schedule_apply(self):
+    def _schedule_apply(self, delay: int | None = None):
         self._status_lbl.setText(_t("pending"))
-        self._apply_timer.start()
+        self._apply_timer.start(_APPLY_DELAY if delay is None else delay)
 
     def _do_apply(self):
         if self._worker is not None:
@@ -1909,7 +1891,7 @@ class SonarChannelWidget(QWidget):
         self._pending_apply = False
         basses, voix, aigus = self._macros.get_values()
         worker = _ApplyWorker(
-            self._channel, list(self._committed_bands), basses, voix, aigus,
+            self._channel, list(self._cur_bands), basses, voix, aigus,
             target_override=self._target_override,
         )
         self._worker = worker
@@ -3450,7 +3432,7 @@ class SonarPage(QWidget):
             return
 
         widget._cur_bands = bands
-        widget._committed_bands = list(bands)
+        widget._preset_bands = list(bands)
         widget._eq_widget.set_bands(bands)
         widget._update_macro_curve()
         widget._preset_bar._active = name

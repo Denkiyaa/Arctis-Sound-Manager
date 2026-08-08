@@ -3,6 +3,7 @@
 
 """Tests for sonar_to_pipewire — filter-chain config generation."""
 
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -219,6 +220,99 @@ def test_chat_targets_physical_output():
         device_state.clear()
     assert "alsa_output.usb-SteelSeries" in text
     assert "audio.channels = 2" in text
+
+
+def test_chat_keeps_its_target_when_the_writer_cannot_see_the_device(tmp_path):
+    """The GUI rewrites this conf on every EQ edit and never has a device
+    state (only the daemon fills it), so a regenerated conf must not throw
+    away the target the file already carries. Losing it leaves the chat EQ
+    output floating with autoconnect on, and WirePlumber retries routing it
+    to the default sink — one of ASM's own loopbacks — on every graph change
+    from then on, which is audible on the other channels."""
+    from arctis_sound_manager import device_state
+
+    conf = tmp_path / "sonar-chat-eq.conf"
+    phys = "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo"
+    device_state.set_current_device(
+        physical_out_game=phys, physical_out_chat=phys, physical_in="",
+        spatial_engine="hesuvi", device_name="SteelSeries Arctis Nova 7",
+    )
+    try:
+        generate_sonar_eq_conf("chat", [], 0.0, 0.0, 0.0, output_path=conf)
+    finally:
+        device_state.clear()
+    assert phys in conf.read_text()
+
+    # Now regenerate exactly as the GUI does: no device state at all.
+    bands = [EqBand(freq=100, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
+    text = generate_sonar_eq_conf("chat", bands, 0.0, 0.0, 0.0, output_path=conf)
+    assert f'node.target         = "{phys}"' in text
+    assert f'target.object       = "{phys}"' in text
+
+
+def test_chat_target_stays_empty_when_nothing_knows_it(tmp_path):
+    """No device and no conf on disk — there is nothing to preserve, and an
+    empty target must not become the literal string of a missing one."""
+    text = generate_sonar_eq_conf("chat", [], 0.0, 0.0, 0.0,
+                                  output_path=tmp_path / "sonar-chat-eq.conf")
+    assert "node.target" not in text
+
+
+def test_micro_keeps_its_capture_target_when_the_writer_is_in_the_dark(tmp_path):
+    """Same fallback on the mic conf's capture hint."""
+    from arctis_sound_manager import device_state
+
+    conf = tmp_path / "sonar-micro-eq.conf"
+    mic = "alsa_input.usb-SteelSeries_Arctis_Nova_7-00.mono-fallback"
+    bands = [EqBand(freq=300, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
+    device_state.set_current_device(
+        physical_out_game="alsa_output.x", physical_out_chat="alsa_output.x",
+        physical_in=mic, spatial_engine="hesuvi", device_name="Arctis Nova 7",
+    )
+    try:
+        generate_sonar_micro_conf(bands, 0.0, 0.0, 0.0, output_path=conf)
+    finally:
+        device_state.clear()
+
+    text = generate_sonar_micro_conf(bands, 1.0, 0.0, 0.0, output_path=conf)
+    assert f'target.object  = "{mic}"' in text
+
+
+def test_a_conf_that_already_lost_its_target_gets_it_back_with_its_eq(tmp_path, monkeypatch):
+    """The daemon's repair for a conf written before the fix. Regenerating it
+    would write a bypass and take the user's chat EQ with it, so the target
+    goes back in place instead."""
+    import arctis_sound_manager.sonar_to_pipewire as _s2p
+    from arctis_sound_manager import device_state
+
+    conf_dir = tmp_path / "filter-chain.conf.d"
+    conf_dir.mkdir(parents=True)
+    monkeypatch.setattr(_s2p, "_CONF_DIR", conf_dir)
+
+    phys = "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo"
+    bands = [EqBand(freq=100, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
+    # Written by a GUI in the dark: real EQ, no target.
+    for channel in ("game", "media", "chat"):
+        generate_sonar_eq_conf(channel, bands, 0.0, 0.0, 0.0,
+                               output_path=conf_dir / f"sonar-{channel}-eq.conf")
+    chat_conf = conf_dir / "sonar-chat-eq.conf"
+    assert "node.target" not in chat_conf.read_text()
+
+    device_state.set_current_device(
+        physical_out_game=phys, physical_out_chat=phys, physical_in="",
+        spatial_engine="hesuvi", device_name="SteelSeries Arctis Nova 7",
+    )
+    try:
+        _s2p.ensure_sonar_eq_configs()
+    finally:
+        device_state.clear()
+
+    repaired = chat_conf.read_text()
+    assert f'node.target         = "{phys}"' in repaired
+    assert f'target.object       = "{phys}"' in repaired
+    # …and the EQ is still there: the bypass path would have dropped it.
+    assert "bq0" in repaired
+    assert "Gain = 2.0" in repaired
 
 
 def test_chat_target_has_target_object():
@@ -1182,9 +1276,12 @@ def test_ladspa_ref_container_home_path_keeps_absolute():
 # generate_sonar_eq_conf() must emit the SAME set of node names, in the same
 # order, for a given active band set — regardless of macro/boost values, and
 # regardless of the exact Freq/Gain/Q of those bands. Only a real topology
-# change (band added/removed/retyped, preset switch, …) may change the node
-# names. This is what lets Phase 2's diff_filter_conf() distinguish a safe
-# live-apply from a case that genuinely needs a filter-chain restart.
+# change (band retyped, preset switch, …) may change the node names. This is
+# what lets Phase 2's diff_filter_conf() distinguish a safe live-apply from a
+# case that genuinely needs a filter-chain restart.
+#
+# Phase 4 widened that: how MANY bands are enabled no longer changes the node
+# names either, because the bands sit in a fixed rack of slots.
 
 def _node_names(text: str) -> list[str]:
     import re
@@ -1227,6 +1324,125 @@ def test_stable_graph_across_band_freq_gain_q_edits():
     text_b = generate_sonar_eq_conf("chat", bands_b, 1.0, 0.0, 0.0,
                                      output_path=Path("/dev/null"))
     assert _node_names(text_a) == _node_names(text_b)
+
+
+def test_stable_graph_across_band_count():
+    """Phase 4: one band or eight, the emitted rack is the same nodes in the
+    same order — that is what keeps an added/deleted band live-appliable."""
+    one = [EqBand(freq=100, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
+    eight = [
+        EqBand(freq=100 * (i + 1), gain=1.0, q=0.7, type="peakingEQ", enabled=True)
+        for i in range(8)
+    ]
+    text_a = generate_sonar_eq_conf("game", one, 0.0, 0.0, 0.0,
+                                     output_path=Path("/dev/null"))
+    text_b = generate_sonar_eq_conf("game", eight, 0.0, 0.0, 0.0,
+                                     output_path=Path("/dev/null"))
+    assert _node_names(text_a) == _node_names(text_b)
+
+
+def test_empty_rack_slots_are_unity_passthroughs():
+    """A slot no band occupies must be a bq_peaking at Gain=0.0 — anything
+    else would colour the audio of a curve the user never drew."""
+    from arctis_sound_manager.sonar_to_pipewire import _BAND_SLOTS, _RACK_TYPES
+
+    one = [EqBand(freq=100, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
+    text = generate_sonar_eq_conf("game", one, 0.0, 0.0, 0.0,
+                                   output_path=Path("/dev/null"))
+    for slot in range(1, _BAND_SLOTS):
+        assert f"name = bq{slot}  label = bq_peaking" in text
+    # Every slot but the one the band occupies: the rest of the peaking pool
+    # plus a spare slot for each shelf type.
+    empty = _BAND_SLOTS - 1 + (len(_RACK_TYPES) - 1)
+    assert text.count("control = { Freq = 1000.0  Q = 0.7071  Gain = 0.0 }") == empty
+
+
+def test_the_rack_has_room_above_a_preset_that_uses_every_filter():
+    """The rack only pays off if a full preset still leaves free slots: Sonar
+    presets carry ten filters and plenty enable all ten (Music - Punchy,
+    Flat), so a rack of exactly ten is full before the user adds anything and
+    the first added band takes the restart the rack exists to avoid."""
+    from arctis_sound_manager.sonar_to_pipewire import _BAND_SLOTS
+
+    full_preset = [
+        EqBand(freq=100 * (i + 1), gain=1.0, q=0.7, type="peakingEQ", enabled=True)
+        for i in range(10)
+    ]
+    assert _BAND_SLOTS > len(full_preset)
+
+    old_text = generate_sonar_eq_conf("media", full_preset, 0.0, 0.0, 0.0,
+                                       output_path=Path("/dev/null"))
+    new_text = generate_sonar_eq_conf(
+        "media", full_preset + [EqBand(freq=2500, gain=2.0, q=0.7)],
+        0.0, 0.0, 0.0, output_path=Path("/dev/null"),
+    )
+    assert diff_filter_conf(old_text, new_text) == {
+        "bq10": {"Freq": 2500.0, "Q": 0.7, "Gain": 2.0},
+    }
+
+
+def test_deleting_a_band_beside_a_shelf_stays_live():
+    """The stock Flat preset is a low shelf, eight peaking bands and a high
+    shelf. With the rack laid out in curve order, deleting any of them slid
+    the high shelf down into a peaking slot — a relabelled node, so every
+    delete on that channel restarted filter-chain. Laying the rack out by
+    type keeps each band in a slot of its own kind."""
+    preset = (
+        [EqBand(freq=60, gain=1.0, q=0.7, type="lowShelving", enabled=True)]
+        + [EqBand(freq=200 * (i + 1), gain=1.0, q=0.7, type="peakingEQ", enabled=True)
+           for i in range(8)]
+        + [EqBand(freq=12000, gain=1.0, q=0.7, type="highShelving", enabled=True)]
+    )
+    old_text = generate_sonar_eq_conf("chat", preset, 0.0, 0.0, 0.0,
+                                       output_path=Path("/dev/null"))
+    for idx in (0, 4, 9):
+        remaining = [b for i, b in enumerate(preset) if i != idx]
+        new_text = generate_sonar_eq_conf("chat", remaining, 0.0, 0.0, 0.0,
+                                           output_path=Path("/dev/null"))
+        assert diff_filter_conf(old_text, new_text) is not None, (
+            f"deleting band {idx} fell back to a filter-chain restart"
+        )
+
+
+def test_an_empty_shelf_slot_is_a_unity_shelf_not_a_peaking_filter():
+    """Emptying a shelf slot must keep the slot's label — swapping it for a
+    peaking node is the relabel the layout exists to avoid."""
+    peaking_only = [EqBand(freq=500, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
+    text = generate_sonar_eq_conf("game", peaking_only, 0.0, 0.0, 0.0,
+                                   output_path=Path("/dev/null"))
+    assert "label = bq_lowshelf" in text
+    assert "label = bq_highshelf" in text
+    # …and they are flat: a shelf at Gain=0.0 passes the signal through.
+    for name in ("bq16", "bq17"):
+        assert f"name = {name}  label = bq_" in text
+    assert "Gain = 1.0" not in text
+
+
+def test_a_pass_filter_is_not_parked_in_the_rack():
+    """Gain cannot neutralise a high/low-pass, so an unused one must not be
+    emitted — it would filter the audio of a curve that does not use it."""
+    peaking_only = [EqBand(freq=500, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
+    text = generate_sonar_eq_conf("game", peaking_only, 0.0, 0.0, 0.0,
+                                   output_path=Path("/dev/null"))
+    assert "bq_highpass" not in text
+    assert "bq_lowpass" not in text
+
+
+def test_the_rack_grows_a_step_at_a_time_not_a_band_at_a_time():
+    """Once a curve outgrows the rack, the restart that costs must buy more
+    than a single extra band."""
+    from arctis_sound_manager.sonar_to_pipewire import _BAND_SLOT_STEP, _BAND_SLOTS
+
+    def peaking_slots(n):
+        bands = [EqBand(freq=100 + i, gain=1.0, q=0.7, type="peakingEQ", enabled=True)
+                 for i in range(n)]
+        text = generate_sonar_eq_conf("game", bands, 0.0, 0.0, 0.0,
+                                       output_path=Path("/dev/null"))
+        return len(re.findall(r"name = bq\d+  label = bq_peaking", text))
+
+    assert peaking_slots(_BAND_SLOTS) == _BAND_SLOTS
+    assert peaking_slots(_BAND_SLOTS + 1) == _BAND_SLOTS + _BAND_SLOT_STEP
+    assert peaking_slots(_BAND_SLOTS + _BAND_SLOT_STEP) == _BAND_SLOTS + _BAND_SLOT_STEP
 
 
 def test_stable_graph_micro_across_macro_values():
@@ -1275,8 +1491,9 @@ def test_diff_filter_conf_detects_band_freq_and_gain_change():
     }
 
 
-def test_diff_filter_conf_returns_none_on_band_count_change():
-    """A band added/removed is a real topology change -> must restart."""
+def test_diff_filter_conf_band_added_is_live_appliable():
+    """Phase 4: a band added within the rack fills a slot that was already in
+    the graph as a unity passthrough -> control values only, no restart."""
     band_one = [EqBand(freq=100, gain=2.0, q=0.7, type="peakingEQ", enabled=True)]
     band_two = band_one + [
         EqBand(freq=2000, gain=1.0, q=0.7, type="peakingEQ", enabled=True),
@@ -1285,6 +1502,46 @@ def test_diff_filter_conf_returns_none_on_band_count_change():
                                        output_path=Path("/dev/null"))
     new_text = generate_sonar_eq_conf("chat", band_two, 0.0, 0.0, 0.0,
                                        output_path=Path("/dev/null"))
+    assert diff_filter_conf(old_text, new_text) == {
+        "bq1_L": {"Freq": 2000.0, "Q": 0.7, "Gain": 1.0},
+        "bq1_R": {"Freq": 2000.0, "Q": 0.7, "Gain": 1.0},
+    }
+
+
+def test_diff_filter_conf_band_disabled_is_live_appliable():
+    """Toggling a band off empties its slot back to unity — also live."""
+    bands_on = [
+        EqBand(freq=100, gain=2.0, q=0.7, type="peakingEQ", enabled=True),
+        EqBand(freq=2000, gain=1.0, q=0.7, type="peakingEQ", enabled=True),
+    ]
+    bands_off = [
+        EqBand(freq=100, gain=2.0, q=0.7, type="peakingEQ", enabled=True),
+        EqBand(freq=2000, gain=1.0, q=0.7, type="peakingEQ", enabled=False),
+    ]
+    old_text = generate_sonar_eq_conf("game", bands_on, 0.0, 0.0, 0.0,
+                                       output_path=Path("/dev/null"))
+    new_text = generate_sonar_eq_conf("game", bands_off, 0.0, 0.0, 0.0,
+                                       output_path=Path("/dev/null"))
+    assert diff_filter_conf(old_text, new_text) == {
+        "bq1": {"Freq": 1000.0, "Q": 0.7071, "Gain": 0.0},
+    }
+
+
+def test_diff_filter_conf_returns_none_past_the_rack_size():
+    """The rack only absorbs so many bands: a curve that outgrows it really
+    does add a node, and that still needs a restart."""
+    from arctis_sound_manager.sonar_to_pipewire import _BAND_SLOTS
+
+    bands = [
+        EqBand(freq=100 * (i + 1), gain=1.0, q=0.7, type="peakingEQ", enabled=True)
+        for i in range(_BAND_SLOTS)
+    ]
+    old_text = generate_sonar_eq_conf("game", bands, 0.0, 0.0, 0.0,
+                                       output_path=Path("/dev/null"))
+    new_text = generate_sonar_eq_conf(
+        "game", bands + [EqBand(freq=15000, gain=1.0, q=0.7, type="peakingEQ", enabled=True)],
+        0.0, 0.0, 0.0, output_path=Path("/dev/null"),
+    )
     assert diff_filter_conf(old_text, new_text) is None
 
 
