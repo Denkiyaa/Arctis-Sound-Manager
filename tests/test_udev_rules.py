@@ -5,8 +5,9 @@
 test_udev_rules.py — udev rules generation from device YAMLs.
 
 Covers the regressions behind #146:
-  1. A user override in ~/.config/arctis_manager/devices wins over the bundled
-     YAML of the same family, so a hand-added PID reaches the rules file.
+  1. A user override in ~/.config/arctis_manager/devices is MERGED with the
+     bundled YAML of the same family (union of product ids), so a hand-added PID
+     reaches the rules file AND a stale override can't hide a newer packaged PID.
   2. Every PID declared in the bundled YAMLs ends up in the rendered rules.
   3. Running elevated (sudo / pkexec) still reads the invoking user's override
      folder instead of /root's.
@@ -37,14 +38,41 @@ def _write_override(folder: Path) -> Path:
     return path
 
 
-def test_home_override_wins_over_bundled_yaml(tmp_path: Path):
-    """The HOME copy of a family must drive the rules, not the packaged one."""
+def test_home_override_merges_with_bundled_yaml(tmp_path: Path):
+    """The HOME copy and the packaged profile of a family are unioned (#146):
+    a hand-added PID reaches the rules AND the bundled PIDs are still there."""
     home = _write_override(tmp_path / "devices").parent
 
     rules = generate_rules([home, SRC_DEVICES])
 
+    # The override's hand-added PID is present…
     assert 'ATTRS{idProduct}=="dead"' in rules
-    # The family must appear exactly once, from the override.
+    # …and so is a PID that only the bundled profile carries (0x2298), which
+    # first-match-wins used to drop when the override lacked it.
+    assert 'ATTRS{idProduct}=="2298"' in rules
+    # The family is still emitted once — union, not a duplicate device block.
+    assert rules.count("# SteelSeries Arctis Nova 7P (Gen 2)") == 1
+
+
+def test_stale_override_does_not_hide_new_packaged_pid(tmp_path: Path):
+    """The core #146 trap: a pre-existing HOME copy written before 0x2298 was
+    added must not shadow it. With union, the packaged PID survives even though
+    the stale copy never listed it."""
+    stale = tmp_path / "devices"
+    stale.mkdir(parents=True)
+    # A copy of the family from before 0x2298 existed — only the old PID.
+    (stale / "nova_7p_perc_battery.yaml").write_text(
+        "device:\n"
+        "  name: SteelSeries Arctis Nova 7P (Gen 2)\n"
+        "  vendor_id: 0x1038\n"
+        "  product_ids:\n"
+        "    - 0x22a7\n"
+    )
+
+    rules = generate_rules([stale, SRC_DEVICES])
+
+    assert 'ATTRS{idProduct}=="22a7"' in rules
+    assert 'ATTRS{idProduct}=="2298"' in rules, "stale override must not hide 0x2298"
     assert rules.count("# SteelSeries Arctis Nova 7P (Gen 2)") == 1
 
 

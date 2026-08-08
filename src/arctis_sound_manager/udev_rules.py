@@ -45,25 +45,44 @@ def _iter_yaml_files(paths: Iterable[Path]) -> Iterable[Path]:
 def load_devices(paths: Iterable[Path]) -> list[tuple[int, list[int], str]]:
     """Return [(vendor_id, [product_ids], name)] from every device YAML in *paths*.
 
-    The FIRST path claiming a (vendor_id, name) key wins, which mirrors what
-    load_device_configurations() does at runtime: DEVICES_CONFIG_FOLDER lists
-    HOME before SRC, and the first match for a PID is the one the daemon uses.
-    A user override in ~/.config/arctis_manager/devices therefore drives the
-    udev rules too — it used to be silently overwritten by the bundled copy of
-    the same family, so a PID added by hand never made it into the rules file
-    (#146). Packaging callers passing only the bundled SRC folder are
+    For each (vendor_id, name) the product ids are **unioned** across every file
+    that declares it, in first-seen order. This deliberately differs from the
+    daemon's first-match-wins profile resolution (load_device_configurations),
+    and it exists to keep udev access from ever being narrower than the union of
+    what any profile knows about (#146):
+
+    - A stale ~/.config/arctis_manager/devices copy — the pre-#146 asm-setup
+      wrote one on first run — shares a family's (vendor_id, name) with the
+      bundled profile. First-match-wins let that old copy *shadow* the bundled
+      PIDs, so a product id added to the package in a later release (e.g. the
+      Nova 7P Gen 2's 0x2298) never reached the rules file even after upgrading.
+      Unioning means the stale copy can no longer hide a newer packaged PID.
+    - A product id a user genuinely hand-added to an override is emitted too —
+      "add a product id" grants USB access as intended, instead of being lost.
+
+    An extra access rule (MODE=0666) for a PID the daemon would not actually
+    drive is harmless, so a superset is the safe direction for udev
+    specifically. Packaging callers passing only the bundled SRC folder are
     unaffected and still get a deterministic order.
     """
     yaml = YAML(typ='safe')
-    products: dict[tuple[int, str], tuple[int, list[int], str]] = {}
+    pids_by_key: dict[tuple[int, str], list[int]] = {}
+    order: list[tuple[int, str]] = []
     for f in _iter_yaml_files(paths):
         data = yaml.load(f)
         device = data['device']
         vid = int(device['vendor_id'])
-        pids = [int(p) for p in device['product_ids']]
         name = str(device['name'])
-        products.setdefault((vid, name), (vid, pids, name))
-    return list(products.values())
+        key = (vid, name)
+        if key not in pids_by_key:
+            pids_by_key[key] = []
+            order.append(key)
+        merged = pids_by_key[key]
+        for p in device['product_ids']:
+            pid = int(p)
+            if pid not in merged:
+                merged.append(pid)
+    return [(vid, pids_by_key[(vid, name)], name) for (vid, name) in order]
 
 
 def render_rules(devices: list[tuple[int, list[int], str]]) -> str:
