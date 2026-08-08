@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.24] - 8 August 2026
+
+### Added
+
+- **The Sonar equaliser now applies as you edit it — no Apply button, and no drop in the audio.** Adding, removing or muting a band used to regenerate the channel's filter-chain and restart it, which tore down every EQ node and silenced the channel for several seconds; only dragging an existing band applied live. Bands now sit in a fixed-shape rack, so every edit — add, delete, mute, move — is a control change pushed straight into the running graph in tens of milliseconds instead of a restart. The Apply button is gone with the cost that justified it; Revert stays, and now returns to the curve the preset holds. Contributed by @Denkiyaa. (#170)
+
+### Fixed
+
+- **The chat EQ could lose the output it was pointed at.** The GUI regenerates a channel's filter-chain config on every EQ edit, but only the daemon knows which headset is attached — so the GUI wrote the chat channel's target out empty, and PipeWire's session manager then tried to route that output to the default sink (one of ASM's own loopbacks), failed on the resulting cycle, and retried on every graph change: 23 failed link attempts in three minutes on the machine it was caught on, audible as interruptions on whatever was actually playing. The GUI now keeps whatever target is already on disk when it can't resolve one itself, and the daemon repairs a config that was already written without one. Contributed by @Denkiyaa. (#170)
+- **A headset added by an update could still be refused USB access.** If `~/.config/arctis_manager/devices/` held an old copy of a device profile — the pre-2026 `asm-setup` wrote one there on first run — it shadowed the packaged profile when the udev rules were generated, so a product id added in a later release (for example the Arctis Nova 7P Gen 2's `0x2298`) never reached the rules file even after upgrading, and the headset was denied access. The rules generator now unions the product ids across your copy and the packaged profile, so a stale copy can no longer hide a newer PID — and a product id you add by hand is granted access too. Reported by @camperotactico. (#146)
+
 ## [1.2.23] - 6 August 2026
 
 ### Added
