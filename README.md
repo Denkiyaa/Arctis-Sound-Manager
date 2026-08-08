@@ -230,8 +230,11 @@ It detects your distribution, installs the matching native package (pacman repos
 
 Or install manually for your distribution below. All native packages (AUR / COPR / PPA) pull in every dependency automatically. After installing, run `asm-setup` once — it configures udev rules, systemd services, PipeWire and downloads the HRIR file.
 
-<details>
-<summary><strong>Arch Linux / CachyOS / Manjaro (signed repository, recommended)</strong></summary>
+> [!IMPORTANT]
+> **Arch users — use the signed pacman repository, not the AUR, for now.** The AUR is temporarily behind: `aur.archlinux.org` is under a security lockdown (following the recent malware wave) that freezes package pushes, so `arctis-sound-manager` on the AUR is stuck on an old version. The **signed pacman repository below is independent of the AUR and always carries the latest release** — it's the recommended way to install and update ASM on Arch until the lockdown lifts.
+
+<details open>
+<summary><strong>Arch Linux / CachyOS / Manjaro (signed repository — recommended)</strong></summary>
 
 Needs no AUR helper, compiles nothing, and — unlike the AUR — is visible to
 Discover and GNOME Software, so ASM can be installed and updated from your
@@ -271,6 +274,9 @@ already provides them (CachyOS does), its own versions keep priority.
 
 <details>
 <summary><strong>Arch Linux / CachyOS / Manjaro (AUR)</strong></summary>
+
+> [!NOTE]
+> The AUR package is currently **behind the latest release** while `aur.archlinux.org` is under a security lockdown that blocks pushes (see the note above). Use the signed pacman repository for the current version until it clears; the AUR will catch up automatically.
 
 ```bash
 paru -S arctis-sound-manager
