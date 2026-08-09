@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.25] - 9 August 2026
+
+### Fixed
+
+- **The DAC's custom display now updates as you change its settings.** Turning display elements on or off, changing their fonts or scroll speed, or editing the weather only *saved* the setting — the screen was redrawn just for the brightness slider and the Custom Display on/off switch, so every other change appeared only after toggling Custom Display off and on again. Those settings now apply live, the moment you change them — no toggle, and no Apply button needed. Reported by @jnunez2301. (#172)
+- **Two copies of the app could open at login.** The single-instance guard waited briefly for a reply from an already-running instance and, on silence, concluded its socket was stale, deleted it and started a second full GUI — but a freshly-launched instance accepts connections for a few seconds before it finishes starting and can reply, and login (the systemd unit and the desktop entry a moment apart) lands squarely in that window. It now settles the question on the connection being *accepted* rather than answered, and never unlinks a socket that is still live, so exactly one instance runs. Contributed by @Denkiyaa.
+- **Clicking the tray icon could crash the whole app.** The click arrived as a D-Bus call the tray host was still waiting on, and the handler built the main window inline; Qt processed events underneath it, a status update carrying no battery level hid the battery tray item, and hiding it destroyed the object whose click handler was still on the stack — a use-after-free that took the whole app down, which read as the app closing itself. The click now opens the window on the event loop instead of inline. Contributed by @Denkiyaa.
+
 ## [1.2.24] - 8 August 2026
 
 ### Added
