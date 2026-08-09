@@ -412,10 +412,17 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
             setattr(self.core_engine.general_settings, setting, value)
             self.core_engine.general_settings.write_to_file()
 
-            if setting == 'oled_brightness' and self.core_engine.oled_manager is not None:
-                self.core_engine.oled_manager.set_brightness(int(value))
-            if setting == 'oled_custom_display' and self.core_engine.oled_manager is not None:
-                self.core_engine.oled_manager.set_custom_display(bool(value))
+            _oled = self.core_engine.oled_manager
+            if _oled is not None:
+                if setting == 'oled_brightness':
+                    _oled.set_brightness(int(value))
+                elif setting == 'oled_custom_display':
+                    _oled.set_custom_display(bool(value))
+                elif setting.startswith('oled_'):
+                    # Any other OLED element/layout/font/scroll setting: redraw
+                    # live so the change shows immediately, instead of only
+                    # after toggling Custom Display off and on again (#172).
+                    _oled.refresh()
 
             return True
         
@@ -479,6 +486,9 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
 
         if self.core_engine.oled_manager:
             self.core_engine.oled_manager.invalidate_weather_cache()
+            # Redraw live so a weather change (toggle, city, units) shows now
+            # rather than only after flipping Custom Display off and on (#172).
+            self.core_engine.oled_manager.refresh()
 
         return json.dumps(result)
 

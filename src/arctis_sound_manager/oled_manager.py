@@ -217,6 +217,23 @@ class OledManager:
             self._reset_scroll()
             self.update_display(activity=True)
 
+    def refresh(self) -> None:
+        """Re-render the custom display now so a settings change takes effect live.
+
+        Which elements are shown, their fonts, scroll speed, the weather — all
+        of it used to require flipping the Custom Display toggle off and on to
+        appear, because SetSetting only persisted the value (#172). Calling this
+        after a change redraws from the current settings immediately.
+
+        No-op while the DAC shows its own UI (Custom Display disabled): there is
+        nothing of ours on screen, and drawing a frame would wrongly take the
+        screen back over.
+        """
+        if not self._core.general_settings.oled_custom_display:
+            return
+        self._reset_scroll()
+        self.update_display(activity=True)
+
     def invalidate_weather_cache(self) -> None:
         self._weather.invalidate()
 

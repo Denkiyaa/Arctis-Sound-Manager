@@ -75,6 +75,31 @@ def _make_manager(usb_device, monkeypatch, packet_count: int = 2) -> OledManager
 
 
 # ---------------------------------------------------------------------------
+# refresh(): live redraw on a settings change, gated on Custom Display (#172)
+# ---------------------------------------------------------------------------
+
+def test_refresh_redraws_only_when_custom_display_enabled(monkeypatch):
+    """A settings change redraws the custom display live — but only when Custom
+    Display is on; otherwise the DAC's own UI must stay put (#172)."""
+    manager = _make_manager(_FakeUsbDevice(None), monkeypatch)
+    calls = {"update": 0, "reset": 0}
+    monkeypatch.setattr(manager, "update_display",
+                        lambda activity=True: calls.__setitem__("update", calls["update"] + 1))
+    monkeypatch.setattr(manager, "_reset_scroll",
+                        lambda: calls.__setitem__("reset", calls["reset"] + 1))
+
+    # Custom Display OFF → no redraw (must not take the screen back over).
+    manager._core.general_settings.oled_custom_display = False
+    manager.refresh()
+    assert calls == {"update": 0, "reset": 0}
+
+    # Custom Display ON → redraw from the current settings.
+    manager._core.general_settings.oled_custom_display = True
+    manager.refresh()
+    assert calls == {"update": 1, "reset": 1}
+
+
+# ---------------------------------------------------------------------------
 # _send_oled_packet: bool return contract
 # ---------------------------------------------------------------------------
 
