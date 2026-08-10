@@ -2437,7 +2437,7 @@ class SmartVolumeWidget(QWidget):
 
 _MICRO_PROC_FILE = _CFG / "sonar_micro_processing.json"
 _MICRO_PROC_DEFAULTS: dict = {
-    "noiseCanceling":   {"enabled": False, "value": 0.9},
+    "noiseCanceling":   {"enabled": False, "value": 0.9, "engine": "rnnoise"},
     "bgReduction":      {"enabled": False, "value": 0.0},
     "impactReduction":  {"enabled": False, "value": 0.0},
     "noiseGate":        {"enabled": False, "value": -60.0, "auto": False},
@@ -2568,13 +2568,30 @@ def _make_header_row(title: str, toggle) -> QHBoxLayout:
     return row
 
 
-# ── ClearCast AI Noise Cancellation card ──────────────────────────────────────
+# ── AI Noise Cancellation card (RNNoise / DeepFilterNet) ──────────────────────
+
+class _DeepFilterInstallWorker(QThread):
+    """Fetch the DeepFilterNet LADSPA plugin off the UI thread. Emits
+    done(ok, path) — the network download must never block the Qt loop."""
+    done = Signal(bool, str)
+
+    def run(self) -> None:
+        try:
+            from arctis_sound_manager.system_deps_checker import ensure_deepfilter_plugin
+            path = ensure_deepfilter_plugin()
+        except Exception:
+            path = None
+        self.done.emit(bool(path), path or "")
+
 
 class _NoiseCancelingCard(QWidget):
     state_changed = Signal()
 
     # Cached at class level so we only hit the filesystem once per session.
     _rnnoise_available: bool | None = None
+    _deepfilter_available: bool | None = None
+
+    _ENGINES = (("rnnoise", "RNNoise (ClearCast)"), ("deepfilternet", "DeepFilterNet"))
 
     @classmethod
     def _check_rnnoise(cls) -> bool:
@@ -2582,9 +2599,23 @@ class _NoiseCancelingCard(QWidget):
             cls._rnnoise_available = _find_ladspa_plugin("librnnoise*.so") is not None
         return cls._rnnoise_available
 
+    @classmethod
+    def _check_deepfilter(cls, refresh: bool = False) -> bool:
+        if cls._deepfilter_available is None or refresh:
+            from arctis_sound_manager.system_deps_checker import _find_best_deepfilter_ladspa
+            cls._deepfilter_available = _find_best_deepfilter_ladspa() is not None
+        return cls._deepfilter_available
+
+    def _engine_available(self, engine: str) -> bool:
+        return self._check_deepfilter() if engine == "deepfilternet" else self._check_rnnoise()
+
     def __init__(self, state: dict, parent=None):
         super().__init__(parent)
         self._state = state
+        self._nc = state["noiseCanceling"]
+        self._engine = self._nc.get("engine", "rnnoise")
+        self._install_worker: _DeepFilterInstallWorker | None = None
+        self._pending_enable = False
         self.setObjectName("microCard")
         self.setStyleSheet(_micro_card_style())
 
@@ -2593,40 +2624,30 @@ class _NoiseCancelingCard(QWidget):
         root.setSpacing(8)
 
         self._toggle = QToggle(is_checkbox=True)
+        self._toggle.setChecked(self._nc["enabled"])
+        root.addLayout(_make_header_row(_t("nc_title"), self._toggle))
 
-        rnnoise_ok = self._check_rnnoise()
-        if rnnoise_ok:
-            self._toggle.setChecked(state["noiseCanceling"]["enabled"])
-        else:
-            # Plugin missing: force toggle off and lock it so the user gets
-            # a clear error message instead of a silent no-op.
-            self._toggle.setChecked(False)
-            self._toggle.setEnabled(False)
-            _tip = (
-                "noise-suppression-for-voice is not installed.\n"
-                "ClearCast AI Noise Cancellation requires the rnnoise LADSPA plugin.\n\n"
-                "Install it with:\n"
-                "  Fedora/Nobara:  sudo dnf copr enable lkiesow/noise-suppression-for-voice\n"
-                "                  sudo dnf install ladspa-realtime-noise-suppression-plugin\n"
-                "  Debian/Ubuntu:  not packaged — ASM builds it from source\n"
-                "                  (use the dependency installer, or build manually)\n"
-                "  Arch/CachyOS:   sudo pacman -S noise-suppression-for-voice"
-            )
-            self._toggle.setToolTip(_tip)
+        # ── Engine selector (RNNoise ↔ DeepFilterNet) ──
+        engine_row = QHBoxLayout()
+        engine_row.setSpacing(10)
+        eng_lbl = QLabel(_t("nc_engine"))
+        eng_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 9pt;")
+        engine_row.addWidget(eng_lbl)
+        self._engine_combo = QComboBox()
+        for key, label in self._ENGINES:
+            self._engine_combo.addItem(label, key)
+        _idx = self._engine_combo.findData(self._engine)
+        if _idx >= 0:
+            self._engine_combo.setCurrentIndex(_idx)
+        self._engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+        engine_row.addWidget(self._engine_combo, 1)
+        root.addLayout(engine_row)
 
-        root.addLayout(_make_header_row("CLEARCAST AI NOISE CANCELLATION", self._toggle))
-
-        if not rnnoise_ok:
-            missing_lbl = QLabel(
-                "⚠️  noise-suppression-for-voice not installed — "
-                "ClearCast unavailable"
-            )
-            missing_lbl.setStyleSheet(
-                "color: #e8a000; font-size: 9pt; font-style: italic;"
-            )
-            missing_lbl.setWordWrap(True)
-            missing_lbl.setToolTip(self._toggle.toolTip())
-            root.addWidget(missing_lbl)
+        # Status line: missing-plugin hint, or download progress.
+        self._status_lbl = QLabel("")
+        self._status_lbl.setWordWrap(True)
+        self._status_lbl.setStyleSheet("color: #e8a000; font-size: 9pt; font-style: italic;")
+        root.addWidget(self._status_lbl)
 
         self._waveform = _WaveformWidget(self)
         root.addWidget(self._waveform)
@@ -2639,7 +2660,7 @@ class _NoiseCancelingCard(QWidget):
         self._slider = _NoWheelSlider(Qt.Orientation.Horizontal)
         self._slider.setMinimum(0)
         self._slider.setMaximum(100)
-        self._slider.setValue(int(state["noiseCanceling"]["value"] * 100))
+        self._slider.setValue(int(self._nc["value"] * 100))
         self._slider.valueChanged.connect(self._on_slider)
         slider_row.addWidget(self._slider, 1)
         lbl_max = QLabel(_t("max"))
@@ -2648,23 +2669,130 @@ class _NoiseCancelingCard(QWidget):
         root.addLayout(slider_row)
 
         self._toggle.checkStateChanged.connect(self._on_toggle)
-        self._set_enabled(rnnoise_ok and state["noiseCanceling"]["enabled"])
+        self._refresh_engine_ui()
 
-    def _set_enabled(self, enabled: bool):
+    # ── availability / UI state ──
+    def _refresh_engine_ui(self) -> None:
+        """Reflect the current engine's availability in the toggle + status line."""
+        available = self._engine_available(self._engine)
+        if self._engine == "rnnoise":
+            # RNNoise is a system package ASM can't fetch — lock the toggle off
+            # when it's missing so the user gets a clear reason, not a no-op.
+            self._toggle.setEnabled(available)
+            if not available:
+                self._toggle.blockSignals(True)
+                self._toggle.setChecked(False)
+                self._toggle.blockSignals(False)
+                self._nc["enabled"] = False
+            self._status_lbl.setStyleSheet("color: #e8a000; font-size: 9pt; font-style: italic;")
+            self._status_lbl.setText("" if available else _t("nc_rnnoise_missing"))
+        else:  # deepfilternet — installable on demand, toggle stays usable
+            self._toggle.setEnabled(True)
+            self._status_lbl.setStyleSheet("color: #e8a000; font-size: 9pt; font-style: italic;")
+            self._status_lbl.setText("" if available else _t("nc_dfn_not_installed"))
+        self._set_enabled(self._nc["enabled"] and available)
+
+    def _set_enabled(self, enabled: bool) -> None:
         self._slider.setEnabled(enabled)
         self._waveform.setVisible(enabled)
 
-    def _on_toggle(self, checked):
+    def _revert_combo(self, engine: str) -> None:
+        self._engine_combo.blockSignals(True)
+        idx = self._engine_combo.findData(engine)
+        if idx >= 0:
+            self._engine_combo.setCurrentIndex(idx)
+        self._engine_combo.blockSignals(False)
+
+    # ── engine change ──
+    def _on_engine_changed(self, _index: int) -> None:
+        new_engine = self._engine_combo.currentData()
+        if new_engine == self._engine:
+            return
+        if new_engine == "deepfilternet" and not self._check_deepfilter():
+            # Offer to download the plugin. Commit the switch only once it lands
+            # (in _on_deepfilter_installed); revert the combo if declined.
+            if not self._prompt_install_deepfilter():
+                self._revert_combo(self._engine)
+            return
+        self._engine = new_engine
+        self._nc["engine"] = new_engine
+        self._refresh_engine_ui()
+        self.state_changed.emit()
+
+    # ── toggle ──
+    def _on_toggle(self, checked) -> None:
         # bool(Qt.CheckState.Unchecked) is True in PySide6 — compare explicitly
         # so the OFF state actually registers (same class of bug as issue #62).
         enabled = checked == Qt.CheckState.Checked
-        self._state["noiseCanceling"]["enabled"] = enabled
-        self._set_enabled(enabled)
+        if enabled and self._engine == "deepfilternet" and not self._check_deepfilter():
+            # Turning DeepFilterNet on while its plugin is missing: don't enable
+            # yet — offer the download, and enable once it succeeds.
+            self._toggle.blockSignals(True)
+            self._toggle.setChecked(False)
+            self._toggle.blockSignals(False)
+            self._prompt_install_deepfilter(enable_after=True)
+            return
+        self._nc["enabled"] = enabled
+        self._set_enabled(enabled and self._engine_available(self._engine))
         self.state_changed.emit()
 
-    def _on_slider(self, value: int):
-        self._state["noiseCanceling"]["value"] = value / 100.0
+    def _on_slider(self, value: int) -> None:
+        self._nc["value"] = value / 100.0
         self.state_changed.emit()
+
+    # ── DeepFilterNet install flow ──
+    def _prompt_install_deepfilter(self, enable_after: bool = False) -> bool:
+        """Offer to download the DeepFilterNet plugin. Returns True when a
+        download was started, False when declined or no prebuilt exists (the
+        worker finalises state on completion)."""
+        from PySide6.QtWidgets import QMessageBox
+        from arctis_sound_manager.system_deps_checker import _deepfilter_asset
+        if _deepfilter_asset() is None:
+            QMessageBox.warning(self, "DeepFilterNet", _t("nc_dfn_no_prebuilt"))
+            return False
+        box = QMessageBox(self)
+        box.setWindowTitle("DeepFilterNet")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(_t("nc_dfn_install_prompt"))
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.button(QMessageBox.StandardButton.Yes).setText(_t("nc_dfn_install_btn"))
+        if box.exec() != QMessageBox.StandardButton.Yes:
+            return False
+        self._pending_enable = enable_after
+        self._engine_combo.setEnabled(False)
+        self._toggle.setEnabled(False)
+        self._status_lbl.setStyleSheet("color: #4ea1ff; font-size: 9pt; font-style: italic;")
+        self._status_lbl.setText(_t("nc_dfn_downloading"))
+        worker = _DeepFilterInstallWorker()
+        self._install_worker = worker
+        worker.done.connect(self._on_deepfilter_installed)
+        worker.finished.connect(lambda: setattr(self, "_install_worker", None))
+        worker.start()
+        return True
+
+    @Slot(bool, str)
+    def _on_deepfilter_installed(self, ok: bool, path: str) -> None:
+        type(self)._deepfilter_available = ok
+        self._engine_combo.setEnabled(True)
+        if ok:
+            self._engine = "deepfilternet"
+            self._nc["engine"] = "deepfilternet"
+            self._revert_combo("deepfilternet")
+            if self._pending_enable:
+                self._nc["enabled"] = True
+                self._toggle.blockSignals(True)
+                self._toggle.setChecked(True)
+                self._toggle.blockSignals(False)
+            self._refresh_engine_ui()
+            self.state_changed.emit()
+        else:
+            self._status_lbl.setStyleSheet("color: #e8a000; font-size: 9pt; font-style: italic;")
+            self._status_lbl.setText(_t("nc_dfn_install_failed"))
+            self._engine = "rnnoise"
+            self._nc["engine"] = "rnnoise"
+            self._revert_combo("rnnoise")
+            self._refresh_engine_ui()
+        self._pending_enable = False
 
 
 # ── Noise Reduction card ──────────────────────────────────────────────────────

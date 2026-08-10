@@ -35,10 +35,14 @@ from arctis_sound_manager.eq_types import EqBand, PW_LABEL
 _log = logging.getLogger(__name__)
 
 
-def _ladspa_plugin_ref(name_pattern: str) -> str | None:
+def _ladspa_plugin_ref(name_pattern: str, resolved: str | None = None) -> str | None:
     """Return the reference to write into a filter-chain ``plugin =`` directive
     for the first LADSPA .so matching *name_pattern*, or ``None`` if no plugin
     was found (adapted from PR #104's ``_resolve_ladspa_plugin``).
+
+    *resolved* lets a caller pass an already-chosen absolute path (e.g. the
+    version-aware DeepFilterNet pick) and still get the same container staging;
+    when omitted the path is resolved by first glob match as before.
 
     Single source of truth for the search itself (LADSPA_PATH + ~/.ladspa +
     system dirs) lives in ``system_deps_checker._find_ladspa_plugin``, which
@@ -66,8 +70,9 @@ def _ladspa_plugin_ref(name_pattern: str) -> str | None:
       the host an absolute path it can always load. Falls back to the bare name
       only if the copy fails, so we are never worse than before.
     """
-    from arctis_sound_manager.system_deps_checker import _find_ladspa_plugin
-    resolved = _find_ladspa_plugin(name_pattern)
+    if resolved is None:
+        from arctis_sound_manager.system_deps_checker import _find_ladspa_plugin
+        resolved = _find_ladspa_plugin(name_pattern)
     if resolved is None:
         return None
 
@@ -116,6 +121,20 @@ def _ladspa_plugin_available(name_pattern: str) -> bool:
     """Return True if a LADSPA .so matching name_pattern is found in standard
     dirs. Back-compat boolean wrapper around :func:`_ladspa_plugin_ref`."""
     return _ladspa_plugin_ref(name_pattern) is not None
+
+
+def _deepfilter_plugin_ref() -> str | None:
+    """``plugin =`` reference for the DeepFilterNet LADSPA plugin, or None.
+
+    Resolution is version-aware (newest installed wins — see
+    :func:`system_deps_checker._find_best_deepfilter_ladspa`) and the result is
+    staged for a container host exactly like any other plugin. This does NOT
+    download anything: the GUI calls ``ensure_deepfilter_plugin()`` to fetch the
+    pinned build when the user opts in and none is installed; by the time the
+    conf is generated the plugin is already on disk.
+    """
+    from arctis_sound_manager.system_deps_checker import _find_best_deepfilter_ladspa
+    return _ladspa_plugin_ref("libdeep_filter_ladspa*.so", resolved=_find_best_deepfilter_ladspa())
 
 
 def _conf_has_bare_ladspa(content: str) -> bool:
@@ -1577,27 +1596,51 @@ def generate_sonar_micro_conf(
             last_node = "ngate"
             last_is_ladspa = True
 
-    # ── rnnoise noise cancellation ──
-    # Correctif 4 (issue #88): guard LADSPA node. A missing librnnoise_ladspa.so
-    # causes dlopen() SEGV in filter-chain; omit node gracefully if not found.
+    # ── Noise cancellation — RNNoise or DeepFilterNet (user-selectable) ──
+    # Correctif 4 (issue #88): guard the LADSPA node. A missing .so causes
+    # dlopen() SEGV in filter-chain, so omit the node gracefully when absent.
     if nc.get("enabled", False):
-        _rnnoise_ref = _ladspa_plugin_ref("librnnoise_ladspa.so")
-        if not _rnnoise_ref:
-            _log.warning(
-                "LADSPA plugin librnnoise_ladspa not found — skipping noise "
-                "cancellation node, feature degraded; install "
-                "noise-suppression-for-voice on the host"
-            )
+        engine = nc.get("engine", "rnnoise")
+        if engine == "deepfilternet":
+            _dfn_ref = _deepfilter_plugin_ref()
+            if not _dfn_ref:
+                _log.warning(
+                    "DeepFilterNet LADSPA plugin not found — skipping noise "
+                    "cancellation node; install it or switch back to RNNoise "
+                    "(the GUI can download the prebuilt plugin on opt-in)"
+                )
+            else:
+                # nc.value 0..1 → DeepFilter "Attenuation Limit (dB)" 0..100
+                # (higher = stronger suppression). Its other controls keep their
+                # descriptor defaults, and the model is baked into the .so, so
+                # there is no separate file to manage.
+                atten_limit = max(0.0, min(100.0, nc.get("value", 0.9) * 100.0))
+                node_lines.append(
+                    f"                    {{ type = ladspa  name = dfn\n"
+                    f"                      plugin = {_dfn_ref}  label = deep_filter_mono\n"
+                    f"                      control = {{ \"Attenuation Limit (dB)\" = {atten_limit:.1f} }} }}"
+                )
+                link_lines.append(_smart_link("dfn", True))
+                last_node = "dfn"
+                last_is_ladspa = True
         else:
-            vad_threshold = max(0.0, min(100.0, nc.get("value", 0.5) * 100))
-            node_lines.append(
-                f"                    {{ type = ladspa  name = rnnoise\n"
-                f"                      plugin = {_rnnoise_ref}  label = noise_suppressor_mono\n"
-                f"                      control = {{ \"VAD Threshold (%)\" = {vad_threshold:.1f} }} }}"
-            )
-            link_lines.append(_smart_link("rnnoise", True))
-            last_node = "rnnoise"
-            last_is_ladspa = True
+            _rnnoise_ref = _ladspa_plugin_ref("librnnoise_ladspa.so")
+            if not _rnnoise_ref:
+                _log.warning(
+                    "LADSPA plugin librnnoise_ladspa not found — skipping noise "
+                    "cancellation node, feature degraded; install "
+                    "noise-suppression-for-voice on the host"
+                )
+            else:
+                vad_threshold = max(0.0, min(100.0, nc.get("value", 0.5) * 100))
+                node_lines.append(
+                    f"                    {{ type = ladspa  name = rnnoise\n"
+                    f"                      plugin = {_rnnoise_ref}  label = noise_suppressor_mono\n"
+                    f"                      control = {{ \"VAD Threshold (%)\" = {vad_threshold:.1f} }} }}"
+                )
+                link_lines.append(_smart_link("rnnoise", True))
+                last_node = "rnnoise"
+                last_is_ladspa = True
 
     # ── Compressor / volume stabilizer (LADSPA sc4m_1916) ──
     # Correctif 4 (issue #88): guard LADSPA node. A missing sc4m_1916.so causes

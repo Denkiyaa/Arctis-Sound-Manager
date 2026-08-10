@@ -414,6 +414,45 @@ def test_micro_capture_owns_its_link():
         assert "target.object" in text
 
 
+# ── Noise-cancel engine selection: RNNoise ↔ DeepFilterNet ────────────────────
+
+def test_micro_conf_deepfilter_engine_emits_deep_filter_node(monkeypatch):
+    """engine=deepfilternet emits the DeepFilterNet node, mapping the 0-1 slider
+    to its Attenuation Limit (dB), and never the RNNoise node."""
+    monkeypatch.setattr(_s2p, "_deepfilter_plugin_ref",
+                        lambda: "/home/u/.ladspa/libdeep_filter_ladspa.so")
+    text = _s2p.generate_sonar_micro_conf(
+        [], 0.0, 0.0, 0.0, output_path=Path("/dev/null"),
+        noise_canceling={"enabled": True, "value": 0.8, "engine": "deepfilternet"},
+    )
+    assert "label = deep_filter_mono" in text
+    assert '"Attenuation Limit (dB)" = 80.0' in text
+    assert "noise_suppressor_mono" not in text
+
+
+def test_micro_conf_deepfilter_skipped_when_plugin_absent(monkeypatch):
+    """A missing DeepFilterNet plugin omits the node gracefully (no bare-name
+    LADSPA that would SEGV filter-chain — issue #88), not a hard failure."""
+    monkeypatch.setattr(_s2p, "_deepfilter_plugin_ref", lambda: None)
+    text = _s2p.generate_sonar_micro_conf(
+        [], 0.0, 0.0, 0.0, output_path=Path("/dev/null"),
+        noise_canceling={"enabled": True, "value": 0.8, "engine": "deepfilternet"},
+    )
+    assert "deep_filter_mono" not in text
+
+
+def test_micro_conf_defaults_to_rnnoise_engine(monkeypatch):
+    """No engine key (existing configs) keeps the RNNoise node — back-compat."""
+    monkeypatch.setattr(_s2p, "_ladspa_plugin_ref",
+                        lambda *a, **k: "/home/u/.ladspa/librnnoise_ladspa.so")
+    text = _s2p.generate_sonar_micro_conf(
+        [], 0.0, 0.0, 0.0, output_path=Path("/dev/null"),
+        noise_canceling={"enabled": True, "value": 0.5},
+    )
+    assert "label = noise_suppressor_mono" in text
+    assert "deep_filter_mono" not in text
+
+
 def test_game_bypass_no_explicit_inputs_outputs():
     """Game bypass (8ch) relies on PipeWire auto-dup, no inputs/outputs arrays."""
     text = generate_sonar_eq_conf("game", [], 0.0, 0.0, 0.0,

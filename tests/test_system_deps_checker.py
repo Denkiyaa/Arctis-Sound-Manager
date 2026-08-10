@@ -377,3 +377,93 @@ def test_rnnoise_mint_and_pop_build_from_source():
         with patch.object(sdc, "detect_distro", lambda d=distro: d):
             cmd = install_command_for(rn)
         assert cmd is not None and cmd[0] == "bash", distro
+
+
+# ── DeepFilterNet: version-aware resolution + guarded download (opt-in) ────────
+
+def test_deepfilter_best_prefers_newest_and_user_build(tmp_path, monkeypatch):
+    d = tmp_path / "ladspa"
+    d.mkdir()
+    (d / "libdeep_filter_ladspa-0.5.6-x86_64-unknown-linux-gnu.so").write_bytes(b"x")
+    (d / "libdeep_filter_ladspa-0.5.7-x86_64-unknown-linux-gnu.so").write_bytes(b"x")
+    monkeypatch.setattr(sdc, "_ladspa_search_dirs", lambda: (str(d),))
+    # Highest release version wins so a newer install is used over the pinned one.
+    assert sdc._find_best_deepfilter_ladspa().endswith("0.5.7-x86_64-unknown-linux-gnu.so")
+    # An unversioned user build (cargo) outranks any versioned asset.
+    (d / "libdeep_filter_ladspa.so").write_bytes(b"x")
+    assert Path(sdc._find_best_deepfilter_ladspa()).name == "libdeep_filter_ladspa.so"
+
+
+def test_deepfilter_best_none_when_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(sdc, "_ladspa_search_dirs", lambda: (str(tmp_path),))
+    assert sdc._find_best_deepfilter_ladspa() is None
+
+
+def test_deepfilter_asset_arch_and_musl(monkeypatch):
+    import platform
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(sdc, "_is_musl_libc", lambda: False)
+    url, name = sdc._deepfilter_asset()
+    assert name == "libdeep_filter_ladspa-0.5.6-x86_64-unknown-linux-gnu.so"
+    assert url.startswith("https://github.com/Rikorose/DeepFilterNet/releases/download/v0.5.6/")
+    # musl → the glibc .so must not be offered (would fail dlopen → #88).
+    monkeypatch.setattr(sdc, "_is_musl_libc", lambda: True)
+    assert sdc._deepfilter_asset() is None
+    # unknown arch → no prebuilt.
+    monkeypatch.setattr(sdc, "_is_musl_libc", lambda: False)
+    monkeypatch.setattr(platform, "machine", lambda: "sparc64")
+    assert sdc._deepfilter_asset() is None
+
+
+def test_ensure_deepfilter_uses_existing_without_download(tmp_path, monkeypatch):
+    existing = tmp_path / "libdeep_filter_ladspa.so"
+    existing.write_bytes(b"x")
+    monkeypatch.setattr(sdc, "_find_best_deepfilter_ladspa", lambda: str(existing))
+    # Any download attempt would blow up here — proves an installed plugin is
+    # reused as-is (honours "use a newer version the user installed").
+    monkeypatch.setattr(sdc, "_deepfilter_asset",
+                        lambda: (_ for _ in ()).throw(AssertionError("must not download")))
+    assert sdc.ensure_deepfilter_plugin() == str(existing)
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self._payload
+
+
+def test_ensure_deepfilter_downloads_and_validates(tmp_path, monkeypatch):
+    import urllib.request
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(sdc, "_find_best_deepfilter_ladspa", lambda: None)
+    monkeypatch.setattr(sdc, "_deepfilter_asset",
+                        lambda: ("https://example/p.so", "libdeep_filter_ladspa-0.5.6-x86_64-unknown-linux-gnu.so"))
+    payload = b"\x7fELF" + b"\x00" * 200_000
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _FakeResp(payload))
+
+    got = sdc.ensure_deepfilter_plugin()
+    assert got is not None
+    p = Path(got)
+    assert p.exists() and p.read_bytes()[:4] == b"\x7fELF"
+
+
+def test_ensure_deepfilter_rejects_non_elf(tmp_path, monkeypatch):
+    import urllib.request
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(sdc, "_find_best_deepfilter_ladspa", lambda: None)
+    monkeypatch.setattr(sdc, "_deepfilter_asset",
+                        lambda: ("https://example/p.so", "libdeep_filter_ladspa-0.5.6-x86_64-unknown-linux-gnu.so"))
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *a, **k: _FakeResp(b"<html>error page</html>"))
+    # A non-ELF payload (error page, truncated download) is discarded, not staged.
+    assert sdc.ensure_deepfilter_plugin() is None
+    assert not (tmp_path / ".ladspa" /
+                "libdeep_filter_ladspa-0.5.6-x86_64-unknown-linux-gnu.so").exists()

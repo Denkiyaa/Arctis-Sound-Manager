@@ -30,6 +30,7 @@ import ctypes
 import importlib.util
 import logging
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -218,6 +219,153 @@ def _find_ladspa_plugin(name_pattern: str) -> str | None:
         except OSError:
             continue
     return None
+
+
+# ── DeepFilterNet LADSPA (opt-in second noise-cancel engine) ────────────────
+#
+# DeepFilterNet is a deep-learning noise suppressor that generally outperforms
+# RNNoise across microphones. Its LADSPA plugin is NOT packaged by distros —
+# it's a Rust plugin, built with cargo or downloaded as a prebuilt .so from the
+# project's GitHub releases. ASM therefore auto-detects whatever is installed
+# and, only when nothing is present, downloads a pinned build into ~/.ladspa.
+_DEEPFILTER_GLOB = "libdeep_filter_ladspa*.so"
+# Pinned fallback build (only used when the user has none installed). Detection
+# is version-agnostic, so a NEWER version installed on the system afterwards is
+# picked up and used automatically — the download is a last resort, not a pin.
+_DEEPFILTER_VERSION = "0.5.6"
+_DEEPFILTER_ARCH_ASSET = {
+    "x86_64":  "x86_64-unknown-linux-gnu",
+    "aarch64": "aarch64-unknown-linux-gnu",
+    "armv7l":  "armv7-unknown-linux-gnueabihf",
+    "armv8l":  "armv7-unknown-linux-gnueabihf",
+}
+_DEEPFILTER_VER_RE = re.compile(r"libdeep_filter_ladspa-(\d+)\.(\d+)\.(\d+)")
+
+
+def _find_best_deepfilter_ladspa() -> str | None:
+    """Absolute path of the best DeepFilterNet LADSPA .so across all search dirs.
+
+    "Best" prefers the newest so a version the user installs later is used ahead
+    of the pinned copy ASM may have downloaded: an unversioned filename (a user's
+    own ``cargo`` build, e.g. ``libdeep_filter_ladspa.so``) wins outright, then
+    the highest ``X.Y.Z`` parsed from a release asset name. Returns None when no
+    DeepFilterNet plugin is present anywhere.
+    """
+    import fnmatch
+    best: tuple[tuple[int, int, int, int], str] | None = None
+    for d in _ladspa_search_dirs():
+        p = Path(d)
+        if not p.is_dir():
+            continue
+        try:
+            entries = list(p.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if not (entry.is_file() and fnmatch.fnmatch(entry.name, _DEEPFILTER_GLOB)):
+                continue
+            m = _DEEPFILTER_VER_RE.search(entry.name)
+            # Unversioned → (1,…) so a user build outranks any versioned asset;
+            # versioned → (0, major, minor, patch) so the highest release wins.
+            rank = (1, 0, 0, 0) if m is None else (0, int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if best is None or rank > best[0]:
+                best = (rank, str(entry))
+    return best[1] if best else None
+
+
+def _is_musl_libc() -> bool:
+    """True on a musl system (Alpine …), where the glibc prebuilt won't load.
+
+    The published LADSPA assets are all ``-unknown-linux-gnu`` (glibc). Loading a
+    glibc .so on musl fails inside filter-chain (dlopen error → the #88 SEGV
+    class), so the download must be refused there and the user pointed at a
+    source build instead.
+    """
+    try:
+        return any(Path("/lib").glob("ld-musl-*")) or any(Path("/usr/lib").glob("ld-musl-*"))
+    except OSError:
+        return False
+
+
+def _deepfilter_asset() -> tuple[str, str] | None:
+    """(download_url, asset_filename) of the pinned DeepFilterNet LADSPA build
+    for this CPU arch, or None if no compatible published Linux asset exists
+    (unknown arch, or a musl system the glibc build can't run on)."""
+    import platform
+    arch = _DEEPFILTER_ARCH_ASSET.get(platform.machine())
+    if not arch or _is_musl_libc():
+        return None
+    name = f"libdeep_filter_ladspa-{_DEEPFILTER_VERSION}-{arch}.so"
+    url = (f"https://github.com/Rikorose/DeepFilterNet/releases/download/"
+           f"v{_DEEPFILTER_VERSION}/{name}")
+    return url, name
+
+
+def ensure_deepfilter_plugin(force_download: bool = False) -> str | None:
+    """Return a usable DeepFilterNet LADSPA path, downloading the pinned build
+    into ~/.ladspa if the user has none installed.
+
+    A DeepFilterNet plugin already present anywhere (any version) is returned
+    as-is and never re-downloaded, so a newer one the user installs keeps being
+    used. The download is HTTPS from the project's pinned GitHub release, and
+    the payload is validated as an ELF shared object of a sane size before it is
+    put in place (there is no upstream per-asset checksum to verify against).
+
+    Returns None when no plugin is present and the download can't be provided
+    (unsupported arch, network failure, or a payload that fails validation) —
+    the caller then keeps RNNoise / reports the engine as unavailable.
+    """
+    existing = _find_best_deepfilter_ladspa()
+    if existing and not force_download:
+        return existing
+
+    asset = _deepfilter_asset()
+    if asset is None:
+        import platform
+        log.warning("DeepFilterNet: no prebuilt LADSPA for arch %s — install it "
+                    "manually (cargo build -p deep-filter-ladspa)", platform.machine())
+        return existing
+    url, name = asset
+
+    dest_dir = Path.home() / ".ladspa"
+    dest = dest_dir / name
+    if dest.exists() and not force_download:
+        try:
+            if dest.stat().st_size > 100_000:
+                return str(dest)
+        except OSError:
+            pass
+
+    import urllib.request
+    log.info("DeepFilterNet: downloading pinned LADSPA plugin %s", url)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "arctis-sound-manager"})
+        with urllib.request.urlopen(req, timeout=120) as resp:  # nosec B310 — pinned https URL
+            data = resp.read()
+    except Exception as exc:  # network, TLS, HTTP error…
+        log.warning("DeepFilterNet download failed (%s): %r", url, exc)
+        return existing
+
+    # Validate before trusting it: ELF magic + a floor on size (the real plugin
+    # is several MB with the model baked in). Anything else is an error page or
+    # a truncated download, not a plugin.
+    if len(data) < 100_000 or data[:4] != b"\x7fELF":
+        log.warning("DeepFilterNet download from %s is not a valid ELF .so "
+                        "(%d bytes) — discarding", url, len(data))
+        return existing
+
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".tmp")
+        tmp.write_bytes(data)
+        tmp.chmod(0o644)
+        os.replace(tmp, dest)
+    except OSError as exc:
+        log.warning("DeepFilterNet: could not save plugin to %s: %r", dest, exc)
+        return existing
+
+    log.info("DeepFilterNet: installed LADSPA plugin (%d bytes) at %s", len(data), dest)
+    return str(dest)
 
 
 def _can_import(module: str) -> bool:
