@@ -3391,7 +3391,22 @@ class SonarPage(QWidget):
 
         Falls back to auto-detecting the first non-SteelSeries ALSA output sink.
         """
-        import pulsectl
+        try:
+            import pulsectl
+        except ImportError:
+            # pulsectl can be absent — an immutable-distro update (SteamOS moving
+            # to a new Python) wipes pacman-installed site-packages, or a wheel
+            # isn't built yet for a brand-new Python. External-output resolution
+            # is then skipped, but the whole GUI must NOT crash on its way up:
+            # this import used to sit outside the try/except below and took the
+            # entire main window down with a ModuleNotFoundError (issue #175).
+            import logging
+            logging.getLogger(__name__).warning(
+                "pulsectl not installed — skipping external-output resolution; "
+                "reinstall it (e.g. `pip install --user pulsectl`) to restore "
+                "Output-channel routing (issue #175)"
+            )
+            return
         from ruamel.yaml import YAML
 
         nick: str | None = None
