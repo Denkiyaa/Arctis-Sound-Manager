@@ -381,6 +381,21 @@ def _which(binary: str) -> bool:
     return shutil.which(binary) is not None
 
 
+def _pip_user(pkg: str) -> list[str]:
+    """Root-less install of a pure-Python module into the user site (~/.local).
+
+    This is the self-heal path that actually works on an immutable distro
+    (issue #175): SteamOS / Arch put the ASM package and its deps in the
+    read-only rootfs, which a system update wipes and `pacman`/`paru` can't
+    write back to. ``pip install --user`` targets ~/.local — writable, on the
+    interpreter's path for both the GUI and the `systemctl --user` daemon, and
+    surviving OS updates. No ``--break-system-packages``: Arch/SteamOS don't
+    mark the environment externally-managed, so plain ``--user`` installs.
+    Runs as the invoking user (never via pkexec) — see the deps dialog.
+    """
+    return ["python3", "-m", "pip", "install", "--user", pkg]
+
+
 def _hrir_present() -> bool:
     p = Path.home() / ".local" / "share" / "pipewire" / "hrir_hesuvi" / "hrir.wav"
     try:
@@ -758,9 +773,9 @@ def _build_checks() -> list[DepCheck]:
             install_commands={
                 "fedora": ["dnf", "install", "-y", "python3-pulsectl"],
                 "debian": ["apt-get", "install", "-y", "python3-pulsectl"],
-                # Arch has no pacman-native pkg — the AUR PKGBUILD bundles
-                # it via uv pip --no-deps. Hint the user to reinstall ASM.
-                "arch":   ["paru", "-S", "--noconfirm", "arctis-sound-manager"],
+                # Arch has no pacman-native pkg, and on immutable SteamOS pacman
+                # can't write the rootfs anyway (#175) — install into ~/.local.
+                "arch":   _pip_user("pulsectl"),
             },
         ),
         DepCheck(
@@ -769,11 +784,12 @@ def _build_checks() -> list[DepCheck]:
             feature="settings D-Bus service + GUI ↔ daemon comms",
             detect=lambda: _can_import("dbus_next"),
             install_commands={
-                # Not in Fedora/Arch official repos — the RPM/AUR ship a
-                # bundled wheel. A `dnf reinstall` / `paru -S` rewrites it.
+                # Not in Fedora/Arch official repos — the RPM ships a bundled
+                # wheel (dnf reinstall rewrites it); on Arch/SteamOS install the
+                # module into ~/.local rather than reinstalling ASM (#175).
                 "fedora": ["dnf", "reinstall", "-y", "arctis-sound-manager"],
                 "debian": ["apt-get", "install", "-y", "python3-dbus-next"],
-                "arch":   ["paru", "-S", "--noconfirm", "arctis-sound-manager"],
+                "arch":   _pip_user("dbus-next"),
             },
         ),
         DepCheck(
@@ -784,7 +800,7 @@ def _build_checks() -> list[DepCheck]:
             install_commands={
                 "fedora": ["dnf", "install", "-y", "python3-ruamel-yaml"],
                 "debian": ["apt-get", "install", "-y", "python3-ruamel.yaml"],
-                "arch":   ["pacman", "-S", "--noconfirm", "python-ruamel-yaml"],
+                "arch":   _pip_user("ruamel.yaml"),
             },
         ),
         DepCheck(
@@ -815,7 +831,7 @@ def _build_checks() -> list[DepCheck]:
             install_commands={
                 "fedora": ["dnf", "install", "-y", "python3-pyusb"],
                 "debian": ["apt-get", "install", "-y", "python3-usb"],
-                "arch":   ["pacman", "-S", "--noconfirm", "python-pyusb"],
+                "arch":   _pip_user("pyusb"),
             },
         ),
         DepCheck(
@@ -848,7 +864,7 @@ def _build_checks() -> list[DepCheck]:
             install_commands={
                 "fedora": ["dnf", "install", "-y", "python3-pillow"],
                 "debian": ["apt-get", "install", "-y", "python3-pil"],
-                "arch":   ["pacman", "-S", "--noconfirm", "python-pillow"],
+                "arch":   _pip_user("pillow"),
             },
         ),
 

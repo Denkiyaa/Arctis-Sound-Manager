@@ -379,6 +379,23 @@ def test_rnnoise_mint_and_pop_build_from_source():
         assert cmd is not None and cmd[0] == "bash", distro
 
 
+def test_python_module_deps_install_via_pip_user_on_arch():
+    """#175: on Arch/SteamOS the rootfs is immutable, so pure-Python module deps
+    must self-heal into ~/.local via `pip install --user`, not pacman/paru or an
+    ASM reinstall that can't write /usr."""
+    checks = {c.name: c for c in _build_checks()}
+    for name, pkg in (
+        ("pulsectl (python module)", "pulsectl"),
+        ("dbus-next (python module)", "dbus-next"),
+        ("ruamel.yaml (python module)", "ruamel.yaml"),
+        ("pyusb (python module)", "pyusb"),
+        ("PIL / Pillow (python module)", "pillow"),
+    ):
+        with patch.object(sdc, "detect_distro", lambda: "arch"):
+            cmd = install_command_for(checks[name])
+        assert cmd == ["python3", "-m", "pip", "install", "--user", pkg], name
+
+
 # ── DeepFilterNet: version-aware resolution + guarded download (opt-in) ────────
 
 def test_deepfilter_best_prefers_newest_and_user_build(tmp_path, monkeypatch):

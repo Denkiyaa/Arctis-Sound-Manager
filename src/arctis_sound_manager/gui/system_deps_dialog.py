@@ -55,6 +55,25 @@ from arctis_sound_manager.utils import project_version
 
 log = logging.getLogger(__name__)
 
+
+def _is_user_run(argv: list[str] | None) -> bool:
+    """True for install commands that must run as the invoking user, never via
+    pkexec/sudo: ASM helpers, ``systemctl --user``, ``paru`` (refuses root), and
+    ``pip install --user`` (targets the user's own ~/.local, the immutable-safe
+    self-heal path from #175). Elevating any of these would install to the wrong
+    place (root's home) or fail outright."""
+    if not argv:
+        return False
+    head = argv[0]
+    if head in ("asm-setup", "asm-cli", "paru", "systemctl"):
+        return True
+    if head in ("pip", "pip3") and "--user" in argv:
+        return True
+    if head == "python3" and "pip" in argv and "--user" in argv:
+        return True
+    return False
+
+
 _SKIP_MARKER = Path.home() / ".config" / "arctis_manager" / ".skip_deps_check"
 
 # Pacman mirror-sync error: the mirror has the index but not the file yet.
@@ -197,8 +216,9 @@ class _DepRow(QFrame):
         # command would break.
         cmd = shlex.join(argv)
         # Prepend `sudo ` for system-pkg installs so the clipboard line is
-        # ready to paste into a terminal. Skip for internal helpers.
-        line = cmd if argv[0] in ("asm-setup", "asm-cli", "systemctl") else "sudo " + cmd
+        # ready to paste into a terminal. Skip for anything that runs as the
+        # user (ASM helpers, systemctl --user, paru, pip --user — #175).
+        line = cmd if _is_user_run(argv) else "sudo " + cmd
         QGuiApplication.clipboard().setText(line, QClipboard.Mode.Clipboard)
 
 
@@ -352,10 +372,12 @@ class SystemDepsDialog(QDialog):
                 skipped.append(r.check.name)
                 continue
             head = argv[0]
-            if head in ("asm-setup", "asm-cli", "systemctl"):
+            if _is_user_run(argv):
+                # asm-setup / asm-cli / systemctl --user / paru / pip --user —
+                # run un-elevated after the pkexec batch (#175).
                 internals.append(argv)
                 continue
-            # head is dnf / apt-get / pacman / paru — the package name(s) are
+            # head is dnf / apt-get / pacman — the package name(s) are
             # the trailing positional args (after subcommand + flags). To keep
             # this robust we re-build the argv from scratch per pkgmgr.
             if head == "dnf":
@@ -428,11 +450,9 @@ class SystemDepsDialog(QDialog):
         # pkexec batch.
         elevated, user_local = [], []
         for argv in commands:
-            head = argv[0]
-            if head in ("asm-setup", "asm-cli", "paru"):
-                user_local.append(argv)
-            elif head == "systemctl":
-                # `systemctl --user` must run as the user — never via pkexec
+            if _is_user_run(argv):
+                # ASM helpers, systemctl --user, paru, pip --user (#175) — must
+                # run as the invoking user, never elevated via pkexec.
                 user_local.append(argv)
             else:
                 elevated.append(argv)
