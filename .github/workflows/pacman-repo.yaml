@@ -90,7 +90,11 @@ jobs:
         run: |
           set -uo pipefail
           failed=""
-          for pkg in python-pulsectl; do
+          # python-pulsectl is a hard dependency (ASM can't run without it) so
+          # it MUST be here. noise-suppression-for-voice is an optdepend — the
+          # install no longer needs it, but shipping it lets users add the
+          # ClearCast mic noise-cancel with one `pacman -S` from this same repo.
+          for pkg in python-pulsectl noise-suppression-for-voice; do
             sudo -u builder git clone --depth 1 \
               "https://aur.archlinux.org/${pkg}.git" "/tmp/${pkg}" || { failed="$failed $pkg"; continue; }
             # An epoch puts a colon in the package filename, and GitHub rewrites

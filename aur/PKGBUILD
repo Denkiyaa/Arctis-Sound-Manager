@@ -32,16 +32,20 @@ depends=(
     # Arch base install ships curl, not wget.
     'curl'
     # LADSPA Steve Harris pack — provides plate_1423 used by the HeSuVi
-    # 7.1 surround filter-chain (issue #23). Promoted from optdepends
-    # to depends per the "no soft deps" mandate.
+    # 7.1 surround filter-chain (issue #23). In the official 'extra' repo,
+    # so pacman satisfies it directly.
     'swh-plugins'
-    # rnnoise LADSPA plugin used by the ClearCast / mic noise-suppression
-    # toggle in the Settings page. Lives in the AUR — pacman will refuse
-    # to satisfy this from the official repos, so users installing the
-    # AUR PKGBUILD via paru/yay will be prompted to build it as part of
-    # the same transaction. This is intentional — the alternative
-    # (optdepends) means the toggle silently does nothing.
-    'noise-suppression-for-voice'
+)
+optdepends=(
+    # rnnoise LADSPA plugin for the ClearCast / mic noise-suppression toggle.
+    # AUR-only, so it CANNOT be a hard depend: pacman can't satisfy it from the
+    # official repos, and `pacman -S arctis-sound-manager` from the signed repo
+    # would abort on an unresolvable dependency (#175, and the #96 rule that this
+    # must never be a Depends). It stays optional — the mic noise-cancel toggle
+    # degrades gracefully when it's missing (and DeepFilterNet is an alternative
+    # engine). The signed pacman repo ships a build of it, so it's one
+    # `pacman -S noise-suppression-for-voice` away; on the AUR, paru offers it.
+    'noise-suppression-for-voice: RNNoise mic noise cancellation (ClearCast)'
 )
 makedepends=('python-installer' 'uv')
 install=arctis-sound-manager.install
