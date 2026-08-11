@@ -24,6 +24,9 @@ is installed.
 - **Installed, switched off** — the button says **Enable**.
 - **On** — the recorder, with **Uninstall** at the end of its top row.
 
+![The Video tab before Clips is switched on: what it needs, what is already
+present, and one button](images/screenshot_clips_install.png)
+
 The same controls live in **Settings → Clips**; they share one code path, so it
 makes no difference which you use.
 
@@ -108,14 +111,62 @@ or recreate the environment with `--system-site-packages`.
 
 ## Recording
 
-**Length** is how much history is kept in memory, and **Frame rate** is a
-ceiling, not a target: the screen only produces a frame when something changes,
-so a still desktop records well under the number you choose. That is normal —
-what it saves is memory, encoder budget and file size.
+**Start capture** arms the buffer; **Save last seconds** writes what has already
+happened. There is nothing to press *before* the moment you want — that is the
+whole point of a rolling buffer.
+
+![The recorder: the two buttons you press while playing, and the library
+below](images/screenshot_clips_recorder.png)
+
+The settings live behind the **gear** next to Open folder, because they are set
+once and then never looked at again:
+
+**Length** is how much history is kept in memory — 30 seconds by default, and
+anything from 5 to 300. **Frame rate** is a ceiling, not a target: the screen
+only produces a frame when something changes, so a still desktop records well
+under the number you choose. That is normal — what it saves is memory, encoder
+budget and file size.
 
 The **shortcut** is registered with your desktop's global-shortcuts portal, so it
 works while a game has focus. `asm-clipd` does the same thing from a key binding
 without the window open.
+
+## Choosing what to capture
+
+The first capture opens your desktop's **screen picker** — the portal dialog that
+asks for a screen or a window. The answer is saved and replayed on every later
+start, which is what stops a rolling capture from asking again each time it
+rebuilds its pipeline.
+
+To change it, use **Capture** in the gear popup: it drops the saved answer and
+asks again. If a capture is running it restarts right there, while you are still
+looking at the button you pressed — a picker that appears unprompted twenty
+minutes later is worse than one that appears now. Cancelling the picker stops the
+capture and says so, because by then the previous session is already closed and
+there is nothing to fall back to.
+
+The page cannot show you *which* screen or window is selected. That choice lives
+inside the portal and Wayland never hands it back, so the control offers the only
+honest thing — the way back to the picker — rather than naming a source it cannot
+verify.
+
+## Following the game
+
+**Capture automatically while a game is running** is on by default, and it only
+ever applies once Clips itself has been switched on. A buffer is only worth
+having if it is already running when something happens, and arming it by hand is
+exactly what gets forgotten.
+
+The game is found the same way a clip gets its name: whatever you routed to the
+**Game** channel, so there is no list of titles to keep up to date.
+
+When the game goes, the capture goes with it — but not immediately. A game falls
+quiet for a loading screen or a cutscene, and tearing the pipeline down there
+would throw the buffer away and cost a portal prompt to rebuild it, so the
+silence has to last **45 seconds**, and a game coming back resets the count.
+
+Only a capture that started this way is stopped this way. If you pressed **Start
+capture** yourself, you are recording deliberately and you decide when it ends.
 
 ## Clips on disk
 
