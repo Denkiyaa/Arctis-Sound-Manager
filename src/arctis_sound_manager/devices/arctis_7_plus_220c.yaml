@@ -1,0 +1,185 @@
+# ── Arctis 7+ hardware revision 0x220c — PROVISIONAL, UNCONFIRMED ────────────
+#
+# Reported by @Michsior14 in #180 on CachyOS: the headset works as a plain USB
+# audio device, but ASM never talked to it at all —
+#
+#   CoreEngine: USB device 1038:220c appeared but no device YAML matches.
+#
+# so nothing was ever written to it, `pm_shutdown` included, and the headset
+# kept its firmware default (the reported symptom: "the device never turns
+# off"). An unknown PID also means no udev rule is generated for it, which is
+# the "(no permission)" line in the same report; sharing the family name with
+# arctis_7_plus.yaml fixes that, because udev_rules.py unions product ids
+# across every file with the same (vendor_id, name).
+#
+# Why this is a separate file rather than one more PID on arctis_7_plus.yaml:
+# the layout differs. The 7+ profile drives interface 3 (`command_interface_
+# index: [3, 0]`), but the USB dump for 0x220c enumerates only two HID
+# interfaces —
+#
+#   HID interface 0 : Endpoint 0x81 IN Interrupt MaxPacketSize=64
+#   HID interface 1 : Endpoint 0x82 IN Interrupt MaxPacketSize=4
+#
+# Adding the PID to the 7+ profile would have aimed every command at an
+# interface this device does not expose.
+#
+# WHAT IS INFERRED (and what would have to change if it turns out wrong):
+#   - Interface 0 is the control interface. The 64-byte interrupt endpoint
+#     matches this family's 64-byte command padding, and the 4-byte endpoint on
+#     interface 1 has the shape of a consumer-control (volume keys) interface —
+#     the same split confirmed on real hardware for the Nova 3 Wireless in #149,
+#     where interface 3 was the 64-byte command endpoint and interface 4 the
+#     4-byte consumer one. If commands are silently ignored, interface 1 is the
+#     next candidate.
+#   - The command set is unchanged from the 7+ (0xa3 pm_shutdown, 0x37 mic
+#     volume, 0x39 sidetone, 0xae mic LED, 0xb0 status). Same product name,
+#     same generation, so most likely the same firmware protocol behind a
+#     different USB descriptor — but no capture confirms it yet. Should the
+#     headset misbehave rather than merely ignore ASM, this is what to suspect:
+#     stop and ask for a usbhid-dump before pushing commands at it.
+#
+# Nothing here can make the headset worse than it is today (ASM currently sends
+# it nothing at all), but do not treat it as verified until @Michsior14 or
+# another owner of this revision confirms it — at which point this header, and
+# the file name, should be replaced with the real model name.
+# ──────────────────────────────────────────────────────────────────────────────
+device:
+  name: SteelSeries Arctis 7+
+  vendor_id: 0x1038
+  product_ids:
+    - 0x220c # Arctis 7+ (revision with HID interfaces 0/1 — see header)
+  command_padding:
+    length: 64
+    position: end
+    filler: 0x00
+
+  command_transport: ctrl_output  # HID SET_REPORT, as on every other 7+ variant
+  command_interface_index: [0, 0]
+  listen_interface_indexes: [0]
+  dial_interface_index: 0         # same interface as status, as on the 7+
+
+  device_init:
+    - [0x10]
+    - ['status.request']
+    - [0xa3, 'settings.pm_shutdown']
+    - [0xae, 'settings.mic_mute_led_brightness']
+    - [0x37, 'settings.mic_volume']
+    - [0x39, 'settings.mic_side_tone']
+    - [0x09]
+    - ['status.request']
+    - [0x09]
+
+  status:
+    request: 0xb0
+    response_mapping:
+      - starts_with: 0x45
+        media_mix: 0x01
+        chat_mix: 0x02
+
+      - starts_with: 0xb0
+        headset_power_status: 0x01
+        headset_battery_charge: 0x02
+        cable_charging: 0x03
+        media_mix: 0x04
+        chat_mix: 0x05
+
+    representation:
+      headset:
+        - headset_power_status
+        - headset_battery_charge
+        - cable_charging
+        - chat_mix
+        - media_mix
+      mic:
+        - mic_status
+
+  online_status:
+    status_variable: headset_power_status
+    online_value: online
+
+  audio:
+    spatial_engine: hesuvi
+
+  settings:
+    microphone:
+      mic_volume:
+        type: slider
+        min: 0x00
+        max: 0x07
+        step: 1
+        min_label: mic_muted
+        max_label: perc_100
+        default: 0x07
+        update_sequence: [0x37, 'value']
+      mic_side_tone:
+        type: button_group
+        values_mapping:
+          0x00: off
+          0x01: low
+          0x02: medium
+          0x03: high
+        default: 0x00
+        update_sequence: [0x39, 'value']
+      mic_mute_led_brightness:
+        type: button_group
+        values_mapping:
+          0x00: off
+          0x01: low
+          0x02: medium
+          0x03: high
+        default: 0x03
+        update_sequence: [0xae, 'value']
+    power_management:
+      pm_shutdown:
+        type: button_group
+        values_mapping:
+          0x00: never
+          0x01: 1_minute
+          0x05: 5_minutes
+          0x0a: 10_minutes
+          0x0f: 15_minutes
+          0x1e: 30_minutes
+          0x2d: 45_minutes
+          0x3c: 60_minutes
+          0x4b: 75_minutes
+          0x5a: 90_minutes
+        default: 0x1e
+        update_sequence: [0xa3, 'value']
+
+  status_parse:
+    # Arctis 7+ offline flag: data[1]=0x01 means offline (different from Nova 7's 0x02)
+    headset_power_status:
+      type: int_str_mapping
+      values:
+        0x01: 'off'
+        0x00: 'on'
+        0x02: 'on'
+        0x03: 'on'
+    headset_battery_charge:
+      type: percentage
+      perc_min: 0
+      perc_max: 4
+    cable_charging:
+      # SteelSeries' own translate_charging_status, identical across every
+      # Arctis family: 0 unknown / 1 charging / 2 plugged in but not charging
+      # / 3 on battery. As an on_off pair this reported "not charging" for
+      # every state but one, including the plain on-battery case.
+      type: int_str_mapping
+      values:
+        0x00: unknown
+        0x01: on
+        0x02: plugged_not_charging
+        0x03: off
+    media_mix:
+      type: percentage
+      perc_min: 0
+      perc_max: 100
+    chat_mix:
+      type: percentage
+      perc_min: 0
+      perc_max: 100
+    mic_status:
+      type: int_str_mapping
+      values:
+        0x01: muted
+        0x00: unmuted
