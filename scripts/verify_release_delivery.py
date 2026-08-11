@@ -2,7 +2,8 @@
 # Copyright (C) 2026 loteran
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Verify that a release version has actually been delivered to every
-distribution channel (AUR, COPR, Launchpad PPA, PyPI).
+distribution channel (signed pacman repo, COPR, Launchpad PPA, PyPI — plus the
+AUR, informational).
 
 Each channel is queried through its public API and classified as:
   - delivered : the version is published/available
@@ -15,14 +16,27 @@ Exit status:
                           (a still-`pending` slow build is tolerated; the daily
                           audit is the safety net)
 
-All four channels are HARD checks. (PyPI went live with 1.1.51 once its Trusted
-Publisher was configured; set its flag to False in CHANNELS to make it soft again.)
+PyPI went live with 1.1.51 once its Trusted Publisher was configured; set a
+channel's flag to False in CHANNELS to make it soft (reported, never fatal).
+
+The AUR is deliberately SOFT. Arch users are served by the signed binary pacman
+repository (pacman-repo.yaml) — that is the channel `pacman -Syu` reads, and the
+only one a PackageKit software centre can see at all. The AUR is a convenience
+mirror on top of it, and pushing to it depends on aur.archlinux.org's git being
+reachable: during an upstream maintenance window it answers "The AUR is down due
+to maintenance" to git-upload-pack (while its read-only RPC keeps serving the
+stale version), which nothing on our side can unblock — aur-retry.yaml polls and
+pushes the moment it comes back. Failing the release audit on it just buried a
+real regression under recurring noise (issues #176, #178), so the pacman repo is
+what the audit now gates on.
 """
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.request
@@ -40,10 +54,22 @@ PROJECT = "arctis-sound-manager"
 DELIVERED, PENDING, MISSING = "delivered", "pending", "missing"
 
 
+PACMAN_DB_URL = (
+    f"https://github.com/{OWNER}/Arctis-Sound-Manager/releases/download"
+    f"/pacman-repo/{PROJECT}.db.tar.gz"
+)
+
+
 def _get(url: str):
     req = urllib.request.Request(url, headers={"User-Agent": "asm-release-verify"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.load(resp)
+
+
+def _get_bytes(url: str) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": "asm-release-verify"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.read()
 
 
 def _base(version: str) -> str:
@@ -70,6 +96,30 @@ def check_aur(v: str):
         return MISSING, "package not found in AUR"
     ver = results[0].get("Version", "")
     return (DELIVERED if _base(ver) == v else MISSING), ver
+
+
+def check_pacman(v: str):
+    """The signed binary pacman repository — what Arch/CachyOS users actually
+    install from, and the only Arch channel a PackageKit software centre sees.
+
+    Read the repository database itself rather than the release's asset list:
+    that is the exact file `pacman -Sy` downloads, so a package uploaded but
+    missing from the database (repo-add never ran, a partial upload) reads as
+    missing here too, which is what the user would experience.
+    """
+    raw = _get_bytes(PACMAN_DB_URL)
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tf:
+        # repo-add lays the database out as one <pkgname>-<pkgver>-<pkgrel>/
+        # directory per package, each holding a `desc` file.
+        entries = {n.split("/", 1)[0] for n in tf.getnames() if "/" in n}
+    found = ""
+    for entry in entries:
+        parts = entry.rsplit("-", 2)
+        if len(parts) == 3 and parts[0] == PROJECT:
+            if parts[1] == v:
+                return DELIVERED, f"{parts[1]}-{parts[2]} in the signed repo database"
+            found = f"{parts[1]}-{parts[2]}"
+    return MISSING, f"repo database has {found or 'no ' + PROJECT + ' entry'}"
 
 
 def check_copr(v: str):
@@ -115,7 +165,8 @@ def check_ppa(v: str):
 
 # name -> (function, hard?)
 CHANNELS = {
-    "AUR": (check_aur, True),
+    "Pacman": (check_pacman, True),  # the real Arch channel (see module docstring)
+    "AUR": (check_aur, False),       # convenience mirror, gated on upstream AUR git
     "COPR": (check_copr, True),
     "PPA": (check_ppa, True),
     "PyPI": (check_pypi, True),  # live since 1.1.51 (Trusted Publisher configured)
@@ -165,7 +216,7 @@ def main() -> int:
               f"({'audit/strict' if args.strict else 'post-release'} mode) ===")
         for name, (status, detail, hard) in results.items():
             tag = "" if hard else " (soft)"
-            print(f"  {ICON[status]} {name:5}{tag}: {status} — {detail}")
+            print(f"  {ICON[status]} {name:6}{tag}: {status} — {detail}")
         if all_settled(results, args.strict) or time.time() >= deadline:
             break
         remaining = int(deadline - time.time())

@@ -89,6 +89,24 @@ jobs:
         continue-on-error: true
         run: |
           set -uo pipefail
+
+          # GCC 15 stopped pulling <cstdint> in transitively, and
+          # noise-suppression-for-voice 0.91 — the AUR's current release —
+          # still relies on that: common/include/common/RnNoiseCommonPlugin.h
+          # uses int32_t without including it, so the build dies with
+          # "'int32_t' has not been declared". Being continue-on-error, that
+          # failure was only a warning in the log, and v1.2.26 shipped a
+          # repository without the mic noise-cancel plugin it had just promised
+          # `pacman -S` would provide (issue #175).
+          #
+          # Force the header in for every C++ translation unit rather than
+          # patching a source file we do not control. ~/.makepkg.conf is
+          # sourced after /etc/makepkg.conf, so this appends to the distro
+          # flags instead of replacing them, and it is a no-op for the pure
+          # Python packages built here.
+          printf 'CXXFLAGS+=" -include cstdint"\n' > /home/builder/.makepkg.conf
+          chown builder:builder /home/builder/.makepkg.conf
+
           failed=""
           # python-pulsectl is a hard dependency (ASM can't run without it) so
           # it MUST be here. noise-suppression-for-voice is an optdepend — the
@@ -198,19 +216,58 @@ jobs:
               --notes-file /tmp/notes.md
           fi
 
+          # api.github.com answers a transient 503 often enough that a single
+          # attempt is not good enough here: v1.2.26 lost its whole database
+          # upload to one (issue #178), leaving the packages published but the
+          # repository still advertising the previous version — pacman reads
+          # the database, so every Arch user stayed on 1.2.25 with no sign
+          # anything had gone wrong.
+          retry() {
+            n=0
+            until "$@"; do
+              n=$((n + 1))
+              [ "$n" -lt 5 ] || { echo "::error::giving up after $n attempts: $*"; return 1; }
+              echo "::warning::attempt $n failed, retrying in $((n * 10))s: $*"
+              sleep $((n * 10))
+            done
+          }
+
           # --clobber: one asset set at a time, replaced in place, so a user's
           # Server line keeps working across every release.
-          gh release upload pacman-repo ./* \
-            --repo "$GITHUB_REPOSITORY" --clobber
+          #
+          # Packages first, database last, each uploaded on its own: the
+          # database is the index pacman resolves against, so it must never
+          # name a package that is not published yet. Uploading it last means
+          # an interrupted run leaves the previous, coherent repository intact
+          # rather than a database pointing at 404s.
+          for f in *.pkg.tar.zst *.pkg.tar.zst.sig arctis-sound-manager.key; do
+            [ -f "$f" ] || continue
+            retry gh release upload pacman-repo "$f" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          done
+          for f in arctis-sound-manager.db arctis-sound-manager.db.sig \
+                   arctis-sound-manager.db.tar.gz arctis-sound-manager.db.tar.gz.sig \
+                   arctis-sound-manager.files arctis-sound-manager.files.sig \
+                   arctis-sound-manager.files.tar.gz arctis-sound-manager.files.tar.gz.sig; do
+            [ -f "$f" ] || continue
+            retry gh release upload pacman-repo "$f" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          done
 
           # --clobber only replaces same-named assets, so last version's
           # packages would pile up forever — and a filename GitHub rewrote (it
           # strips colons) would linger unreferenced by any database.
+          #
+          # Housekeeping only: the repository is already complete and coherent
+          # at this point, and a stale extra package hurts nobody (the database
+          # never names it). Never fail the job — and with it the release — over
+          # a leftover file.
           gh release view pacman-repo --repo "$GITHUB_REPOSITORY" \
             --json assets --jq '.assets[].name' | while read -r asset; do
-            [ -f "$asset" ] || gh release delete-asset pacman-repo "$asset" \
-              --repo "$GITHUB_REPOSITORY" -y
-          done
+            [ -f "$asset" ] || retry gh release delete-asset pacman-repo "$asset" \
+              --repo "$GITHUB_REPOSITORY" -y || \
+              echo "::warning::could not remove stale asset $asset — harmless, no database references it."
+          done || true
 
       - name: Summary
         run: |

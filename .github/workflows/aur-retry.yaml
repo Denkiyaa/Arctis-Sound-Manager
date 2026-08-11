@@ -80,7 +80,7 @@ jobs:
 
           cd /tmp/aur
           git config user.name "loteran"
-          git config user.email "axel.valadon@gmail.com"
+          git config user.email "29098776+loteran@users.noreply.github.com"
           git add PKGBUILD .SRCINFO arctis-sound-manager.install
           if git diff --cached --quiet; then
             echo "::notice::No changes to push."

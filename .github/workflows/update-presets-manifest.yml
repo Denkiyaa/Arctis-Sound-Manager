@@ -29,7 +29,7 @@ jobs:
       - name: Commit if changed
         run: |
           git config user.name "loteran"
-          git config user.email "axel.valadon@gmail.com"
+          git config user.email "29098776+loteran@users.noreply.github.com"
           git add presets_manifest.json
           git diff --cached --quiet && echo "Manifest already up to date." && exit 0
           git commit -m "chore: regenerate presets_manifest.json [skip ci]"

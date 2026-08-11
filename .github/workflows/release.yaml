@@ -104,7 +104,7 @@ jobs:
       - name: Commit generated files to main
         run: |
           git config user.name "loteran"
-          git config user.email "axel.valadon@gmail.com"
+          git config user.email "29098776+loteran@users.noreply.github.com"
           git add debian/changelog \
             src/arctis_sound_manager/desktop/com.github.loteran.arctis-sound-manager.metainfo.xml
           git diff --cached --quiet && echo "No generated files changed" && exit 0
@@ -181,7 +181,7 @@ jobs:
         run: |
           cd /tmp/aur-repo
           git config user.name "loteran"
-          git config user.email "axel.valadon@gmail.com"
+          git config user.email "29098776+loteran@users.noreply.github.com"
           git add PKGBUILD .SRCINFO arctis-sound-manager.install
           git diff --cached --quiet && echo "No changes to push" && exit 0
           git commit -m "Update to v${{ needs.release.outputs.version }}"
@@ -210,7 +210,7 @@ jobs:
             cp aur/arctis-sound-manager.install /tmp/aur-verify/arctis-sound-manager.install
             cd /tmp/aur-verify
             git config user.name "loteran"
-            git config user.email "axel.valadon@gmail.com"
+            git config user.email "29098776+loteran@users.noreply.github.com"
             git add PKGBUILD .SRCINFO arctis-sound-manager.install
             git diff --cached --quiet && echo "Nothing to fix." || git commit -m "Fix: update to v${VERSION}" && git push
             cd -
@@ -238,7 +238,7 @@ jobs:
         run: |
           VERSION="${{ needs.release.outputs.version }}"
           git config user.name "loteran"
-          git config user.email "axel.valadon@gmail.com"
+          git config user.email "29098776+loteran@users.noreply.github.com"
           git fetch origin main
           git checkout -B main-aur-sync origin/main
 
@@ -286,7 +286,7 @@ jobs:
         run: |
           VERSION="${{ needs.release.outputs.version }}"
           git config user.name "loteran"
-          git config user.email "axel.valadon@gmail.com"
+          git config user.email "29098776+loteran@users.noreply.github.com"
           git fetch origin main
           git checkout -B main-spec-sync origin/main
           sed -i "s/^Version:.*/Version:        ${VERSION}/" arctis-sound-manager.spec
