@@ -242,6 +242,7 @@ def _lookup_override(overrides: dict, key: str, app: str) -> str | None:
 # (the Channels tab's per-channel "output device" picker). Kept in one place
 # so _resolve_channel_output and the enforcement pass below can't drift.
 _CHANNEL_VIRTUAL_TO_KEY = {"Arctis_Game": "game", "Arctis_Chat": "chat", "Arctis_Media": "media"}
+_CHANNEL_KEY_TO_VIRTUAL = {v: k for k, v in _CHANNEL_VIRTUAL_TO_KEY.items()}
 
 
 def _resolve_channel_output(sink_name: str, channel_outputs: dict, sink_map: dict) -> str:
@@ -590,11 +591,12 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
             continue
 
     # ── Per-channel output device enforcement ───────────────────────────────
-    channel_outputs = _load_channel_outputs()
+    # channel_outputs was already loaded at the top of the tick — the override
+    # passes above resolve through it too (see _resolve_channel_output), so
+    # both must see the exact same mapping or they fight over the stream.
     if channel_outputs:
-        _ch_virtual = {"game": "Arctis_Game", "chat": "Arctis_Chat", "media": "Arctis_Media"}
         for _ch, _target_name in channel_outputs.items():
-            _virtual_frag = _ch_virtual.get(_ch)
+            _virtual_frag = _CHANNEL_KEY_TO_VIRTUAL.get(_ch)
             if not _virtual_frag:
                 continue
             _target_idx = sink_map.get(_target_name)
