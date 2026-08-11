@@ -100,6 +100,38 @@ def test_refresh_redraws_only_when_custom_display_enabled(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# _show_splash(): never steals the screen when Custom Display is off
+# ---------------------------------------------------------------------------
+
+def test_splash_skipped_when_custom_display_disabled(monkeypatch):
+    """With Custom Display off the DAC's own UI must stay on screen.
+
+    The splash is not just cosmetic here: it sets `_splash_until`, and the
+    refresh loop sleeps until that expires, so nothing sends the return-to-UI
+    packet meanwhile — the DAC would sit on the ASM logo for the full splash
+    duration every time the daemon starts, the GUI opens or the tray icon is
+    clicked (reported on Discord for a Nova Pro Wired DAC).
+    """
+    manager = _make_manager(_FakeUsbDevice(None), monkeypatch)
+    sent: list[list[int]] = []
+    monkeypatch.setattr(manager, "_send_oled_packet",
+                        lambda packet, control=False: sent.append(packet) or True)
+    monkeypatch.setattr(manager._renderer, "render_splash_image", lambda: b"\x00")
+
+    manager._core.general_settings.oled_custom_display = False
+    manager._show_splash()
+    assert sent == []
+    # The refresh loop must not be parked either — it is what hands the panel
+    # back to the firmware.
+    assert manager._splash_until == 0.0
+
+    manager._core.general_settings.oled_custom_display = True
+    manager._show_splash()
+    assert sent, "splash must still be drawn when Custom Display is on"
+    assert manager._splash_until > 0.0
+
+
+# ---------------------------------------------------------------------------
 # _send_oled_packet: bool return contract
 # ---------------------------------------------------------------------------
 
