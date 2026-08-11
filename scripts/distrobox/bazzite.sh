@@ -162,6 +162,31 @@ install_asm() {
         fi
         echo "[arch-install] Updating system..."
         sudo pacman -Syu --noconfirm
+        sudo pacman -S --needed --noconfirm curl
+
+        # The signed binary repository is the primary Arch channel, and the
+        # only one that keeps working while aur.archlinux.org git is in
+        # maintenance — it has been since 1.2.19, which left immutable-OS
+        # users stranded on an old version with no way to update (issue #175).
+        # Adding it here also means later updates are a plain `pacman -Syu`
+        # inside the container, with no PKGBUILD editing.
+        if ! grep -q "^\[arctis-sound-manager\]" /etc/pacman.conf; then
+            echo "[arch-install] Adding the signed ASM repository..."
+            curl -fsSL https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo/arctis-sound-manager.key -o /tmp/asm.key
+            sudo pacman-key --add /tmp/asm.key
+            sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/asm.key | awk -F: "/^fpr/ {print \$10; exit}")"
+            printf "\n[arctis-sound-manager]\nServer = https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo\n" \
+                | sudo tee -a /etc/pacman.conf >/dev/null
+            rm -f /tmp/asm.key
+        fi
+
+        echo "[arch-install] Installing arctis-sound-manager from the signed repository..."
+        if sudo pacman -Sy --noconfirm arctis-sound-manager; then
+            echo "[arch-install] Done."
+            exit 0
+        fi
+
+        echo "[arch-install] Signed repository unavailable — falling back to the AUR..."
         if ! command -v paru &>/dev/null; then
             echo "[arch-install] Installing paru..."
             sudo pacman -S --needed --noconfirm base-devel git libusb hidapi polkit libnotify
