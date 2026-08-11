@@ -19,16 +19,20 @@ Exit status:
 PyPI went live with 1.1.51 once its Trusted Publisher was configured; set a
 channel's flag to False in CHANNELS to make it soft (reported, never fatal).
 
-The AUR is deliberately SOFT. Arch users are served by the signed binary pacman
-repository (pacman-repo.yaml) — that is the channel `pacman -Syu` reads, and the
-only one a PackageKit software centre can see at all. The AUR is a convenience
-mirror on top of it, and pushing to it depends on aur.archlinux.org's git being
-reachable: during an upstream maintenance window it answers "The AUR is down due
-to maintenance" to git-upload-pack (while its read-only RPC keeps serving the
-stale version), which nothing on our side can unblock — aur-retry.yaml polls and
-pushes the moment it comes back. Failing the release audit on it just buried a
-real regression under recurring noise (issues #176, #178), so the pacman repo is
-what the audit now gates on.
+The AUR is SOFT here, which is a statement about the audit and not about the
+channel: every release still publishes to it (release.yaml), and when it cannot
+be reached that release arms aur-retry.yaml, which polls and pushes as soon as
+it can. It is soft because delivery is not ours to guarantee — pushing depends
+on aur.archlinux.org's git being reachable, and during an upstream maintenance
+window it answers "The AUR is down due to maintenance" to git-upload-pack while
+its read-only RPC keeps serving the stale version. Nothing on our side can
+unblock that, so gating the release audit on it only buried a real regression
+under recurring noise (issues #176, #178).
+
+What the audit gates on for Arch is the signed binary pacman repository
+(pacman-repo.yaml): the channel `pacman -Syu` actually reads, the one the
+Distrobox installers register, and the only one a PackageKit software centre
+can see at all.
 """
 from __future__ import annotations
 

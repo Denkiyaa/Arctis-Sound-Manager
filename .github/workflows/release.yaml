@@ -132,6 +132,9 @@ jobs:
     # package a version behind, which is what happened to v1.2.11.
     needs: [release]
     if: "!contains(github.event.inputs.tag || github.ref_name, 'b')"
+    permissions:
+      contents: read
+      actions: write   # to arm aur-retry when AUR git is down
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -155,10 +158,39 @@ jobs:
             User aur
           SSHCONF
 
+      # aur.archlinux.org answers "The AUR is down due to maintenance" to
+      # git-upload-pack during upstream maintenance windows, while SSH auth and
+      # the read-only RPC keep working. That is not a release failure and must
+      # not be reported as one (it made four consecutive releases look failed),
+      # but the AUR still has to catch up — so hand the push to aur-retry,
+      # which polls and pushes the moment AUR git answers again.
+      - name: Is AUR git reachable?
+        id: aur_up
+        run: |
+          if git ls-remote ssh://aur@aur.archlinux.org/arctis-sound-manager.git HEAD >/dev/null 2>&1; then
+            echo "up=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "up=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::AUR git unreachable (upstream maintenance) — arming aur-retry to push this version when it returns."
+          fi
+
+      - name: Arm the AUR retry poller
+        if: steps.aur_up.outputs.up != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # aur-retry disables itself once it has pushed; re-enable it here so
+          # every release that cannot reach the AUR re-arms it automatically.
+          gh workflow enable aur-retry.yaml --repo "$GITHUB_REPOSITORY" \
+            && echo "aur-retry armed — it will push v${{ needs.release.outputs.version }} once AUR git is back." \
+            || echo "::warning::Could not arm aur-retry — enable it by hand in the Actions tab."
+
       - name: Clone AUR repository
+        if: steps.aur_up.outputs.up == 'true'
         run: git clone ssh://aur@aur.archlinux.org/arctis-sound-manager.git /tmp/aur-repo
 
       - name: Patch PKGBUILD and regenerate .SRCINFO
+        if: steps.aur_up.outputs.up == 'true'
         run: |
           SHA="${{ needs.release.outputs.sha256 }}"
           VERSION="${{ needs.release.outputs.version }}"
@@ -178,6 +210,7 @@ jobs:
           cp aur/arctis-sound-manager.install /tmp/aur-repo/arctis-sound-manager.install
 
       - name: Commit and push to AUR
+        if: steps.aur_up.outputs.up == 'true'
         run: |
           cd /tmp/aur-repo
           git config user.name "loteran"
@@ -188,6 +221,7 @@ jobs:
           git push
 
       - name: Verify and self-heal AUR
+        if: steps.aur_up.outputs.up == 'true'
         run: |
           VERSION="${{ needs.release.outputs.version }}"
           SHA="${{ needs.release.outputs.sha256 }}"
