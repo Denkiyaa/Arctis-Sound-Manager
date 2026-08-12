@@ -57,6 +57,14 @@ PROJECT = "arctis-sound-manager"
 
 DELIVERED, PENDING, MISSING = "delivered", "pending", "missing"
 
+# A channel we could not reach a verdict on — the API timed out, returned a 5xx,
+# or answered something unparseable. Deliberately NOT `missing`: "the release is
+# not there" and "I could not find out" call for different reactions, and
+# collapsing them is how a transient Launchpad timeout files an issue announcing
+# an undelivered release. That is the same class of false positive that buried a
+# real regression under recurring noise in #176/#178, in a different disguise.
+UNKNOWN = "unknown"
+
 
 PACMAN_DB_URL = (
     f"https://github.com/{OWNER}/Arctis-Sound-Manager/releases/download"
@@ -64,16 +72,38 @@ PACMAN_DB_URL = (
 )
 
 
+def _fetch(url: str, timeout: int, attempts: int = 3) -> bytes:
+    """GET *url*, retrying transient failures before giving up.
+
+    These are public APIs behind caches and load balancers; a single timeout or
+    5xx says nothing about whether the release landed. Retrying here keeps the
+    difference between "not delivered" and "could not check" from being decided
+    by one unlucky packet. A 404 is not retried — that is an answer, not a
+    failure.
+    """
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "asm-release-verify"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 404 or e.code < 500:
+                raise
+            last = e
+        except Exception as e:  # timeout, DNS, connection reset, malformed TLS…
+            last = e
+        if attempt + 1 < attempts:
+            time.sleep(2 * (attempt + 1))
+    raise last if last else RuntimeError(f"could not fetch {url}")
+
+
 def _get(url: str):
-    req = urllib.request.Request(url, headers={"User-Agent": "asm-release-verify"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.load(resp)
+    return json.loads(_fetch(url, timeout=30))
 
 
 def _get_bytes(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "asm-release-verify"})
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return resp.read()
+    return _fetch(url, timeout=60)
 
 
 def _base(version: str) -> str:
@@ -87,7 +117,9 @@ def check_pypi(v: str):
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return MISSING, "package not on PyPI (404 — Trusted Publisher not set up?)"
-        return MISSING, f"HTTP {e.code}"
+        # Any other HTTP status is PyPI having a bad day, not evidence about
+        # our release.
+        return UNKNOWN, f"HTTP {e.code}"
     if v in d.get("releases", {}):
         return DELIVERED, f"{v} present (latest: {d['info']['version']})"
     return MISSING, f"absent (latest on PyPI: {d['info']['version']})"
@@ -176,7 +208,7 @@ CHANNELS = {
     "PyPI": (check_pypi, True),  # live since 1.1.51 (Trusted Publisher configured)
 }
 
-ICON = {DELIVERED: "✅", PENDING: "⏳", MISSING: "❌"}
+ICON = {DELIVERED: "✅", PENDING: "⏳", MISSING: "❌", UNKNOWN: "❓"}
 
 
 def run_once(v: str):
@@ -184,18 +216,28 @@ def run_once(v: str):
     for name, (fn, hard) in CHANNELS.items():
         try:
             status, detail = fn(v)
-        except Exception as e:  # network/parse — treat as missing this pass
-            status, detail = MISSING, f"check error: {e}"
+        except Exception as e:
+            # Already retried inside _fetch, so this is a persistent failure —
+            # but still a failure to *check*, not a missing release.
+            status, detail = UNKNOWN, f"check error: {e}"
         results[name] = (status, detail, hard)
     return results
 
 
 def all_settled(results, strict: bool) -> bool:
-    """In strict (audit) mode every hard channel must be delivered. In lenient
-    (post-release) mode, hard channels may be pending but not missing."""
+    """Has every hard channel reached the verdict this mode requires?
+
+    Strict (audit): every hard channel delivered. Lenient (post-release): a hard
+    channel may still be pending — Launchpad routinely is — but not missing.
+
+    UNKNOWN never counts as settled either way, so polling keeps trying: given a
+    transient outage, the next pass usually resolves it into a real answer.
+    """
     for status, _detail, hard in results.values():
         if not hard:
             continue
+        if status == UNKNOWN:
+            return False
         if strict and status != DELIVERED:
             return False
         if not strict and status == MISSING:
@@ -228,11 +270,25 @@ def main() -> int:
         time.sleep(min(args.interval, max(1, remaining)))
 
     ok = all_settled(results, args.strict)
+    unknown = [n for n, (s, _d, h) in results.items() if h and s == UNKNOWN]
     hard_bad = [n for n, (s, _d, h) in results.items()
-                if h and (s == MISSING or (args.strict and s != DELIVERED))]
-    print("\n" + ("✅ All hard channels OK." if ok
-                  else f"❌ Channels not delivered: {', '.join(hard_bad)}"))
-    return 0 if ok else 1
+                if h and s != UNKNOWN and (s == MISSING or (args.strict and s != DELIVERED))]
+
+    if ok:
+        print("\n✅ All hard channels OK.")
+        return 0
+    if hard_bad:
+        # A real verdict: the release is not on these channels.
+        print(f"\n❌ Channels not delivered: {', '.join(hard_bad)}")
+        if unknown:
+            print(f"   (also could not be verified: {', '.join(unknown)})")
+        return 1
+    # Nothing is known to be missing — we just could not finish checking. Exit 2
+    # so the caller can tell this apart and avoid announcing a failed delivery
+    # that never happened. The daily audit re-runs anyway.
+    print(f"\n❓ Could not verify: {', '.join(unknown)} — "
+          f"no channel is known to be missing.")
+    return 2
 
 
 if __name__ == "__main__":
