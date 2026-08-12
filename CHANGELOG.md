@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.29] - 12 August 2026
+
+### Added
+
+- **ASM now tells you when the surround processing can't keep up.** Spatial Audio missing its deadline sounds like random crackling, and until now nothing in the app explained where it came from — leaving you to blame the headset, the cable or the drivers. If the surround chain drops frames steadily, you get a notification saying so and pointing at the stability setting that fixes it. It deliberately stays quiet about one-off glitches: a single burst while a game loads a level or a build finishes is normal and not worth interrupting you for, so it only speaks when the problem persists for a few minutes, and only once per session. Suggested by @nobodys-tools. (#183)
+- **The Spatial Audio profile picker now shows how much CPU each profile costs.** The bundled profiles range from tiny to nearly a megabyte, and the larger ones cost proportionally more processing — enough that on a busy machine the choice decides whether the audio stays clean. Each entry is now marked *light on CPU*, *moderate CPU* or *heavy on CPU*, so the trade-off is visible while you choose instead of discovered afterwards. This says nothing about sound quality: a heavier profile is not a better one, just a more demanding one. Suggested by @nobodys-tools. (#183)
+
+### Fixed
+
+- **The Discord invite on the README and website works again.** The previous invite had expired, so anyone following the "Join the Discord" badge — the first thing shown at the top of the project page — landed on an error. The replacement is set never to expire. Reported by @nobodys-tools. (#184)
+
 ## [1.2.28] - 12 August 2026
 
 ### Added
