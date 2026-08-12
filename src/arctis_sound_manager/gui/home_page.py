@@ -875,10 +875,16 @@ class HomePage(QWidget):
         ]
 
         # ── Polling timer ─────────────────────────────────────────────────────
+        # Started from showEvent, not here: every tick forks a `pw-dump` to
+        # enumerate native streams, and a timer started in the constructor
+        # keeps running for the lifetime of the tray process once the window
+        # has been opened even once — invisible work, twice a second, forever.
+        # On a large PipeWire graph that was measured at 40-75% CPU with the
+        # window closed, enough to push the HeSuVi convolver into xruns and
+        # make the audio crackle (#182).
         self._timer = QTimer(self)
         self._timer.setInterval(500)
         self._timer.timeout.connect(self._poll_volumes)
-        self._timer.start()
 
         self._channel_outputs: dict = _load_channel_outputs()
         # (channel options, Output-card options) — the Output card has its own
@@ -886,6 +892,9 @@ class HomePage(QWidget):
         # is not (see _refresh_device_combos).
         self._available_sinks: tuple = ()
         self._combo_tick = 0
+        # Last get_native_streams() result — reused on the ticks that skip the
+        # pw-dump rescan (#182).
+        self._native_cache: list = []
 
         # Wire device change callbacks
         self._game_card.set_on_device_change(
@@ -1398,6 +1407,21 @@ class HomePage(QWidget):
             logger.debug("pulsectl not available: %s", exc)
         return self._pulse
 
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Poll once straight away so the page is current the moment it appears,
+        # rather than showing stale values until the first tick lands.
+        self._poll_volumes()
+        self._timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        # Nothing here is visible any more, and each tick costs a pw-dump
+        # subprocess — see the timer's construction and #182.
+        self._timer.stop()
+
     @Slot()
     def _poll_volumes(self):
         pulse = self._get_pulse()
@@ -1488,11 +1512,21 @@ class HomePage(QWidget):
                 if sink_eq is not None:
                     ext_sinks.append(sink_eq)
                 self._update_apps(sink_inputs, ext_sinks, self._ext_card)
-            # Also show native PipeWire streams (mpv, haruna…), skip duplicates
-            self._update_native_apps(sinks, pulse_app_names)
+            self._combo_tick += 1
+
+            # Also show native PipeWire streams (mpv, haruna…), skip duplicates.
+            # The scan forks a `pw-dump` and parses the whole graph, which is
+            # the expensive half of this tick — twice a second was enough to
+            # cost measurable CPU and starve the surround convolver on a large
+            # graph (#182). Native streams are a handful of long-lived players,
+            # so rescan every 4th tick (2s); the cards are still repopulated
+            # from the cached result on every tick, because _update_apps above
+            # clears them each time and skipping this would make those entries
+            # blink.
+            self._update_native_apps(sinks, pulse_app_names,
+                                     rescan=(self._combo_tick % 4 == 1))
 
             # Refresh device combos every 20 ticks (10s)
-            self._combo_tick += 1
             if self._combo_tick % 20 == 1:
                 self._refresh_device_combos(sinks)
 
@@ -1543,13 +1577,22 @@ class HomePage(QWidget):
             pid = int(si.proplist.get("application.process.id", 0))
             card.add_app_tag(app_name, si.index, pid, bg_color=card._accent)
 
-    def _update_native_apps(self, pulse_sinks, already_shown: set[str] = frozenset()):
-        """Add native PipeWire streams (e.g. haruna/mpv) to the correct card."""
-        try:
-            native = get_native_streams()
-        except Exception as e:
-            logger.debug("get_native_streams failed: %s", e)
-            return
+    def _update_native_apps(self, pulse_sinks, already_shown: set[str] = frozenset(),
+                            *, rescan: bool = True):
+        """Add native PipeWire streams (e.g. haruna/mpv) to the correct card.
+
+        *rescan* runs the `pw-dump` behind :func:`get_native_streams`; when
+        False the previous result is reused. The caller repopulates the cards
+        on every tick either way — only the graph scan is throttled (#182).
+        """
+        if rescan:
+            try:
+                self._native_cache = get_native_streams()
+            except Exception as e:
+                logger.debug("get_native_streams failed: %s", e)
+                self._native_cache = []
+                return
+        native = self._native_cache
 
         card_map = {
             SINK_GAME:  self._game_card,
