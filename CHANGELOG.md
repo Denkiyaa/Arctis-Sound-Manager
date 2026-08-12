@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.28] - 12 August 2026
+
+### Added
+
+- **A stability setting for when the surround chain crackles.** Spatial Audio runs fourteen convolvers per channel, and with a large HRIR that processing can miss its deadline under ordinary desktop load — heard as random crackling, with nothing in the app to explain where it comes from. Settings now offers **Audio stability (buffer size)**: leave it on *Automatic* (the default, unchanged behaviour) or pick a larger buffer, which gives the surround processing more time per cycle and stops the glitches. Reported with measurements showing the crackling disappear at the larger size. Worth knowing before you turn it on: this is a system-wide PipeWire setting, so the extra buffering applies to every application, not only ASM — comfortable for music and films, less so for competitive play, which is why it is off by default and left to you. ASM releases it when it exits, and restores your choice when it starts. Suggested by @nobodys-tools. (#183)
+
+### Fixed
+
+- **The app kept scanning your audio system after you closed its window.** The Channels page started a twice-a-second refresh when it was first shown and never stopped it, so once the main window had been opened the work carried on for as long as the tray icon was there — with nothing on screen to show for it. Each pass inspected the whole PipeWire graph, which on a busy system was enough to keep a core noticeably occupied and to disturb the Spatial Audio processing, heard as crackling. The refresh now runs only while the page is actually visible, and the expensive part of it runs less often, so nothing changes on screen. Found and diagnosed precisely by @nobodys-tools. (#182)
+
 ## [1.2.27] - 12 August 2026
 
 ### Added
