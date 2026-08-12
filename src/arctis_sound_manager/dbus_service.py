@@ -412,6 +412,10 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
             setattr(self.core_engine.general_settings, setting, value)
             self.core_engine.general_settings.write_to_file()
 
+            if setting == 'pipewire_quantum':
+                from arctis_sound_manager.pw_utils import apply_force_quantum
+                apply_force_quantum(int(value))
+
             _oled = self.core_engine.oled_manager
             if _oled is not None:
                 if setting == 'oled_brightness':

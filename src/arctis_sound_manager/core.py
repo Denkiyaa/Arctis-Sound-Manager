@@ -1126,6 +1126,16 @@ class CoreEngine:
         self._stopping = False
         self.usb_devices_monitor.start()
 
+        # Apply the configured quantum (#183) — including 0, which is what
+        # makes this self-healing: if a previous run was killed before stop()
+        # could release it, the forced value would otherwise stay set for the
+        # whole session with nothing left to undo it.
+        try:
+            from arctis_sound_manager.pw_utils import apply_force_quantum
+            apply_force_quantum(int(getattr(self.general_settings, 'pipewire_quantum', 0)))
+        except Exception as exc:
+            self.logger.warning("start(): could not apply quantum setting: %r", exc)
+
         return self.loop()
     
     def stop(self):
@@ -1153,6 +1163,16 @@ class CoreEngine:
             self.loopback_manager.stop_all()
         except Exception as exc:
             self.logger.warning("stop(): error stopping loopbacks: %r", exc)
+
+        # Release the forced quantum (#183). It is a system-wide PipeWire
+        # setting, so leaving it set would keep every other application on a
+        # larger buffer for the rest of the session, long after ASM is gone.
+        if getattr(self.general_settings, 'pipewire_quantum', 0):
+            try:
+                from arctis_sound_manager.pw_utils import apply_force_quantum
+                apply_force_quantum(0)
+            except Exception as exc:
+                self.logger.warning("stop(): could not release forced quantum: %r", exc)
 
     def manage_mix_change(self):
         if not self.device_status or not self.device_config:

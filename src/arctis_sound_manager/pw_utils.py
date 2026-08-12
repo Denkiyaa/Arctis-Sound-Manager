@@ -51,6 +51,44 @@ def _pw_run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     kwargs.setdefault("close_fds", False)
     return subprocess.run(resolved, **kwargs)
 
+def apply_force_quantum(quantum: int) -> bool:
+    """Set PipeWire's forced quantum (buffer size); 0 releases it.
+
+    The HeSuVi surround chain runs 14 convolvers per sink, and with a large
+    HRIR it can miss PipeWire's deadline under ordinary desktop load — audible
+    as random crackling with nothing in the UI to explain it. A larger quantum
+    gives each cycle more time and makes those xruns stop, at the cost of
+    proportionally more latency (#183).
+
+    This is a **global** PipeWire setting: it applies to every application on
+    the system, not just ASM's chain. That is why the setting behind it
+    defaults to off and is the user's call, and why 0 must be written back on
+    the way out rather than left behind for the rest of the session.
+
+    Returns True when the value was written (or when there was nothing to do).
+    """
+    if shutil.which("pw-metadata") is None:
+        logger.debug("pw-metadata not found — cannot set clock.force-quantum")
+        return False
+    try:
+        result = _pw_run(
+            ["pw-metadata", "-n", "settings", "0", "clock.force-quantum", str(int(quantum))],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception as e:
+        logger.warning("Could not set clock.force-quantum=%s: %r", quantum, e)
+        return False
+    if result.returncode != 0:
+        logger.warning("pw-metadata clock.force-quantum=%s failed: %s",
+                       quantum, (result.stderr or "").strip())
+        return False
+    if quantum:
+        logger.info("Stability mode: forcing PipeWire quantum to %d (system-wide)", quantum)
+    else:
+        logger.info("Stability mode off: released PipeWire's forced quantum")
+    return True
+
+
 # effect_input sinks are internal filter-chain nodes — apps should never
 # target them directly. Remap to the corresponding Arctis virtual sink so a
 # stale override still lands the app on a real, user-facing destination.
