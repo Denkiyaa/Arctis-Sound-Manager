@@ -89,6 +89,49 @@ def apply_force_quantum(quantum: int) -> bool:
     return True
 
 
+def get_xrun_counts(name_fragments: tuple[str, ...]) -> dict[str, int]:
+    """Cumulative xrun counters for our own nodes, from ``pw-top -b -n 1``.
+
+    An xrun is the graph missing its deadline: the convolvers did not finish in
+    time and the user hears a click. The counter is monotonic for the lifetime
+    of the node, so callers compare successive samples rather than absolute
+    values.
+
+    Only nodes whose name contains one of *name_fragments* are returned — we
+    diagnose our own chain, and someone else's DAW dropping frames is not ours
+    to report on. Returns {} when pw-top is unavailable or its output cannot be
+    parsed; callers treat that as "no information", never as "no xruns".
+    """
+    if shutil.which("pw-top") is None:
+        return {}
+    try:
+        # -b batch mode, one iteration. The first pass prints counters as they
+        # stand, which is all we need since we diff across calls.
+        result = _pw_run(["pw-top", "-b", "-n", "1"],
+                         capture_output=True, text=True, timeout=10)
+    except Exception as e:
+        logger.debug("pw-top failed: %r", e)
+        return {}
+    if result.returncode != 0:
+        return {}
+
+    counts: dict[str, int] = {}
+    for line in (result.stdout or "").splitlines():
+        fields = line.split()
+        # Layout: S ID QUANT RATE WAIT BUSY W/Q B/Q ERR FORMAT NAME…
+        # ERR is the xrun counter, NAME is everything past the format column.
+        if len(fields) < 10:
+            continue
+        name = fields[-1]
+        if not any(frag in name for frag in name_fragments):
+            continue
+        try:
+            counts[name] = int(fields[8])
+        except (ValueError, IndexError):
+            continue
+    return counts
+
+
 # effect_input sinks are internal filter-chain nodes — apps should never
 # target them directly. Remap to the corresponding Arctis virtual sink so a
 # stale override still lands the app on a real, user-facing destination.

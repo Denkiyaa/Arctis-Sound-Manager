@@ -24,6 +24,25 @@ from arctis_sound_manager.i18n import I18n
 _REFRESHABLE_OPTION_SOURCES = frozenset({'external_audio_devices', 'pulse_audio_devices', 'pulse_audio_sources'})
 
 
+def _option_label(option: dict) -> str:
+    """Display label for a SELECT entry, with an optional CPU-cost hint.
+
+    Only the HRIR list carries ``cpu_cost`` today (#183): convolution cost
+    scales with the impulse response, and the catalog spans about 1 KB to
+    918 KB, so the choice quietly decides whether the surround chain keeps up
+    on a busy machine. Every other option source is unaffected — no key, no
+    suffix.
+
+    Phrased as a cost, never as a quality: a bigger HRIR is not a better one,
+    and "high CPU" must not read as a recommendation.
+    """
+    label = option.get('name', '')
+    cost = option.get('cpu_cost')
+    if not cost:
+        return label
+    return f"{label} · {I18n.get_instance().translate('settings_values', f'hrir_cpu_{cost}')}"
+
+
 class QSettingsWidget(QWidget):
     sig_list_received = Signal(object)
 
@@ -275,7 +294,7 @@ class QSettingsWidget(QWidget):
             widget = QComboBox()
             options = self._option_lists.get(config.options_source, [])
             if options:
-                widget.addItems([o['name'] for o in options])
+                widget.addItems([_option_label(o) for o in options])
                 option = next((o for o in options if o['id'] == value), None)
                 # Only show a selection when the saved value actually matches an
                 # available option. Previously we fell back to options[0] and

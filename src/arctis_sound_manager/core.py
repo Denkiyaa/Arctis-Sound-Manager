@@ -1303,6 +1303,10 @@ class CoreEngine:
     async def loop(self):
         listen_coroutines: list[asyncio.Task] = []
         poll_task: asyncio.Task | None = None
+        # Unlike poll_task this is not tied to a connected headset: it watches
+        # the audio graph, which outlives any single connection, and it must
+        # not restart (and reset its once-per-session notice) on every replug.
+        xrun_task: asyncio.Task = asyncio.create_task(self._xrun_watch_loop())
         last_rescan: float = 0.0
         while not self._stopping:
             if not self._device_ready:
@@ -1342,6 +1346,7 @@ class CoreEngine:
             task.cancel()
         if poll_task is not None:
             poll_task.cancel()
+        xrun_task.cancel()
 
     def _rescan_for_device(self) -> None:
         """Re-attempt detection for a device present at boot but not yet ready.
@@ -2689,6 +2694,87 @@ class CoreEngine:
         
         endpoint = self.get_command_endpoint_address()
         self.send_command([self.device_config.status.request], endpoint)
+
+    # Xrun self-diagnostics (#183) ──────────────────────────────────────────
+    #
+    # The surround chain missing its deadline is audible as crackling, and
+    # nothing in the UI explains it — users are left to guess, or to blame the
+    # headset. The counters are cheap to read; the hard part is deciding when
+    # to speak, because xruns also spike for reasons that have nothing to do
+    # with ASM (a compile finishing, a game loading a level, the machine coming
+    # out of suspend). A notification that fires on those teaches people to
+    # dismiss it, and then it is worth less than nothing.
+    #
+    # So: only speak when the problem is *sustained* — several consecutive
+    # samples, each with real activity — and only once per session. A single
+    # burst, however large, stays silent.
+    _XRUN_SAMPLE_PERIOD_S = 60.0
+    _XRUN_MIN_PER_SAMPLE = 3      # a sample below this is noise, not a pattern
+    _XRUN_CONSECUTIVE = 3         # ~3 minutes of steady xruns before speaking
+    _XRUN_NODE_FRAGMENTS = ("virtual-surround-7.1-hesuvi", "sonar-")
+
+    async def _xrun_watch_loop(self, period: float | None = None):
+        period = period or self._XRUN_SAMPLE_PERIOD_S
+        previous: dict[str, int] = {}
+        streak = 0
+        notified = False
+        try:
+            while not self._stopping:
+                await asyncio.sleep(period)
+                if notified:
+                    continue
+                # Nothing to suggest if the user already chose a larger buffer,
+                # and nothing to blame the chain for if Spatial Audio is off.
+                if getattr(self.general_settings, 'pipewire_quantum', 0):
+                    continue
+                try:
+                    from arctis_sound_manager.pw_utils import get_xrun_counts
+                    current = await asyncio.get_running_loop().run_in_executor(
+                        None, get_xrun_counts, self._XRUN_NODE_FRAGMENTS)
+                except Exception as exc:
+                    self.logger.debug("xrun sample failed: %r", exc)
+                    continue
+                if not current:
+                    # pw-top missing or nothing of ours in the graph: no
+                    # information, which is not the same as no xruns.
+                    continue
+
+                # Counters are monotonic per node, and a node that was recreated
+                # (filter-chain restart) restarts at 0 — a negative delta is a
+                # new node, not negative xruns.
+                delta = sum(max(0, n - previous.get(name, n)) for name, n in current.items())
+                previous = current
+
+                streak = streak + 1 if delta >= self._XRUN_MIN_PER_SAMPLE else 0
+                if streak < self._XRUN_CONSECUTIVE:
+                    continue
+
+                self.logger.warning(
+                    "Audio glitches: %d xruns/min sustained over %d samples on the "
+                    "surround chain — suggesting stability mode (#183)",
+                    delta, self._XRUN_CONSECUTIVE,
+                )
+                self._notify_xruns()
+                notified = True
+        except asyncio.CancelledError:
+            raise
+
+    def _notify_xruns(self) -> None:
+        """Tell the user once, and say what to do about it."""
+        import subprocess
+        try:
+            subprocess.run(
+                ["notify-send", "-a", "Arctis Sound Manager",
+                 "Audio glitches detected",
+                 "The Spatial Audio processing is struggling to keep up, which "
+                 "sounds like crackling. Settings → Audio stability (buffer "
+                 "size) can fix it, at the cost of slightly more latency."],
+                check=False, timeout=5,
+            )
+        except Exception as exc:
+            # notify-send is optional — a headless or minimal session simply
+            # gets the log line instead.
+            self.logger.debug("notify-send unavailable: %r", exc)
 
     async def _status_poll_loop(self, period: float = 2.0):
         # Nova 5 and 7 firmwares only emit a status frame when the radio link
