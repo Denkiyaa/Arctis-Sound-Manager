@@ -11,7 +11,7 @@
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)](https://github.com/loteran/Arctis-Sound-Manager)
 [![Crowdin](https://badges.crowdin.net/arctis-sound-manager/localized.svg)](https://crowdin.com/project/arctis-sound-manager)
-[![Discord](https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white)](https://discord.gg/NtpAPkfnX)
+[![Discord](https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white)](https://discord.gg/tbG4D5AnVz)
 [![ASM Presets](https://img.shields.io/badge/EQ%20Presets-Community%20site-FB4A00)](https://loteran.github.io/asm-presets/)
 [![ASM Themes](https://img.shields.io/badge/Themes-Community%20site-8B5CF6)](https://loteran.github.io/asm-presets/#themes)
 
@@ -29,7 +29,7 @@ A Linux GUI for SteelSeries Arctis headsets — device settings, 4-channel audio
 
 > 🎚️ **[ASM Presets](https://loteran.github.io/asm-presets/)** — browse and share community EQ presets!
 > 🎨 **[ASM Themes](https://loteran.github.io/asm-presets/)** — browse and share color themes, previewed on a miniature of the app!
-> 💬 **[Join the Discord](https://discord.gg/NtpAPkfnX)** — chat, share presets and get help from the community!
+> 💬 **[Join the Discord](https://discord.gg/tbG4D5AnVz)** — chat, share presets and get help from the community!
 > 📝 **[Share your experience in Discussions](https://github.com/loteran/Arctis-Sound-Manager/discussions)** — feedback helps improve compatibility for everyone!
 
 

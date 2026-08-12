@@ -29,7 +29,7 @@ powered by the PipeWire filter-chain.
 - [ASM Presets](https://loteran.github.io/asm-presets/) — browse and share community EQ presets.
 - [ASM Themes](https://loteran.github.io/asm-presets/#themes) — browse and share colour themes,
   previewed on a miniature of the app.
-- [Discord](https://discord.gg/NtpAPkfnX) — get help, share presets, report what works.
+- [Discord](https://discord.gg/tbG4D5AnVz) — get help, share presets, report what works.
 - [Crowdin](https://crowdin.com/project/arctis-sound-manager) — help translate ASM into your language.
 
 Arctis Sound Manager is free software, released under the
