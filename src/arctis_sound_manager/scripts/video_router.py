@@ -309,6 +309,40 @@ def _is_physical_arctis(sink_name: str) -> bool:
     return "SteelSeries_Arctis" in sink_name and not sink_name.startswith("Arctis_")
 
 
+def _explicit_pin_target(props: dict, sink_map: dict) -> str | None:
+    """Return the foreign virtual sink a stream is explicitly pinned to, or None.
+
+    A stream that sets ``target.object`` / ``node.target`` to a *virtual*
+    sink that is not one of ASM's own nodes is part of another app's routing
+    graph — e.g. a soundboard feeding its mic-injection stream into a
+    virtual-microphone sink (SoundDeck). Adopting or overriding such a
+    stream doesn't just change where it is heard, it breaks the other app's
+    feature entirely, so the router must leave it alone (and put it back if
+    it was moved before this guard existed).
+
+    Deliberately narrow: pins to hardware outputs (``alsa_output.*`` /
+    ``bluez_output.*``) are NOT exempt — pulling audible streams from other
+    physical outputs onto the headset is the router's advertised adoption
+    behavior (issue #20). Pins to ASM's own sinks follow normal routing.
+    A target that names no currently-present sink is ignored.
+
+    Not exhaustive: ``target.object`` also accepts an ``object.serial``, and
+    this only matches ``node.name``, so a stream pinned by serial is not
+    recognised and is adopted as before. Resolving those would mean mapping
+    PipeWire serials to nodes (the PulseAudio sink index is a different
+    number), which is more machinery than the case seen in the wild warrants.
+    Do not read this guard as covering every possible pin.
+    """
+    target = props.get("target.object") or props.get("node.target") or ""
+    if not isinstance(target, str) or target not in sink_map:
+        return None
+    if target.startswith(("Arctis_", "effect_input.", "alsa_output.", "bluez_output.")):
+        return None
+    if _is_physical_arctis(target):
+        return None
+    return target
+
+
 def _subscribe(pulse: pulsectl.Pulse) -> None:
     """Subscribe to sink and sink-input events; stop the loop on any event."""
     pulse.event_mask_set('sink', 'sink_input')
@@ -406,9 +440,14 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
         )
         if default_sink and not default_is_arctis:
             idx_to_name = {s.index: s.name for s in sinks}
+            name_to_idx = {s.name: s.index for s in sinks}
             for si in pulse.sink_input_list():
                 app = si.proplist.get("application.name", "")
                 if not app:
+                    continue
+                if _explicit_pin_target(si.proplist, name_to_idx) is not None:
+                    # Pinned to a foreign virtual sink (e.g. a virtual-mic
+                    # feed) — unaffected by the headset being off.
                     continue
                 on_arctis = any(
                     k in idx_to_name.get(si.sink, "") for k in ARCTIS_VIRTUAL_SINKS
@@ -437,6 +476,29 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
         # Composite key (issue #108): disambiguates apps that share a
         # generic application.name such as "Chromium".
         key = app_override_key(app, si.proplist.get("application.process.binary", ""))
+
+        # A stream explicitly pinned to a foreign virtual sink is off-limits
+        # to every pass below — restore it if something already moved it.
+        # Skipped before any _pa_placed bookkeeping so a same-named sibling
+        # stream (e.g. SoundDeck's monitor stream) keeps its own tracking.
+        pinned = _explicit_pin_target(si.proplist, sink_map)
+        if pinned is not None:
+            pinned_index = sink_map[pinned]
+            # Undo only *our* displacement. Sitting on an ASM sink is the
+            # evidence that the router put it there (before this guard
+            # existed); anywhere else and the user moved it themselves from a
+            # mixer, which is not ours to drag back. Without this test the
+            # router would hold these streams tighter than any other, undoing
+            # a deliberate manual move within a tick and offering no way out.
+            current_name = sink_idx_to_name.get(si.sink, "")
+            displaced_by_us = (
+                any(k in current_name for k in ARCTIS_VIRTUAL_SINKS)
+                or current_name.startswith("effect_input.")
+            )
+            if si.sink != pinned_index and displaced_by_us:
+                log.info("Pinned stream: '%s' back -> %s", app, pinned)
+                pulse.sink_input_move(si.index, pinned_index)
+            continue
 
         # Detect manual move: app was placed by router but is now elsewhere
         if key in _pa_placed and si.sink != _pa_placed[key]:
@@ -529,6 +591,20 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
         binary = s.get("props", {}).get("application.process.binary", "")
         key = app_override_key(app, binary)
 
+        # Same foreign-virtual-sink pin guard as the PA pass above, including
+        # the "only undo our own displacement" rule.
+        pinned = _explicit_pin_target(s.get("props", {}), sink_map)
+        if pinned is not None:
+            current_name = s["sink_name"] or ""
+            displaced_by_us = (
+                any(k in current_name for k in ARCTIS_VIRTUAL_SINKS)
+                or current_name.startswith("effect_input.")
+            )
+            if current_name != pinned and displaced_by_us:
+                log.info("Pinned native stream: '%s' back -> %s", app, pinned)
+                move_native_stream(s["id"], pinned)
+            continue
+
         # Detect manual move for native streams
         if key in _native_placed:
             placed = _native_placed[key]
@@ -605,6 +681,8 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
             for _si in sink_inputs:
                 _app = _si.proplist.get("application.name", "")
                 if not _app:
+                    continue
+                if _explicit_pin_target(_si.proplist, sink_map) is not None:
                     continue
                 _key = app_override_key(_app, _si.proplist.get("application.process.binary", ""))
                 _current_name = sink_idx_to_name.get(_si.sink, "")
