@@ -604,3 +604,118 @@ def test_tick_override_and_channel_output_agree_no_oscillation():
         _process_tick(pulse)
         assert pulse.moves == [(si.index, speakers.index)]
         assert si.sink == speakers.index
+
+
+# ── Foreign-virtual-sink pins (SoundDeck-style virtual-mic feeds) ─────────────
+# A stream that explicitly targets a virtual sink belonging to another app
+# (target.object → e.g. a soundboard's virtual-microphone sink) is part of
+# that app's routing graph. Adopting or overriding it breaks the feature
+# (the mic feed gets played out loud instead of injected into the virtual
+# mic), so the router must leave such streams alone — and restore them.
+
+from arctis_sound_manager.scripts.video_router import _explicit_pin_target
+
+
+def test_explicit_pin_target_foreign_virtual_sink():
+    sink_map = {"SoundDeck": 5, "Arctis_Media": 1}
+    props = {"target.object": "SoundDeck"}
+    assert _explicit_pin_target(props, sink_map) == "SoundDeck"
+
+
+def test_explicit_pin_target_ignores_asm_and_hardware_sinks():
+    sink_map = {"Arctis_Media": 1, "effect_input.sonar-game-eq": 2,
+                "alsa_output.hdmi-stereo": 3, "bluez_output.aa_bb.1": 4,
+                "alsa_output.usb-SteelSeries_Arctis_Nova_Pro_Wireless-00.analog-stereo": 6}
+    for target in sink_map:
+        assert _explicit_pin_target({"target.object": target}, sink_map) is None
+
+
+def test_explicit_pin_target_absent_or_unknown_target():
+    sink_map = {"SoundDeck": 5}
+    assert _explicit_pin_target({}, sink_map) is None
+    assert _explicit_pin_target({"target.object": "GoneSink"}, sink_map) is None
+
+
+def test_tick_pinned_stream_not_adopted_and_restored():
+    """A stream pinned to a foreign virtual sink must never be adopted onto
+    Arctis_Media (no override written), and if it was already dragged onto
+    an Arctis sink it must be moved back to its pinned target."""
+    game = _FakeSink(0, "Arctis_Game")
+    media = _FakeSink(1, "Arctis_Media")
+    sounddeck = _FakeSink(2, "SoundDeck")
+    # Stolen earlier: currently sits on Arctis_Media despite its pin.
+    si = _FakeSinkInput(10, sink=media.index, proplist={
+        "application.name": "SoundDeck",
+        "target.object": "SoundDeck",
+    })
+    pulse = _FakePulse([game, media, sounddeck], [si], default_sink_name=game.name)
+
+    saved = MagicMock()
+    with patch("arctis_sound_manager.scripts.video_router.get_headset_power",
+               return_value=HeadsetPower.ON), \
+         patch("arctis_sound_manager.scripts.video_router.load_overrides",
+               return_value={}), \
+         patch("arctis_sound_manager.scripts.video_router.save_overrides", saved):
+        _process_tick(pulse)
+
+    assert si.sink == sounddeck.index
+    saved.assert_not_called()
+
+    # Second tick: already home — no further moves.
+    with patch("arctis_sound_manager.scripts.video_router.get_headset_power",
+               return_value=HeadsetPower.ON), \
+         patch("arctis_sound_manager.scripts.video_router.load_overrides",
+               return_value={}), \
+         patch("arctis_sound_manager.scripts.video_router.save_overrides", saved):
+        _process_tick(pulse)
+    assert pulse.moves == [(si.index, sounddeck.index)]
+
+
+def test_tick_pinned_stream_ignores_app_override_while_sibling_follows_it():
+    """Two streams from the same app (soundboard monitor + mic feed): the
+    unpinned monitor stream follows the app's saved override to Arctis_Media,
+    the pinned mic-feed stream stays on the foreign virtual sink."""
+    game = _FakeSink(0, "Arctis_Game")
+    media = _FakeSink(1, "Arctis_Media")
+    sounddeck = _FakeSink(2, "SoundDeck")
+    monitor = _FakeSinkInput(10, sink=game.index, proplist={
+        "application.name": "SoundDeck",
+    })
+    mic_feed = _FakeSinkInput(11, sink=sounddeck.index, proplist={
+        "application.name": "SoundDeck",
+        "target.object": "SoundDeck",
+    })
+    pulse = _FakePulse([game, media, sounddeck], [monitor, mic_feed],
+                       default_sink_name=game.name)
+
+    with patch("arctis_sound_manager.scripts.video_router.get_headset_power",
+               return_value=HeadsetPower.ON), \
+         patch("arctis_sound_manager.scripts.video_router.load_overrides",
+               return_value={"SoundDeck": "Arctis_Media"}), \
+         patch("arctis_sound_manager.scripts.video_router.save_overrides"):
+        _process_tick(pulse)
+
+    assert monitor.sink == media.index
+    assert mic_feed.sink == sounddeck.index
+    assert pulse.moves == [(monitor.index, media.index)]
+
+
+def test_tick_offline_pinned_stream_not_repatriated():
+    """Headset off: a pinned virtual-mic feed is unaffected (the virtual mic
+    works without the headset) — it must not be pulled to the default sink."""
+    hdmi = _FakeSink(0, "alsa_output.hdmi-stereo")
+    media = _FakeSink(1, "Arctis_Media")
+    sounddeck = _FakeSink(2, "SoundDeck")
+    si = _FakeSinkInput(10, sink=sounddeck.index, proplist={
+        "application.name": "SoundDeck",
+        "target.object": "SoundDeck",
+    })
+    pulse = _FakePulse([hdmi, media, sounddeck], [si], default_sink_name=hdmi.name)
+
+    with patch("arctis_sound_manager.scripts.video_router.get_headset_power",
+               return_value=HeadsetPower.OFF), \
+         patch("arctis_sound_manager.scripts.video_router.save_overrides"):
+        _process_tick(pulse)
+
+    assert pulse.moves == []
+    assert si.sink == sounddeck.index
