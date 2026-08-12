@@ -325,6 +325,13 @@ def _explicit_pin_target(props: dict, sink_map: dict) -> str | None:
     physical outputs onto the headset is the router's advertised adoption
     behavior (issue #20). Pins to ASM's own sinks follow normal routing.
     A target that names no currently-present sink is ignored.
+
+    Not exhaustive: ``target.object`` also accepts an ``object.serial``, and
+    this only matches ``node.name``, so a stream pinned by serial is not
+    recognised and is adopted as before. Resolving those would mean mapping
+    PipeWire serials to nodes (the PulseAudio sink index is a different
+    number), which is more machinery than the case seen in the wild warrants.
+    Do not read this guard as covering every possible pin.
     """
     target = props.get("target.object") or props.get("node.target") or ""
     if not isinstance(target, str) or target not in sink_map:
@@ -477,7 +484,18 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
         pinned = _explicit_pin_target(si.proplist, sink_map)
         if pinned is not None:
             pinned_index = sink_map[pinned]
-            if si.sink != pinned_index:
+            # Undo only *our* displacement. Sitting on an ASM sink is the
+            # evidence that the router put it there (before this guard
+            # existed); anywhere else and the user moved it themselves from a
+            # mixer, which is not ours to drag back. Without this test the
+            # router would hold these streams tighter than any other, undoing
+            # a deliberate manual move within a tick and offering no way out.
+            current_name = sink_idx_to_name.get(si.sink, "")
+            displaced_by_us = (
+                any(k in current_name for k in ARCTIS_VIRTUAL_SINKS)
+                or current_name.startswith("effect_input.")
+            )
+            if si.sink != pinned_index and displaced_by_us:
                 log.info("Pinned stream: '%s' back -> %s", app, pinned)
                 pulse.sink_input_move(si.index, pinned_index)
             continue
@@ -573,10 +591,16 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
         binary = s.get("props", {}).get("application.process.binary", "")
         key = app_override_key(app, binary)
 
-        # Same foreign-virtual-sink pin guard as the PA pass above.
+        # Same foreign-virtual-sink pin guard as the PA pass above, including
+        # the "only undo our own displacement" rule.
         pinned = _explicit_pin_target(s.get("props", {}), sink_map)
         if pinned is not None:
-            if s["sink_name"] != pinned:
+            current_name = s["sink_name"] or ""
+            displaced_by_us = (
+                any(k in current_name for k in ARCTIS_VIRTUAL_SINKS)
+                or current_name.startswith("effect_input.")
+            )
+            if current_name != pinned and displaced_by_us:
                 log.info("Pinned native stream: '%s' back -> %s", app, pinned)
                 move_native_stream(s["id"], pinned)
             continue

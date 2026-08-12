@@ -671,6 +671,36 @@ def test_tick_pinned_stream_not_adopted_and_restored():
     assert pulse.moves == [(si.index, sounddeck.index)]
 
 
+def test_tick_pinned_stream_moved_by_user_is_left_alone():
+    """Restoring a pinned stream must only undo *our* displacement.
+
+    Sitting on an ASM sink is the evidence the router put it there. A pinned
+    stream the user moved to some other output from a mixer is not ours to
+    drag back: doing so would hold these streams tighter than any other
+    stream in the graph, undoing a deliberate manual move every tick with no
+    way to override it.
+    """
+    game = _FakeSink(0, "Arctis_Game")
+    sounddeck = _FakeSink(2, "SoundDeck")
+    speakers = _FakeSink(3, "alsa_output.usb-Generic_Speakers-00.analog-stereo")
+    # Pinned to SoundDeck, but the user parked it on their speakers.
+    si = _FakeSinkInput(10, sink=speakers.index, proplist={
+        "application.name": "SoundDeck",
+        "target.object": "SoundDeck",
+    })
+    pulse = _FakePulse([game, sounddeck, speakers], [si], default_sink_name=game.name)
+
+    with patch("arctis_sound_manager.scripts.video_router.get_headset_power",
+               return_value=HeadsetPower.ON), \
+         patch("arctis_sound_manager.scripts.video_router.load_overrides",
+               return_value={}), \
+         patch("arctis_sound_manager.scripts.video_router.save_overrides"):
+        _process_tick(pulse)
+
+    assert pulse.moves == [], "a user-placed pinned stream must not be moved"
+    assert si.sink == speakers.index
+
+
 def test_tick_pinned_stream_ignores_app_override_while_sibling_follows_it():
     """Two streams from the same app (soundboard monitor + mic feed): the
     unpinned monitor stream follows the app's saved override to Arctis_Media,
