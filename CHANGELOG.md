@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.30] - 14 August 2026
+
+### Fixed
+
+- **Installing on Bazzite, SteamOS or Silverblue could leave you with nothing installed.** The installer created its container, then stopped partway without saying so: the application entry appeared, but opening it landed in a plain terminal where `asm-gui` was not found. This was a regression introduced in 1.2.27, when the installers switched to the signed package repository: if registering that repository failed for any reason (no network for the signing key, a keyring it could not sign into), the script aborted right there, after creating the container and before installing anything. Registering the repository can no longer interrupt the installation, and if the install itself fails you now get the reason and the commands to investigate instead of a silent stop. Reported on Discord by binx9612 on Bazzite.
+- **Audio from another app's virtual microphone is no longer hijacked.** A stream that an application deliberately pins to its own virtual device, such as a soundboard feeding a virtual microphone, was being pulled onto an Arctis channel like any other audio. That did not merely move the sound somewhere else, it broke the other application's feature outright, and it happened to soundboards whose ordinary playback you had assigned to a channel, since both streams share one application name. Such streams are now left where their application put them, and one that had already been moved is returned. Streams pinned to real outputs are untouched, so pulling audio from other speakers onto your headset still works as before. Contributed by @nobodys-tools. (#185)
+
 ## [1.2.29] - 12 August 2026
 
 ### Added
