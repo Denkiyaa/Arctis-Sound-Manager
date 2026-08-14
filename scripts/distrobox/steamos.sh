@@ -195,23 +195,27 @@ install_asm() {
             rm -f /tmp/asm.key
         fi
 
+        # No AUR fallback here, deliberately. It reads like a safety net and is
+        # not one: the AUR PKGBUILD fetches its tarball from GitHub Releases,
+        # the same host as this repository, so it removes no dependency and
+        # adds one (aur.archlinux.org, unreachable for weeks during the
+        # maintenance window that motivated moving to this repo in #175). It
+        # cannot help when GitHub is down, cannot help when the AUR is down,
+        # and for a local keyring problem it spends several minutes building
+        # base-devel and paru to work around something an error message
+        # resolves. Failing here with the reason is more useful than a long
+        # detour that hides it.
         echo "[arch-install] Installing arctis-sound-manager from the signed repository..."
-        if sudo pacman -Sy --noconfirm arctis-sound-manager; then
-            echo "[arch-install] Done."
-            exit 0
+        if ! sudo pacman -Sy --noconfirm arctis-sound-manager; then
+            echo "[arch-install] FAILED to install arctis-sound-manager." >&2
+            echo "[arch-install] The container exists but is empty, which is why asm-gui" >&2
+            echo "[arch-install] would not be found. To see why, run inside the container:" >&2
+            echo "[arch-install]   distrobox enter arctis-sound-manager" >&2
+            echo "[arch-install]   grep -A2 arctis-sound-manager /etc/pacman.conf" >&2
+            echo "[arch-install]   sudo pacman -Sy arctis-sound-manager" >&2
+            echo "[arch-install] and report the output at https://github.com/loteran/Arctis-Sound-Manager/issues" >&2
+            exit 1
         fi
-
-        echo "[arch-install] Signed repository unavailable — falling back to the AUR..."
-        if ! command -v paru &>/dev/null; then
-            echo "[arch-install] Installing paru..."
-            sudo pacman -S --needed --noconfirm base-devel git libusb hidapi polkit libnotify
-            tmpdir=$(mktemp -d)
-            trap "rm -rf \"$tmpdir\"" EXIT
-            git clone https://aur.archlinux.org/paru.git "$tmpdir/paru"
-            (cd "$tmpdir/paru" && makepkg -si --noconfirm)
-        fi
-        echo "[arch-install] Installing arctis-sound-manager from AUR..."
-        paru -S --noconfirm arctis-sound-manager
         echo "[arch-install] Done."
     '
 }
