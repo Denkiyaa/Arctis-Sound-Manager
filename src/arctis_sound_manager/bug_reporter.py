@@ -187,7 +187,138 @@ def _detect_container_env() -> str:
     return 'native'
 
 
-def _arctis_pw_nodes() -> str:
+# Node names ASM creates or drives. Used to flag our own nodes in the audio
+# graph, and to decide which routing props are worth printing.
+_ASM_NODE_FRAGMENTS = ('Arctis_', 'sonar-', 'virtual-surround',
+                       'effect_input', 'effect_output')
+# A real device is never one of ours, however it is named: the headset's own
+# sink is "alsa_output.usb-SteelSeries_Arctis_7_-00" and would otherwise match
+# on "Arctis_". Telling the two apart is the whole point of the graph section.
+_DEVICE_PREFIXES = ('alsa_output.', 'alsa_input.', 'bluez_output.', 'bluez_input.')
+# Routing properties that decide where audio goes and whether a node keeps a
+# device awake. Printed for ASM's own nodes only, to keep the section short.
+_ROUTING_PROPS = ('target.object', 'node.target', 'node.passive',
+                  'node.pause-on-idle', 'node.linger', 'node.autoconnect')
+
+
+def _is_asm_node(name: str) -> bool:
+    if name.startswith(_DEVICE_PREFIXES):
+        return False
+    return any(f in name for f in _ASM_NODE_FRAGMENTS)
+
+
+def _pw_objects() -> list | None:
+    """Parsed `pw-dump`, or None when unavailable/unparseable.
+
+    Fetched once and shared by the graph sections below, so a report does not
+    pay for three separate dumps of a large graph.
+    """
+    if not shutil.which('pw-dump'):
+        return None
+    raw = _run_out(['pw-dump'], timeout=8.0)
+    try:
+        objects = json.loads(raw)
+    except Exception:
+        return None
+    return objects if isinstance(objects, list) else None
+
+
+def _audio_graph(objects: list | None) -> str:
+    """Every audio node with its state, then every link between them.
+
+    This is the section that answers "why is my headset behaving like this",
+    and it exists because its absence cost two wrong diagnoses on #180:
+
+    - **State** (running / idle / suspended) is what distinguishes a device
+      being actively driven from one merely connected. A headset that never
+      reaches its inactivity timeout looks identical to a healthy one in a
+      report that omits it.
+    - **Links** say *which* node holds a device. Knowing something keeps the
+      headset awake is not actionable; knowing it is the HeSuVi output is.
+    - **Routing props** on our own nodes (target.object, node.passive,
+      node.pause-on-idle…) say whether the config on disk actually reached
+      the running graph, which is exactly the gap in #100 and #102.
+
+    Unlike the Arctis-only filter used elsewhere here, this lists the whole
+    audio graph: a second, unrelated output sitting in the same state as the
+    headset is the difference between "ASM holds this device" and "this
+    machine never suspends anything", and that comparison is impossible if
+    non-Arctis nodes are filtered out.
+    """
+    if objects is None:
+        return '(pw-dump unavailable or unparseable — install pipewire-utils?)'
+
+    names: dict[int, str] = {}
+    nodes: list[tuple[int, str, str, str, str]] = []
+    for obj in objects:
+        if obj.get('type') != 'PipeWire:Interface:Node':
+            continue
+        info = obj.get('info') or {}
+        props = info.get('props') or {}
+        name = props.get('node.name') or props.get('device.name', '?')
+        names[obj.get('id', -1)] = name
+        mclass = props.get('media.class', '')
+        # Substring, not startswith: the nodes that matter most are
+        # "Stream/Output/Audio" (effect_output.*, Arctis_*_sink_out).
+        if 'Audio' not in mclass:
+            continue
+        extra = ''
+        if _is_asm_node(name):
+            kept = [f'{k}={props[k]}' for k in _ROUTING_PROPS if k in props]
+            extra = ('  [' + ' '.join(kept) + ']') if kept else ''
+        nodes.append((obj.get('id', -1), info.get('state', '?'), mclass, name, extra))
+
+    links: list[tuple[int, str, str, str]] = []
+    for obj in objects:
+        if obj.get('type') != 'PipeWire:Interface:Link':
+            continue
+        info = obj.get('info') or {}
+        links.append((
+            obj.get('id', -1),
+            info.get('state', '?'),
+            names.get(info.get('output-node-id'), '?'),
+            names.get(info.get('input-node-id'), '?'),
+        ))
+
+    out: list[str] = ['-- audio nodes (id, state, class, name) --']
+    if nodes:
+        for nid, state, mclass, name, extra in sorted(nodes, key=lambda n: n[3]):
+            mark = ' <-- ASM' if _is_asm_node(name) else ''
+            out.append(f'{nid:>6}  {state:<10} {mclass:<22} {name}{mark}{extra}')
+    else:
+        out.append('(no audio nodes — PipeWire sees no audio devices at all)')
+
+    out.append('')
+    out.append('-- links (id, state, source -> destination) --')
+    if links:
+        for lid, state, src, dst in sorted(links, key=lambda l: (l[3], l[2])):
+            out.append(f'{lid:>6}  {state:<10} {src}  ->  {dst}')
+    else:
+        out.append('(no links — nothing is connected to anything)')
+    return '\n'.join(out)
+
+
+def _alsa_pcm_state() -> str:
+    """What the kernel thinks each PCM is doing.
+
+    The layer below PipeWire: a PCM still open here while the graph looks
+    idle means something holds the device at the ALSA level, which no
+    PipeWire-side view can show.
+    """
+    lines = []
+    try:
+        for status in sorted(Path('/proc/asound').glob('card*/pcm*/sub*/status')):
+            try:
+                first = status.read_text(errors='replace').strip().splitlines()
+                lines.append(f'{status}: {first[0] if first else "(empty)"}')
+            except OSError as exc:
+                lines.append(f'{status}: (could not read: {exc!r})')
+    except Exception as exc:
+        return f'(could not enumerate /proc/asound: {exc!r})'
+    return '\n'.join(lines) if lines else '(no PCM status files — no ALSA cards?)'
+
+
+def _arctis_pw_nodes(objects: list | None = None) -> str:
     """PipeWire objects matching the Arctis (node name, 'steelseries', or
     vendor id 1038). Empty result while USB sees the device means PipeWire
     never created the ALSA nodes — the issue #74 Distrobox failure mode.
@@ -195,26 +326,24 @@ def _arctis_pw_nodes() -> str:
     Prefers `pw-dump`; falls back to `pactl list sinks` when pipewire-utils
     is not installed.
     """
-    if shutil.which('pw-dump'):
-        raw = _run_out(['pw-dump'], timeout=5.0)
-        try:
-            objects = json.loads(raw)
-        except Exception:
-            objects = None
-        if isinstance(objects, list):
-            lines = []
-            for obj in objects:
-                blob = json.dumps(obj).lower()
-                if not any(p in blob for p in _ARCTIS_PATTERNS):
-                    continue
-                props = (obj.get('info') or {}).get('props') or {}
-                lines.append(
-                    f"id={obj.get('id')} "
-                    f"name={props.get('node.name') or props.get('device.name', '?')} "
-                    f"class={props.get('media.class', '?')} "
-                    f"desc={props.get('node.description') or props.get('device.description', '')}"
-                )
-            return '\n'.join(lines)
+    if objects is None:
+        objects = _pw_objects()
+    if objects is not None:
+        lines = []
+        for obj in objects:
+            blob = json.dumps(obj).lower()
+            if not any(p in blob for p in _ARCTIS_PATTERNS):
+                continue
+            info = obj.get('info') or {}
+            props = info.get('props') or {}
+            lines.append(
+                f"id={obj.get('id')} "
+                f"state={info.get('state', '?')} "
+                f"name={props.get('node.name') or props.get('device.name', '?')} "
+                f"class={props.get('media.class', '?')} "
+                f"desc={props.get('node.description') or props.get('device.description', '')}"
+            )
+        return '\n'.join(lines)
     raw = _run_out(['pactl', 'list', 'sinks'], timeout=5.0)
     blocks = re.split(r'\n(?=Sink #)', raw)
     kept = [b for b in blocks if any(p in b.lower() for p in _ARCTIS_PATTERNS)]
@@ -371,7 +500,16 @@ def collect_system_info() -> dict:
         for unit in ('pipewire', 'pipewire-pulse')
     )
 
-    info['pw_arctis_nodes'] = _arctis_pw_nodes()
+    # One dump, shared by both graph sections: a large graph is expensive to
+    # serialise and this function is called more than once per report.
+    _pw_objs = _pw_objects()
+    info['pw_arctis_nodes'] = _arctis_pw_nodes(_pw_objs)
+    info['pw_audio_graph'] = _audio_graph(_pw_objs)
+    info['alsa_pcm_state'] = _alsa_pcm_state()
+    # Which nodes are actually processing audio, as opposed to merely being
+    # connected. Also carries the xrun counters (#183).
+    info['pw_top'] = _run_out(['pw-top', '-b', '-n', '1'], timeout=15.0) or \
+        '(pw-top unavailable — install pipewire-utils?)'
 
     info['journalctl_pipewire'] = _run_out(
         ['journalctl', '--user', '-u', 'pipewire', '-n', '20', '--no-pager'],
@@ -620,6 +758,32 @@ def format_bug_report(traceback_str: Optional[str] = None) -> str:
         '     sockets are not forwarded into the container). -->',
         '```',
         info.get('pw_arctis_nodes', '') or '(none — PipeWire does not see any Arctis node)',
+        '```',
+        '',
+        '## Audio graph — node states and links',
+        '<!-- The whole audio graph, not just Arctis nodes, on purpose: a second',
+        '     unrelated output in the same state as the headset distinguishes "ASM',
+        '     holds this device" from "this machine never suspends anything".',
+        '     state=running with nothing playing means something is driving the',
+        '     device; the links say what. Routing props in [brackets] show whether',
+        '     the on-disk config reached the running graph. -->',
+        '```',
+        info.get('pw_audio_graph', '') or '(not collected)',
+        '```',
+        '',
+        '## Nodes actually processing audio (`pw-top`)',
+        '<!-- Connected is not the same as running. The ERR column is the xrun',
+        '     counter: sustained xruns on the surround chain are audible as',
+        '     crackling (#183). -->',
+        '```',
+        info.get('pw_top', '') or '(not collected)',
+        '```',
+        '',
+        '## ALSA PCM state (kernel view)',
+        '<!-- The layer below PipeWire. A PCM still open here while the graph',
+        '     looks idle means something holds the device at the ALSA level. -->',
+        '```',
+        info.get('alsa_pcm_state', '') or '(not collected)',
         '```',
         '',
     ]
