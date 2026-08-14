@@ -59,6 +59,36 @@ def _save_channel_outputs(data: dict) -> None:
     tmp.write_text(json.dumps(data))
     tmp.replace(CHANNEL_OUTPUTS_FILE)
 
+
+# Applications the user dismissed from the "other applications" list. Keyed the
+# same way as routing_overrides.json (app_override_key), so an app that shares a
+# generic application.name with another — every Electron app reports "Chromium"
+# — is not hidden by proxy.
+#
+# Dismissing is not the same as routing: it says "I know where this plays and I
+# put it there", which is a real answer for a stream that belongs on speakers or
+# a second card. Kept separate from the overrides file precisely so the two
+# cannot be confused: nothing here changes where audio goes.
+HIDDEN_APPS_FILE = Path.home() / ".config" / "arctis_manager" / "hidden_apps.json"
+
+
+def _load_hidden_apps() -> set[str]:
+    if HIDDEN_APPS_FILE.exists():
+        try:
+            data = json.loads(HIDDEN_APPS_FILE.read_text())
+            if isinstance(data, list):
+                return {str(k) for k in data}
+        except Exception:
+            pass
+    return set()
+
+
+def _save_hidden_apps(keys: set[str]) -> None:
+    HIDDEN_APPS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = HIDDEN_APPS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(sorted(keys)))
+    tmp.replace(HIDDEN_APPS_FILE)
+
 from arctis_sound_manager.gui.components import (
     CHAT_ICON,
     GAME_ICON,
@@ -448,6 +478,81 @@ class _AppTag(QWidget):
         layout.addWidget(self._btn_container)
 
 
+class _UnassignedRow(QWidget):
+    """One application that is playing but is not on any ASM channel.
+
+    Same move buttons as :class:`_AppTag`, plus two things that only make sense
+    here: where the stream is currently playing, and a dismiss button.
+
+    Showing the current output is what makes the list intelligible. Without it
+    the user sees applications with no explanation of why they are listed
+    separately rather than in a card, which is the confusion this area exists
+    to remove in the first place.
+    """
+
+    def __init__(self, app_name: str, playing_on: str, si_index: int, pid: int,
+                 on_dismiss, color: str, muted_color: str):
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 0, 4, 0)
+        layout.setSpacing(8)
+        self.setFixedHeight(26)
+        self.setStyleSheet(
+            f"background-color: #1e2530; border-radius: 4px; border: 1px solid {muted_color};"
+        )
+
+        name_lbl = QLabel(app_name)
+        name_lbl.setStyleSheet(
+            f"color: {color}; font-size: 11pt; font-weight: bold; "
+            f"background: transparent; border: none;"
+        )
+        layout.addWidget(name_lbl)
+
+        where_lbl = QLabel(playing_on)
+        where_lbl.setStyleSheet(
+            f"color: {muted_color}; font-size: 9pt; "
+            f"background: transparent; border: none;"
+        )
+        where_lbl.setToolTip(playing_on)
+        layout.addWidget(where_lbl, stretch=1)
+
+        btns = QWidget()
+        btns.setStyleSheet("background: transparent; border: none;")
+        btn_layout = QHBoxLayout(btns)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(3)
+
+        # Reuse the channel registry so these behave exactly like the buttons on
+        # the cards, and cannot drift from them.
+        for short, btn_color, cb in _AppTag._cards_registry:
+            btn = QPushButton(short)
+            btn.setFixedSize(18, 18)
+            btn.setStyleSheet(
+                f"QPushButton {{ background: transparent; color: {btn_color}; "
+                f"border: 1px solid {btn_color}; border-radius: 3px; "
+                f"font-size: 7pt; font-weight: bold; padding: 0; }}"
+                f"QPushButton:hover {{ background: {btn_color}; color: #000; }}"
+            )
+            btn.clicked.connect(
+                lambda checked=False, c=cb, si=si_index, a=app_name, p=pid: c(si, a, p)
+            )
+            btn_layout.addWidget(btn)
+
+        dismiss = QPushButton("×")
+        dismiss.setFixedSize(18, 18)
+        dismiss.setToolTip(I18n.translate("ui", "unassigned_dismiss_tip"))
+        dismiss.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {muted_color}; "
+            f"border: 1px solid {muted_color}; border-radius: 3px; "
+            f"font-size: 9pt; font-weight: bold; padding: 0; }}"
+            f"QPushButton:hover {{ background: {muted_color}; color: #000; }}"
+        )
+        dismiss.clicked.connect(lambda checked=False: on_dismiss())
+        btn_layout.addWidget(dismiss)
+
+        layout.addWidget(btns)
+
+
 # ── Toggle switch widget ────────────────────────────────────────────────────────
 
 class ToggleSwitch(QWidget):
@@ -819,6 +924,59 @@ class HomePage(QWidget):
 
         root.addWidget(cards_outer, stretch=1)
 
+        # ── Other applications ────────────────────────────────────────────────
+        # Applications that are playing but sit on no ASM channel are invisible
+        # in the cards above, because those only list what is on their own sink.
+        # That happens whenever the system default is something other than a
+        # channel: the headset's own hardware device (common with a Nova Pro
+        # dock, where the AUX output feeds speakers), an HDMI output, a second
+        # card. The audio is audible, so nothing looks broken, yet the mixer
+        # appears empty and the only way to route anything is an external tool.
+        #
+        # Deliberately quiet: hidden entirely when empty, collapsible, and
+        # worded as a list rather than a warning. Sending a stream elsewhere is
+        # a legitimate choice, and an app that nags about it every day is worse
+        # than one that stays silent.
+        self._unassigned_wrap = QWidget()
+        self._unassigned_wrap.setStyleSheet("background: transparent;")
+        unassigned_outer = QVBoxLayout(self._unassigned_wrap)
+        unassigned_outer.setContentsMargins(0, 16, 0, 0)
+        unassigned_outer.setSpacing(6)
+
+        header = QWidget()
+        header.setStyleSheet("background: transparent;")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
+
+        self._unassigned_toggle = QPushButton()
+        self._unassigned_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._unassigned_toggle.clicked.connect(self._on_unassigned_toggle)
+        header_layout.addWidget(self._unassigned_toggle)
+        header_layout.addStretch(1)
+
+        self._unassigned_show_hidden = QPushButton()
+        self._unassigned_show_hidden.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._unassigned_show_hidden.setToolTip(
+            I18n.translate("ui", "unassigned_show_hidden_tip"))
+        self._unassigned_show_hidden.clicked.connect(self._on_unhide_all)
+        header_layout.addWidget(self._unassigned_show_hidden)
+
+        unassigned_outer.addWidget(header)
+
+        self._unassigned_body = QWidget()
+        self._unassigned_body.setStyleSheet("background: transparent;")
+        self._unassigned_area = QVBoxLayout(self._unassigned_body)
+        self._unassigned_area.setContentsMargins(0, 0, 0, 0)
+        self._unassigned_area.setSpacing(4)
+        unassigned_outer.addWidget(self._unassigned_body)
+
+        self._unassigned_expanded = True
+        self._hidden_apps: set[str] = _load_hidden_apps()
+        self._unassigned_wrap.setVisible(False)
+        self._style_unassigned()
+        root.addWidget(self._unassigned_wrap)
+
         # ── Help button ───────────────────────────────────────────────────────
         help_row = QWidget()
         help_row.setStyleSheet("background: transparent;")
@@ -1002,6 +1160,8 @@ class HomePage(QWidget):
             ("M", color_aux,  lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_MEDIA)),
             ("O", color_hdmi, lambda si, app, pid: self._on_stream_drop_ext(si, app, pid)),
         ]
+
+        self._style_unassigned()
 
         # Update channel-name labels in cards
         self._game_card._name_lbl.setStyleSheet(
@@ -1526,6 +1686,9 @@ class HomePage(QWidget):
             self._update_native_apps(sinks, pulse_app_names,
                                      rescan=(self._combo_tick % 4 == 1))
 
+            # Anything playing that no card above represents.
+            self._refresh_unassigned(sink_inputs, sinks, sink_ext)
+
             # Refresh device combos every 20 ticks (10s)
             if self._combo_tick % 20 == 1:
                 self._refresh_device_combos(sinks)
@@ -1576,6 +1739,140 @@ class HomePage(QWidget):
             seen_names.add(app_name)
             pid = int(si.proplist.get("application.process.id", 0))
             card.add_app_tag(app_name, si.index, pid, bg_color=card._accent)
+
+    def _style_unassigned(self) -> None:
+        """Header styling, kept flat and quiet: this is a list, not an alert."""
+        if not hasattr(self, "_unassigned_toggle"):
+            return
+        muted = _theme.c("TEXT_SECONDARY")
+        self._unassigned_toggle.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; color: {muted}; "
+            f"font-size: 10pt; font-weight: bold; padding: 2px 0; text-align: left; }}"
+            f"QPushButton:hover {{ color: {_theme.c('TEXT_PRIMARY')}; }}"
+        )
+        self._unassigned_show_hidden.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {muted}; "
+            f"border: 1px solid {muted}; border-radius: 4px; "
+            f"font-size: 9pt; padding: 2px 8px; }}"
+            f"QPushButton:hover {{ color: {_theme.c('TEXT_PRIMARY')}; }}"
+        )
+
+    # ── Other applications (streams on no ASM channel) ───────────────────────
+
+    # Internal plumbing that must never be offered to the user as "an app".
+    _INTERNAL_BINARIES = {"pipewire", "pw-loopback", "pw-cat", "wireplumber"}
+    _INTERNAL_MEDIA_HINTS = ("EQ output", "Virtual Surround", "Sonar", "loopback")
+
+    def _channel_sink_indices(self, sinks, sink_ext) -> set[int]:
+        """Indices of every sink already represented by a card above.
+
+        The headset's own hardware device is deliberately NOT in here. A stream
+        playing on it is audible but on no channel, so it gets none of ASM's
+        per-channel handling and cannot be moved from the mixer. That is the
+        case this whole area exists for: with a Nova Pro dock feeding speakers
+        from its AUX port, setting the hardware device as the system default is
+        a sensible choice, and it made every application invisible to ASM.
+        """
+        wanted = (SINK_GAME, SINK_CHAT, SINK_MEDIA,
+                  "effect_input.sonar-", "effect_input.virtual-surround")
+        indices = {s.index for s in sinks if any(w in s.name for w in wanted)}
+        if sink_ext is not None:
+            indices.add(sink_ext.index)
+            # The Output card also lists streams sitting on the output EQ.
+            for s in sinks:
+                if s.name == "effect_input.sonar-output-eq":
+                    indices.add(s.index)
+        return indices
+
+    def _collect_unassigned(self, sink_inputs, sinks, sink_ext) -> list[dict]:
+        """Streams that are playing but belong to no card, newest first."""
+        from arctis_sound_manager.pw_utils import app_override_key
+
+        on_cards = self._channel_sink_indices(sinks, sink_ext)
+        names = {s.index: s.name for s in sinks}
+        descs = {s.index: (s.description or s.name) for s in sinks}
+
+        rows: list[dict] = []
+        seen: set[str] = set()
+        for si in sink_inputs:
+            if si.sink in on_cards:
+                continue
+            props = si.proplist
+            app = props.get("application.name", "")
+            if not app:
+                continue
+            binary = props.get("application.process.binary", "")
+            if binary in self._INTERNAL_BINARIES:
+                continue
+            media = props.get("media.name", "")
+            if any(h in media for h in self._INTERNAL_MEDIA_HINTS):
+                continue
+            # ASM's own loopbacks appear as sink-inputs too; never offer them.
+            if any(k in app for k in ("Arctis_", "effect_output", "effect_input")):
+                continue
+
+            key = app_override_key(app, binary)
+            if key in self._hidden_apps or key in seen:
+                continue
+            seen.add(key)
+            rows.append({
+                "key": key,
+                "label": self._friendly_app_name(props),
+                "where": descs.get(si.sink, names.get(si.sink, "?")),
+                "si_index": si.index,
+                "pid": int(props.get("application.process.id", 0) or 0),
+            })
+        return rows
+
+    def _refresh_unassigned(self, sink_inputs, sinks, sink_ext) -> None:
+        rows = self._collect_unassigned(sink_inputs, sinks, sink_ext)
+        hidden_count = len(self._hidden_apps)
+
+        # Nothing to show and nothing hidden: the area stays out of the way
+        # entirely rather than sitting there empty.
+        if not rows and not hidden_count:
+            self._unassigned_wrap.setVisible(False)
+            return
+        self._unassigned_wrap.setVisible(True)
+
+        arrow = "▾" if self._unassigned_expanded else "▸"
+        self._unassigned_toggle.setText(
+            f"{arrow}  {I18n.translate('ui', 'unassigned_title')}  ({len(rows)})")
+        self._unassigned_show_hidden.setText(
+            I18n.translate("ui", "unassigned_show_hidden").format(count=hidden_count))
+        self._unassigned_show_hidden.setVisible(hidden_count > 0)
+        self._unassigned_body.setVisible(self._unassigned_expanded and bool(rows))
+
+        while self._unassigned_area.count():
+            item = self._unassigned_area.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        primary = _theme.c("TEXT_PRIMARY")
+        muted = _theme.c("TEXT_SECONDARY")
+        for row in rows:
+            self._unassigned_area.addWidget(_UnassignedRow(
+                row["label"],
+                I18n.translate("ui", "unassigned_playing_on").format(device=row["where"]),
+                row["si_index"], row["pid"],
+                (lambda k=row["key"]: self._on_dismiss_app(k)),
+                primary, muted,
+            ))
+
+    def _on_unassigned_toggle(self) -> None:
+        self._unassigned_expanded = not self._unassigned_expanded
+        self._poll_volumes()
+
+    def _on_dismiss_app(self, key: str) -> None:
+        """Stop offering this application. Never touches where it plays."""
+        self._hidden_apps.add(key)
+        _save_hidden_apps(self._hidden_apps)
+        self._poll_volumes()
+
+    def _on_unhide_all(self) -> None:
+        self._hidden_apps.clear()
+        _save_hidden_apps(self._hidden_apps)
+        self._poll_volumes()
 
     def _update_native_apps(self, pulse_sinks, already_shown: set[str] = frozenset(),
                             *, rescan: bool = True):
