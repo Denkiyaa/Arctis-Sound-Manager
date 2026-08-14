@@ -189,7 +189,7 @@ asm_install_arch_in_container() {
 
         echo "[arch-install] Updating system..."
         sudo pacman -Syu --noconfirm
-        sudo pacman -S --needed --noconfirm curl
+        sudo pacman -S --needed --noconfirm curl || true
 
         # The signed binary repository is the primary Arch channel, and the
         # only one that keeps working while aur.archlinux.org git is in
@@ -197,13 +197,23 @@ asm_install_arch_in_container() {
         # users stranded on an old version with no way to update (issue #175).
         # Adding it here also means later updates are a plain `pacman -Syu`
         # inside the container, with no PKGBUILD editing.
+        # Registering the repository must never be fatal. This whole block runs
+        # under `set -e`, so a failure in here (no network for the key, a
+        # keyring pacman-key cannot sign into, gpg missing) would abort the
+        # install *before* the AUR fallback below ever runs: the container gets
+        # created, nothing is installed into it, and the user is left with a
+        # distrobox terminal wondering why `asm-gui` is not found. Guarded so a
+        # failure costs us the repository, never the installation.
         if ! grep -q "^\[arctis-sound-manager\]" /etc/pacman.conf; then
             echo "[arch-install] Adding the signed ASM repository..."
-            curl -fsSL https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo/arctis-sound-manager.key -o /tmp/asm.key
-            sudo pacman-key --add /tmp/asm.key
-            sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/asm.key | awk -F: "/^fpr/ {print \$10; exit}")"
-            printf "\n[arctis-sound-manager]\nServer = https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo\n" \
-                | sudo tee -a /etc/pacman.conf >/dev/null
+            if curl -fsSL https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo/arctis-sound-manager.key -o /tmp/asm.key \
+               && sudo pacman-key --add /tmp/asm.key \
+               && sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/asm.key | awk -F: "/^fpr/ {print \$10; exit}")"; then
+                printf "\n[arctis-sound-manager]\nServer = https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo\n" \
+                    | sudo tee -a /etc/pacman.conf >/dev/null
+            else
+                echo "[arch-install] Could not register the signed repository; falling back to the AUR."
+            fi
             rm -f /tmp/asm.key
         fi
 
