@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - pyproject.toml
+  # Manual re-run, for when this lost a push race during a release and left the
+  # packaging templates a version behind (see the retry loop below). Without it
+  # the only way to repair that state is to redo the sed edits by hand.
+  workflow_dispatch:
 
 jobs:
   sync:
