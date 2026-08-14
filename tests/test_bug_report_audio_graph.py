@@ -121,7 +121,7 @@ def test_physical_device_is_not_flagged_as_an_asm_node():
 
 # ── routing props ────────────────────────────────────────────────────────────
 
-def test_routing_props_shown_for_asm_nodes_only():
+def test_routing_props_shown_for_asm_nodes():
     """Whether the on-disk config reached the running graph (#100, #102, #180)."""
     text = _audio_graph(_graph())
     sink_out = next(l for l in text.splitlines() if 'Arctis_Game_sink_out' in l)
@@ -130,6 +130,24 @@ def test_routing_props_shown_for_asm_nodes_only():
     # The device carries plenty of props too; printing them would bury the rest.
     device_line = next(l for l in text.splitlines() if 'alsa_output.pci-' in l)
     assert '[' not in device_line
+
+
+def test_application_stream_pin_is_visible():
+    """An app pinning itself to a foreign device is the #185 failure mode.
+
+    A soundboard feeding a virtual microphone gets dragged onto an Arctis
+    channel, which breaks that app's feature rather than merely moving its
+    sound. Diagnosing it needs the pin, so application streams show their
+    target even though they are not ASM nodes.
+    """
+    graph = _graph() + [
+        _node(700, 'soundboard-mic-feed', 'Stream/Output/Audio', 'running',
+              **{'application.name': 'SoundDeck', 'target.object': 'SoundDeck_virtmic'}),
+    ]
+    line = next(l for l in _audio_graph(graph).splitlines() if 'soundboard-mic-feed' in l)
+    assert 'app=SoundDeck' in line
+    assert 'target.object=SoundDeck_virtmic' in line
+    assert '<-- ASM' not in line
 
 
 # ── Arctis node list keeps its state field ───────────────────────────────────

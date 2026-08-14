@@ -262,10 +262,18 @@ def _audio_graph(objects: list | None) -> str:
         # "Stream/Output/Audio" (effect_output.*, Arctis_*_sink_out).
         if 'Audio' not in mclass:
             continue
+        # Routing props for our own nodes, and for any application stream that
+        # pins itself somewhere. An app pin is what #185 was about: a soundboard
+        # feeding a virtual microphone gets dragged onto an Arctis channel,
+        # breaking the other app's feature rather than merely relocating sound.
+        # Without the pin in the report there is no way to see that from here.
         extra = ''
-        if _is_asm_node(name):
-            kept = [f'{k}={props[k]}' for k in _ROUTING_PROPS if k in props]
-            extra = ('  [' + ' '.join(kept) + ']') if kept else ''
+        wanted = _ROUTING_PROPS if _is_asm_node(name) else ('target.object', 'node.target')
+        kept = [f'{k}={props[k]}' for k in wanted if k in props]
+        if kept:
+            app = props.get('application.name')
+            label = f'app={app} ' if app and not _is_asm_node(name) else ''
+            extra = '  [' + label + ' '.join(kept) + ']'
         nodes.append((obj.get('id', -1), info.get('state', '?'), mclass, name, extra))
 
     links: list[tuple[int, str, str, str]] = []
