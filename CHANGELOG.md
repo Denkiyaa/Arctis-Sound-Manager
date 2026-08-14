@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.32] - 15 August 2026
+
+### Added
+
+- **Applications playing outside the Game / Chat / Media channels are now visible, and movable.** The mixer only ever listed applications that were already on one of its channels. Anything playing elsewhere — on the headset's own device rather than a channel, on an HDMI output, on a second sound card — was audible but absent from ASM, so the only way to assign it was an external tool like pwvucontrol. A new **Other applications** section appears under the channel cards whenever there is something to show, listing each application with the device it is currently playing on and the same one-click buttons to send it to Game, Chat, Media or Output. Applications you deliberately keep elsewhere can be dismissed from the list with the ×, and a *Show hidden* button brings them back at any time; dismissing only stops the listing, it never moves your audio. The section stays hidden when everything is already on a channel, so nothing changes for setups that were fine. Suggested by @autune, whose Nova Pro dock feeds his speakers from its AUX output — an arrangement where routing everything through a channel would be the wrong answer.
+
+### Fixed
+
+- **Installing on Bazzite, SteamOS or Silverblue could still leave the container empty.** Setting up the package repository needs a local signing key, and the installer only created one when the container's keyring looked completely empty. Container images ship with the public part already filled in and no signing key, so that step was skipped on exactly the systems it was meant for: registering the repository failed, and the install ended with "target not found" and nothing installed. The key is now always prepared. Reported on Discord by binx9612.
+- **Bug reports now state which output device is the system default.** Whether an Arctis channel holds that spot decides how much of ASM applies at all, and its absence from reports has cost a round of questions with someone whose setup was perfectly deliberate.
+
 ## [1.2.31] - 14 August 2026
 
 ### Added

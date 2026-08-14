@@ -503,6 +503,15 @@ def collect_system_info() -> dict:
     info['filter_chain_status'] = (
         _run_out(['systemctl', '--user', 'is-active', 'filter-chain']) or 'unknown'
     )
+
+    # The default output decides how much of ASM is in play at all: the router
+    # only adopts new applications while an Arctis sink holds it. When it is the
+    # headset's own hardware device instead of a channel, everything keeps
+    # working and playing, yet no application reaches Game/Chat/Media and the
+    # mixer looks empty. That is invisible in a report unless the default is
+    # stated, and finding it out cost a round of questions with a user whose
+    # setup was perfectly deliberate.
+    info['default_sink'] = _run_out(['pactl', 'get-default-sink']) or 'unknown'
     info['pw_service_status'] = ' '.join(
         f"{unit}={_run_out(['systemctl', '--user', 'is-active', unit]) or 'unknown'}"
         for unit in ('pipewire', 'pipewire-pulse')
@@ -657,6 +666,7 @@ def format_bug_report(traceback_str: Optional[str] = None) -> str:
         f'- **PULSE_SERVER**: `{info.get("pulse_server", "?")}`',
         f'- **PipeWire services**: {info.get("pw_service_status", "?")}',
         f'- **filter-chain.service**: {info.get("filter_chain_status", "?")}',
+        f'- **Default output**: `{info.get("default_sink", "?")}`',
         f'- **Gamescope session**: {info.get("gamescope_session", "?")}',
         '',
     ]
