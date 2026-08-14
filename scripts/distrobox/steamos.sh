@@ -161,8 +161,16 @@ install_asm() {
     distrobox enter "$_CONTAINER" -- bash -lc '
         set -euo pipefail
         echo "[arch-install] Checking pacman keyring..."
-        if [[ ! -d /etc/pacman.d/gnupg ]] || ! sudo test -s /etc/pacman.d/gnupg/pubring.gpg; then
-            sudo pacman-key --init
+        # --init unconditionally: it is idempotent, cheap, and it is what
+        # creates the LOCAL SIGNING KEY that `pacman-key --lsign-key` needs
+        # below. Testing pubring.gpg only proves the *public* keyring is
+        # populated, which is exactly how an Arch distrobox image ships: --init
+        # was skipped, and registering the repository then failed with
+        # "There is no secret key available to sign with", leaving the
+        # container with no ASM in it. Reported on Discord by binx9612.
+        sudo pacman-key --init
+        if ! sudo test -s /etc/pacman.d/gnupg/pubring.gpg; then
+            # Populating is the expensive half, so it stays conditional.
             sudo pacman-key --populate archlinux
         fi
         echo "[arch-install] Updating system..."
@@ -190,7 +198,8 @@ install_asm() {
                 printf "\n[arctis-sound-manager]\nServer = https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo\n" \
                     | sudo tee -a /etc/pacman.conf >/dev/null
             else
-                echo "[arch-install] Could not register the signed repository; falling back to the AUR."
+                echo "[arch-install] Could not register the signed repository (see the error above)." >&2
+                echo "[arch-install] The install below will fail; its output says what to check." >&2
             fi
             rm -f /tmp/asm.key
         fi
