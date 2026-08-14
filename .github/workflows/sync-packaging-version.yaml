@@ -49,4 +49,21 @@ jobs:
           git add aur/PKGBUILD aur/.SRCINFO arctis-sound-manager.spec
           git diff --cached --quiet && echo "Already in sync — nothing to commit" && exit 0
           git commit -m "chore: sync packaging to v${{ steps.ver.outputs.version }} [skip ci]"
-          git push origin main
+
+          # A release fires several jobs that each push to main, so this one can
+          # find the branch moved on since checkout and be rejected as
+          # non-fast-forward. That happened on v1.2.32 and left aur/PKGBUILD a
+          # version behind while the AUR package itself was correctly updated:
+          # the failure is in the bookkeeping, not the delivery, which makes it
+          # easy to miss. Rebase and retry rather than fail the release over a
+          # race that resolves itself.
+          for attempt in 1 2 3; do
+            if git push origin main; then
+              exit 0
+            fi
+            echo "push rejected (attempt $attempt) — rebasing onto the new tip"
+            git pull --rebase origin main || exit 1
+            sleep $((attempt * 5))
+          done
+          echo "::error::could not push the packaging sync after 3 attempts"
+          exit 1
