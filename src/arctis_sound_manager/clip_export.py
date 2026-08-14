@@ -59,7 +59,7 @@ class TrackMix:
 # it had. Asking ffmpeg for a rate here fills those gaps by duplicating frames,
 # so the shared file is constant-rate — which is what uploads, browsers and
 # every "why does this stutter" report actually want.
-FPS_CHOICES = (30, 60)
+FPS_CHOICES = (15, 30, 60)
 
 # What an export is written as, regardless of the settings.
 #

@@ -65,7 +65,7 @@ _THUMB_THREADS = 2
 # Mirrors clip_capture.FPS_CHOICES / DEFAULT_FPS, restated rather than imported
 # so this page still builds its controls on a machine with no GStreamer — the
 # rule the module docstring sets out. test_clip_rate keeps the two in step.
-_FPS_CHOICES = (30, 60)
+_FPS_CHOICES = (15, 30, 60)
 _DEFAULT_FPS = 30
 
 

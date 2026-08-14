@@ -123,8 +123,9 @@ _RATE_WINDOW_S = 4.0
 # make a compositor send 60. What it does do is set the keyframe interval (gop
 # == fps) and the encoder's workload against a rate that is rarely reached,
 # which costs bitrate and CPU for frames that never arrive. 60 is kept for the
-# machines that genuinely sustain it.
-FPS_CHOICES = (30, 60)
+# machines that genuinely sustain it, and 15 for the ones that would rather
+# spend nothing on the clip than record a smooth one.
+FPS_CHOICES = (15, 30, 60)
 DEFAULT_FPS = 30
 
 SONAR_MONITORS = [
