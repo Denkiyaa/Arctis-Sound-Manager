@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.31] - 14 August 2026
+
+### Added
+
+- **Bug reports now describe what your audio is actually doing, not just what exists.** Until now a report listed your audio devices and their names, but not whether each one was playing, idle or asleep, nor what was connected to what. That is the difference between "something is keeping the headset busy" and "the surround processing is keeping it busy", and chasing the gap has cost real back-and-forth with people who took the time to report a problem. Reports now include every audio node with its live state, every connection between them, which ones are actually processing sound (with the glitch counters behind crackling), how each of ASM's own pieces is configured at that moment, and the kernel's own view of the sound card. Applications that pin their audio to a specific device show that too, which is what explains cases where another program's feature stops working. Nothing extra is asked of you: it is the same button and the same command as before, and the report stays a plain text file you can read in full before sending it.
+
 ## [1.2.30] - 14 August 2026
 
 ### Fixed
