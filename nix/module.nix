@@ -200,7 +200,11 @@ in
           };
         }
         // lib.optionalAttrs cfg.autostartTray {
-          arctis-gui = userService {
+          # Named for ArctisManager.desktop, not for the project: a
+          # non-sandboxed process's portal app id comes from the unit its
+          # cgroup names, and without one the GlobalShortcuts portal refuses
+          # the session that the clip shortcut needs.
+          "app-ArctisManager" = userService {
             description = "Arctis Sound Manager tray GUI";
             after = [
               "graphical-session.target"

@@ -66,8 +66,8 @@ override_dh_auto_install:
 	    $(DEST)/usr/lib/systemd/user/arctis-video-router.service
 	install -Dm644 systemd/arctis-stream-guard.service \
 	    $(DEST)/usr/lib/systemd/user/arctis-stream-guard.service
-	install -Dm644 systemd/arctis-gui.service \
-	    $(DEST)/usr/lib/systemd/user/arctis-gui.service
+	install -Dm644 systemd/app-ArctisManager.service \
+	    $(DEST)/usr/lib/systemd/user/app-ArctisManager.service
 
 	# ── Post-upgrade helper (packaging machinery, not in /usr/bin) ──
 	install -Dm755 scripts/restart-user-services.sh \

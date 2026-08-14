@@ -111,8 +111,12 @@ package() {
         "$pkgdir/usr/lib/systemd/user/arctis-video-router.service"
     install -Dm644 systemd/arctis-stream-guard.service \
         "$pkgdir/usr/lib/systemd/user/arctis-stream-guard.service"
-    install -Dm644 systemd/arctis-gui.service \
-        "$pkgdir/usr/lib/systemd/user/arctis-gui.service"
+    # The tray unit is named for the desktop entry, not the project — that is
+    # what gives the process a portal app id and lets the clip shortcut bind.
+    # The old arctis-gui.service is not shipped any more; the .install script
+    # disables and removes what earlier versions left enabled.
+    install -Dm644 systemd/app-ArctisManager.service \
+        "$pkgdir/usr/lib/systemd/user/app-ArctisManager.service"
 
     # dinit user service templates (Artix Linux / dinit init systems)
     install -Dm644 dinit/arctis-manager \

@@ -34,7 +34,14 @@ class ResolveMapping(unittest.TestCase):
 
     def test_gui_has_no_dinit_service(self):
         self.assertIsNone(sc._resolve("arctis-gui", "dinit"))
-        self.assertEqual(sc._resolve("arctis-gui", "systemd"), "arctis-gui")
+
+    def test_gui_unit_is_named_for_the_desktop_entry(self):
+        # Not cosmetic: xdg-desktop-portal reads a non-sandboxed process's app id
+        # off the unit its cgroup names. Under a name that does not match
+        # app-<AppID>[-<random>], the id resolves empty, the GlobalShortcuts
+        # portal answers "NotAllowed: An app id is required", and the clip
+        # shortcut cannot bind. ArctisManager is ArctisManager.desktop's id.
+        self.assertEqual(sc._resolve("arctis-gui", "systemd"), "app-ArctisManager")
 
     def test_unknown_name_passthrough(self):
         self.assertEqual(sc._resolve("some-other", "dinit"), "some-other")

@@ -45,7 +45,19 @@ _SERVICE_MAP: dict[str, dict[str, str | None]] = {
     "arctis-video-router": {"systemd": "arctis-video-router", "dinit": "arctis-video-router"},
     "arctis-stream-guard": {"systemd": "arctis-stream-guard", "dinit": "arctis-stream-guard"},
     # No dinit service for the GUI — handled via XDG autostart in autostart.py.
-    "arctis-gui":          {"systemd": "arctis-gui",          "dinit": None},
+    #
+    # The systemd unit is named for the desktop entry, not for the project, and
+    # that is load-bearing: xdg-desktop-portal derives an app id for a
+    # non-sandboxed process from the unit its cgroup names, matching
+    # `app-<AppID>[-<random>].service|.scope`. Under `arctis-gui.service` the id
+    # comes out empty and the GlobalShortcuts portal refuses the session with
+    # "NotAllowed: An app id is required" — the clip shortcut never binds and the
+    # Clips page reports no global shortcut. `app-ArctisManager.service` resolves
+    # to ArctisManager.desktop and binds. Setting the app id from inside Qt does
+    # not help: the host portal Registry it would use is not available outside a
+    # sandbox. Callers keep saying "arctis-gui" — this map is the one place the
+    # real name lives.
+    "arctis-gui":          {"systemd": "app-ArctisManager",   "dinit": None},
 }
 
 
