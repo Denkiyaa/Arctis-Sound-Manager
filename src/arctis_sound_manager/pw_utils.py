@@ -51,6 +51,98 @@ def _pw_run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     kwargs.setdefault("close_fds", False)
     return subprocess.run(resolved, **kwargs)
 
+_LINK_DENIED = "not permitted"
+# Cleared on every daemon start; one repair attempt per (out, in) pair is
+# enough, and retrying forever would hammer pw-cli on a system where this
+# genuinely cannot be fixed.
+_perm_repair_attempted: set[tuple[int, int]] = set()
+
+
+def _node_owner(node_id: int, dump: list | None = None) -> str | None:
+    """The client that owns *node_id*, or None when the daemon owns it."""
+    data = dump if dump is not None else _pw_dump()
+    for obj in data:
+        if obj.get("type") != "PipeWire:Interface:Node" or obj.get("id") != node_id:
+            continue
+        props = (obj.get("info") or {}).get("props") or {}
+        owner = props.get("client.id")
+        return str(owner) if owner is not None else None
+    return None
+
+
+def _port_owner(port_id: int, dump: list | None = None) -> str | None:
+    """The client owning the node a port belongs to."""
+    data = dump if dump is not None else _pw_dump()
+    for obj in data:
+        if obj.get("type") != "PipeWire:Interface:Port" or obj.get("id") != port_id:
+            continue
+        node_id = ((obj.get("info") or {}).get("props") or {}).get("node.id")
+        if node_id is None:
+            return None
+        try:
+            return _node_owner(int(node_id), data)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def grant_link_permissions(out_port: int, in_port: int) -> bool:
+    """Give the clients owning these two ports permission to link (#181).
+
+    PipeWire refuses a link when the client owning one end cannot *see* the
+    node at the other end. On most systems the session manager grants that and
+    nobody notices, but where clients come up as ``access=restricted`` — seen
+    on SteamOS — every link ASM needs is denied, the channels reach nothing,
+    and there is no audio. The user hits the same wall running ``pw-link`` by
+    hand, so it is not something they can work around either.
+
+    ``pw-cli`` connects to the manager socket, which is unrestricted, so it can
+    raise permissions for the clients we own. The ``l`` in ``rwxml`` is the
+    flag that specifically allows linking and is *not* part of ``rwxm``:
+    omitting it is why such a fix appears to do nothing.
+
+    Deliberately narrow. Only the two clients at the ends of a link ASM was
+    already trying to make are touched, once per port pair per daemon run, and
+    only after a refusal — never pre-emptively. Returns True when something was
+    granted and the caller should retry the link.
+    """
+    key = (out_port, in_port)
+    if key in _perm_repair_attempted:
+        return False
+    _perm_repair_attempted.add(key)
+
+    if shutil.which("pw-cli") is None:
+        return False
+    dump = _pw_dump()
+    owners = {o for o in (_port_owner(out_port, dump), _port_owner(in_port, dump))
+              if o is not None}
+    if not owners:
+        # Both ends are daemon-owned, which the permission check exempts, so
+        # the refusal came from somewhere else and this would not help.
+        return False
+
+    granted = False
+    for owner in sorted(owners):
+        try:
+            r = _pw_run(["pw-cli", "permissions", owner, "-1", "rwxml"],
+                        check=False, timeout=5, capture_output=True)
+        except Exception as exc:
+            logger.debug("could not grant link permissions to client %s: %r", owner, exc)
+            continue
+        if r.returncode == 0:
+            granted = True
+        else:
+            logger.debug("pw-cli permissions %s failed: %s", owner,
+                         (r.stderr or b"").decode(errors="replace").strip())
+    if granted:
+        logger.warning(
+            "Link was refused by PipeWire; granted link permission to client(s) %s "
+            "and retrying. This system starts our clients restricted (#181).",
+            ", ".join(sorted(owners)),
+        )
+    return granted
+
+
 def apply_force_quantum(quantum: int) -> bool:
     """Set PipeWire's forced quantum (buffer size); 0 releases it.
 
@@ -939,6 +1031,21 @@ def ensure_loopback_link(
                 ["pw-link", str(out_port), str(in_port)],
                 check=False, timeout=3, capture_output=True,
             )
+            err = (r.stderr or b"").decode(errors="replace").strip()
+
+            # A refused link is not a broken graph: on systems that start our
+            # clients restricted, PipeWire denies it on permissions alone and
+            # every channel ends up reaching nothing (#181). Raise the
+            # permission for the two clients involved and try once more, rather
+            # than reporting a failure the user cannot act on.
+            if r.returncode != 0 and _LINK_DENIED in err.lower():
+                if grant_link_permissions(out_port, in_port):
+                    r = _pw_run(
+                        ["pw-link", str(out_port), str(in_port)],
+                        check=False, timeout=3, capture_output=True,
+                    )
+                    err = (r.stderr or b"").decode(errors="replace").strip()
+
             if r.returncode == 0:
                 linked_any = True
                 created += 1
@@ -946,8 +1053,7 @@ def ensure_loopback_link(
                 ok = False
                 logger.warning(
                     "ensure_loopback_link: pw-link %s→%s (%s) failed: %s",
-                    out_port, in_port, channel,
-                    (r.stderr or b"").decode(errors="replace").strip(),
+                    out_port, in_port, channel, err,
                 )
 
         if created:
