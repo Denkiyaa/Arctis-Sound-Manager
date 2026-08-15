@@ -335,6 +335,31 @@ def _section_yamls() -> str:
     return out.getvalue()
 
 
+def _section_audio_graph() -> str:
+    """Node states, links, and the kernel's view, same as the GUI report.
+
+    `asm-cli diagnose` and the GUI's bug-report button are two separate
+    generators, and enriching only the GUI one left CLI users sending reports
+    that could not answer the question being asked of them: issue #181 turned
+    on which nodes were linked to what, and the report taken with this command
+    contained neither. Shared with bug_reporter rather than reimplemented, so
+    the two cannot drift again.
+    """
+    from arctis_sound_manager.bug_reporter import (
+        _alsa_pcm_state, _audio_graph, _pw_objects,
+    )
+    parts = [_audio_graph(_pw_objects())]
+
+    default_sink = _run(['pactl', 'get-default-sink'])
+    parts.append(f'\n-- default output --\n{default_sink}')
+
+    # Connected is not the same as processing, and this carries the xrun
+    # counters behind audible crackling.
+    parts.append(f'\n-- pw-top (one pass) --\n{_run(["pw-top", "-b", "-n", "1"], timeout=15)}')
+    parts.append(f'\n-- ALSA PCM state (kernel view) --\n{_alsa_pcm_state()}')
+    return '\n'.join(parts)
+
+
 def diagnose(stream=sys.stdout) -> int:
     stream.write(f'# Arctis Sound Manager — diagnostic dump\n')
     stream.write(f'# Generated: {datetime.now(timezone.utc).isoformat()}\n')
@@ -358,6 +383,7 @@ def diagnose(stream=sys.stdout) -> int:
         ('udev rules', _section_udev),
         ('PulseAudio / PipeWire', _section_pulseaudio),
         ('PipeWire runtime / container diagnostics', _section_pipewire_runtime),
+        ('Audio graph — node states and links', _section_audio_graph),
         ('User device YAML overrides', _section_yamls),
         ('Settings (redacted)', _section_settings),
         ('Journalctl — arctis-manager.service (last 100 lines)', _section_journalctl),
