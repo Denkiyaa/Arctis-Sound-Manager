@@ -551,6 +551,11 @@ class ClipsPage(QWidget):
         # PulseAudio round trip and the second-by-second one above is for the
         # buffer read-out.
         self._auto_started = False
+        # Set when an automatic start did not produce a capture — most often
+        # because the portal picker was dismissed. Without it the next poll
+        # asks again, and the poll is on a timer: declining once turns into a
+        # dialog every few seconds for as long as the game is running.
+        self._auto_start_blocked = False
         self._game_gone_since: float | None = None
         self._game_timer = QTimer(self)
         self._game_timer.setInterval(_GAME_POLL_MS)
@@ -621,6 +626,8 @@ class ClipsPage(QWidget):
     # ── capture control ───────────────────────────────────────────────────────
 
     def _on_toggle(self) -> None:
+        # Pressing Start is the answer to "not asking again on its own".
+        self._auto_start_blocked = False
         if self._capture is None:
             self._start_capture()
         else:
@@ -757,12 +764,29 @@ class ClipsPage(QWidget):
 
         if game:
             self._game_gone_since = None
-            if self._capture is None:
+            if self._capture is None and not self._auto_start_blocked:
                 logger.info("clips: '%s' is playing — starting the capture", game)
-                self._on_toggle()
+                self._start_capture()
                 if self._capture is not None:
                     self._auto_started = True
+                else:
+                    # Asking again on the next tick is how a declined picker
+                    # becomes a dialog that will not go away. One attempt per
+                    # game: Start is right there when it was not meant.
+                    self._auto_start_blocked = True
+                    logger.info("clips: automatic start did not take — not "
+                                "asking again until the game goes or Start is "
+                                "pressed")
+                    if not self._error:
+                        self._status.setText(_tr(
+                            "clips_autostart_declined",
+                            "Capture not started. Press Start when you want "
+                            "it — this will not ask again on its own."))
             return
+
+        # No game: whatever went wrong last time is not this game's problem any
+        # more, so the next one gets its one attempt.
+        self._auto_start_blocked = False
 
         if self._capture is None or not self._auto_started:
             return

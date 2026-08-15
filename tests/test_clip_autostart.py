@@ -43,9 +43,18 @@ def page(tmp_path, monkeypatch):
 
     started: list[bool] = []
     stopped: list[bool] = []
-    monkeypatch.setattr(type(widget), "_on_toggle",
-                        lambda self: (started.append(True),
-                                      setattr(self, "_capture", object()))[0])
+
+    # Stand in for the start itself rather than for the toggle: a start can
+    # fail — a dismissed portal picker is the ordinary way — and the page has
+    # to tell the two apart. `start_succeeds` is how a test says which.
+    widget.start_succeeds = True
+
+    def _fake_start(self) -> None:
+        started.append(True)
+        if self.start_succeeds:
+            self._capture = object()
+
+    monkeypatch.setattr(type(widget), "_start_capture", _fake_start)
     monkeypatch.setattr(type(widget), "_stop_capture",
                         lambda self: (stopped.append(True),
                                       setattr(self, "_capture", None))[0])
@@ -152,3 +161,54 @@ def test_it_is_on_unless_the_user_says_otherwise():
     from arctis_sound_manager.settings import GeneralSettings
 
     assert GeneralSettings().clips_autostart is True
+
+
+# ── a start that did not take ──────────────────────────────────────────────────
+
+def test_a_start_that_did_not_take_is_not_retried_every_tick(page, monkeypatch):
+    """The ordinary way an automatic start fails is the portal picker being
+    dismissed — and the poll is on a timer, so retrying turns one "no" into a
+    dialog every few seconds for as long as the game runs. Ask once."""
+    _game(monkeypatch, "GenshinImpact")
+    page._autostart.setChecked(True)
+    page.start_succeeds = False
+
+    page._poll_game()
+    page._poll_game()
+    page._poll_game()
+
+    assert page.started == [True]
+    assert page._capture is None
+
+
+def test_the_game_going_away_restores_the_attempt(page, monkeypatch):
+    """Whatever went wrong belonged to that session, not to the next game."""
+    _game(monkeypatch, "GenshinImpact")
+    page._autostart.setChecked(True)
+    page.start_succeeds = False
+    page._poll_game()
+
+    _game(monkeypatch, None)
+    page._poll_game()
+
+    _game(monkeypatch, "Deadlock")
+    page.start_succeeds = True
+    page._poll_game()
+
+    assert page.started == [True, True]
+    assert page._capture is not None
+
+
+def test_pressing_start_answers_the_question(page, monkeypatch):
+    """Start is the way back in after declining — it must not stay blocked."""
+    _game(monkeypatch, "GenshinImpact")
+    page._autostart.setChecked(True)
+    page.start_succeeds = False
+    page._poll_game()
+    assert page._auto_start_blocked
+
+    page.start_succeeds = True
+    page._on_toggle()
+
+    assert page._auto_start_blocked is False
+    assert page._capture is not None
