@@ -46,6 +46,9 @@ class _Flags:
     class DBusCallFlags:
         NONE = 0
 
+    class DBusSignalFlags:
+        NONE = 0
+
 
 def _portal(bus: _RecordingBus, session: str | None = "/session/1",
             sub: int | None = 7) -> ScreenCastPortal:
@@ -219,3 +222,145 @@ def test_a_failed_open_closes_the_half_made_session(monkeypatch):
 
     assert made.closed_calls == 1
     assert cap.portal is None
+
+
+# ── what the saved choice is allowed to restore ────────────────────────────────
+
+def _token_file(monkeypatch, tmp_path, payload):
+    import json
+
+    from arctis_sound_manager import clip_capture
+
+    path = tmp_path / "clip_screencast_token.json"
+    if payload is not None:
+        path.write_text(json.dumps(payload))
+    monkeypatch.setattr(clip_capture, "TOKEN_FILE", path)
+    monkeypatch.setattr(clip_capture, "CONFIG_DIR", tmp_path)
+    return path
+
+
+def test_a_window_token_is_not_restored_for_a_screen(monkeypatch, tmp_path):
+    """The reported bug, in one line: a token restores the exact source it was
+    made for, so a window saved when windows were on offer kept coming back as
+    a clip of a file manager labelled with the game the audio came from."""
+    _token_file(monkeypatch, tmp_path, {"restore_token": "abc", "kind": "window"})
+
+    assert ScreenCastPortal._load_token("monitor") is None
+
+
+def test_a_token_from_before_the_kind_was_recorded_is_ignored(monkeypatch, tmp_path):
+    """Written by a version that offered screens and windows together, so what
+    it points at is unknown — and an unknown source is the one that cannot be
+    corrected without asking."""
+    _token_file(monkeypatch, tmp_path, {"restore_token": "abc"})
+
+    assert ScreenCastPortal._load_token("monitor") is None
+
+
+def test_a_screen_token_is_restored(monkeypatch, tmp_path):
+    _token_file(monkeypatch, tmp_path, {"restore_token": "abc", "kind": "monitor"})
+
+    assert ScreenCastPortal._load_token("monitor") == "abc"
+
+
+def test_saving_records_which_kind_it_was(monkeypatch, tmp_path):
+    import json
+
+    path = _token_file(monkeypatch, tmp_path, None)
+
+    ScreenCastPortal._save_token("abc", "monitor")
+
+    assert json.loads(path.read_text()) == {"restore_token": "abc",
+                                            "kind": "monitor"}
+
+
+def test_has_saved_source_follows_the_same_rule(monkeypatch, tmp_path):
+    from arctis_sound_manager.clip_capture import has_saved_source
+
+    _token_file(monkeypatch, tmp_path, {"restore_token": "abc", "kind": "window"})
+    assert has_saved_source("monitor") is False
+
+    _token_file(monkeypatch, tmp_path, {"restore_token": "abc", "kind": "monitor"})
+    assert has_saved_source("monitor") is True
+
+
+# ── what the picker is allowed to offer ────────────────────────────────────────
+
+class _FakeVariant:
+    def __init__(self, signature, value):
+        self.signature, self.value = signature, value
+
+
+class _FakeGLib:
+    Variant = _FakeVariant
+
+    class VariantType:
+        def __init__(self, signature):
+            self.signature = signature
+
+
+class _OpeningBus(_RecordingBus):
+    """Enough of Gio for open() to run: a subscription and the fd handshake."""
+
+    def signal_subscribe(self, *_args, **_kwargs):
+        return 7
+
+    def call_with_unix_fd_list_sync(self, *_args, **_kwargs):
+        class _Reply:
+            @staticmethod
+            def unpack():
+                return (0,)
+
+        class _Fds:
+            @staticmethod
+            def get(_handle):
+                return 99
+
+        return _Reply(), _Fds()
+
+
+def _opened(monkeypatch, tmp_path, kind_arg):
+    """Run open() against fakes and hand back the options it asked for."""
+    _token_file(monkeypatch, tmp_path, None)
+    portal = _portal(_OpeningBus(), session=None, sub=None)
+    portal._GLib, portal._Gio = _FakeGLib, _Flags
+    seen: dict = {}
+
+    def _call(method, _signature, pre_args, options):
+        if method == "CreateSession":
+            return {"session_handle": "/session/1"}
+        if method == "SelectSources":
+            seen.update(options)
+            return {}
+        if method == "Start":
+            return {"restore_token": "tok", "streams": [(42, {})]}
+        return {}
+
+    portal._call = _call
+    portal.open(**kind_arg)
+    return seen
+
+
+def test_the_picker_offers_screens_only(monkeypatch, tmp_path):
+    """1 is MONITOR. Offering 1|2 let a window be chosen, and the clip that
+    came out was a file manager — recorded faithfully, for weeks, because the
+    choice was then restored every time."""
+    asked = _opened(monkeypatch, tmp_path, {})
+
+    assert asked["types"].value == 1
+
+
+def test_asking_for_a_window_still_asks_for_a_window(monkeypatch, tmp_path):
+    asked = _opened(monkeypatch, tmp_path, {"window": True})
+
+    assert asked["types"].value == 2
+
+
+def test_the_token_is_saved_under_the_kind_that_was_asked_for(monkeypatch, tmp_path):
+    import json
+
+    from arctis_sound_manager import clip_capture
+
+    _opened(monkeypatch, tmp_path, {})
+
+    assert json.loads(clip_capture.TOKEN_FILE.read_text())["kind"] == "monitor"

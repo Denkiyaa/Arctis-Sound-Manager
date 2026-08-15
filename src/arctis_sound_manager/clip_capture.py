@@ -51,7 +51,7 @@ CONFIG_DIR = Path.home() / ".config" / "arctis_manager"
 TOKEN_FILE = CONFIG_DIR / "clip_screencast_token.json"
 
 
-def has_saved_source() -> bool:
+def has_saved_source(kind: str = "monitor") -> bool:
     """Whether a screen has been picked already and the portal can restore it.
 
     The difference between a capture that starts in silence and one that throws
@@ -61,7 +61,10 @@ def has_saved_source() -> bool:
     answer is no. Only a person pressing Start is allowed to summon the picker.
     """
     try:
-        return bool(json.loads(TOKEN_FILE.read_text()).get("restore_token"))
+        saved = json.loads(TOKEN_FILE.read_text())
+        # Same rule as _load_token: a token for another kind of source is not
+        # one the portal can restore for this one.
+        return saved.get("kind") == kind and bool(saved.get("restore_token"))
     except Exception:  # noqa: BLE001 — missing, unreadable or malformed: no token
         return False
 CLIP_DIR = Path.home() / "Videos" / "ASM Clips"
@@ -615,20 +618,28 @@ class ScreenCastPortal:
             None, Gio.DBusSignalFlags.NONE,
             lambda *a: setattr(self, "closed", True))
 
+        # A screen, not a window. Offering both let a window be picked, and a
+        # window is the wrong thing to hold for this feature twice over: the
+        # game is not the only window that will ever be in front, and the
+        # choice is then restored for good — a clip labelled with the game the
+        # audio came from, showing a file manager, over and over, with no hint
+        # that the saved answer is what is wrong. A screen keeps recording
+        # whatever is on it, which is what "clip what just happened" means.
+        kind = "window" if window else "monitor"
         select = {
-            "types": GLib.Variant("u", 2 if window else 1 | 2),
+            "types": GLib.Variant("u", 2 if window else 1),
             "multiple": GLib.Variant("b", False),
             "cursor_mode": GLib.Variant("u", 2),
             "persist_mode": GLib.Variant("u", 2),
         }
-        if (saved := self._load_token()):
+        if (saved := self._load_token(kind)):
             select["restore_token"] = GLib.Variant("s", saved)
 
         self._call("SelectSources", "(oa{sv})", (self.session,), select)
         res = self._call("Start", "(osa{sv})", (self.session, ""), {})
 
         if res.get("restore_token"):
-            self._save_token(res["restore_token"])
+            self._save_token(res["restore_token"], kind)
 
         streams = res.get("streams") or []
         if not streams:
@@ -685,17 +696,30 @@ class ScreenCastPortal:
         TOKEN_FILE.unlink(missing_ok=True)
 
     @staticmethod
-    def _load_token() -> str | None:
+    def _load_token(kind: str = "monitor") -> str | None:
+        """The saved token, but only if it was made for the same kind of source.
+
+        A token restores the exact thing that was picked, so one saved when
+        windows were on offer restores a window — which is how a clip of a file
+        manager kept coming back after the picker stopped offering windows at
+        all. Tokens written before the kind was recorded carry no `kind` and are
+        therefore ignored: one more picker, once, against a wrong recording that
+        never corrects itself.
+        """
         try:
-            return json.loads(TOKEN_FILE.read_text()).get("restore_token")
+            saved = json.loads(TOKEN_FILE.read_text())
+            if saved.get("kind") != kind:
+                return None
+            return saved.get("restore_token")
         except Exception:
             return None
 
     @staticmethod
-    def _save_token(token: str) -> None:
+    def _save_token(token: str, kind: str = "monitor") -> None:
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            TOKEN_FILE.write_text(json.dumps({"restore_token": token}))
+            TOKEN_FILE.write_text(json.dumps({"restore_token": token,
+                                              "kind": kind}))
         except OSError as exc:
             log.warning("could not persist the screencast token: %s", exc)
 
