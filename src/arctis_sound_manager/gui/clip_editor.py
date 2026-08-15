@@ -202,10 +202,18 @@ class _ChannelMixer:
         except ImportError:                          # pragma: no cover - env dependent
             return False
 
+        from arctis_sound_manager.gui.audio_output import apply_preferred_output
+
         self.release()
         for path in files:
             player = QMediaPlayer(self._parent)
             output = QAudioOutput(self._parent)
+            # Out of the device the user is actually listening on, not the
+            # system default — which on this machine is the headset, because
+            # the headset has to own the default for its channels to see
+            # anything. Someone on Bluetooth earbuds otherwise gets a preview
+            # they cannot hear.
+            apply_preferred_output(output)
             player.setAudioOutput(output)
             player.setSource(QUrl.fromLocalFile(str(path)))
             self._players.append(player)
