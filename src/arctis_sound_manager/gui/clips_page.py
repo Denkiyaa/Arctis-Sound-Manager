@@ -626,11 +626,17 @@ class ClipsPage(QWidget):
     # ── capture control ───────────────────────────────────────────────────────
 
     def _on_toggle(self) -> None:
-        # Pressing Start is the answer to "not asking again on its own".
-        self._auto_start_blocked = False
         if self._capture is None:
+            # Pressing Start is the answer to "not asking again on its own".
+            self._auto_start_blocked = False
             self._start_capture()
         else:
+            # Stop has to mean stopped. The game is still running — that is
+            # usually *why* someone reaches for Stop — so without this the next
+            # poll arms the buffer straight back up and the button reads as
+            # broken. It stays stopped until the game goes or Start is pressed.
+            self._auto_start_blocked = True
+            self._auto_started = False
             self._stop_capture()
 
     def _start_capture(self) -> None:

@@ -250,3 +250,38 @@ def test_a_saved_screen_starts_in_silence(page, monkeypatch):
     page._poll_game()
 
     assert page.started == [True]
+
+
+# ── Stop means stopped ─────────────────────────────────────────────────────────
+
+def test_stopping_by_hand_is_not_undone_by_the_next_poll(page, monkeypatch):
+    """The game is still running — that is usually why someone reaches for
+    Stop. Re-arming the buffer a few seconds later makes the button look
+    broken, and there is no way to win an argument with a timer."""
+    _game(monkeypatch, "GenshinImpact")
+    page._autostart.setChecked(True)
+    page._poll_game()
+    assert page._capture is not None
+
+    page._on_toggle()                     # Stop, by hand, game still running
+    page._poll_game()
+    page._poll_game()
+
+    assert page._capture is None
+    assert page.started == [True]         # armed once, never re-armed
+
+
+def test_the_next_game_still_arms_after_a_manual_stop(page, monkeypatch):
+    """Stop belongs to the session it was pressed in, not to the feature."""
+    _game(monkeypatch, "GenshinImpact")
+    page._autostart.setChecked(True)
+    page._poll_game()
+    page._on_toggle()                     # Stop
+
+    _game(monkeypatch, None)
+    page._poll_game()
+    _game(monkeypatch, "Deadlock")
+    page._poll_game()
+
+    assert page.started == [True, True]
+    assert page._capture is not None

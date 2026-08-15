@@ -19,7 +19,13 @@ _asm_migrate_gui_unit() {
         systemctl --user disable --now arctis-gui.service >/dev/null 2>&1 || true
         rm -f \"\$HOME/.config/systemd/user/arctis-gui.service\"
         systemctl --user daemon-reload >/dev/null 2>&1 || true
-        systemctl --user enable --now app-ArctisManager.service >/dev/null 2>&1 || true
+        systemctl --user enable app-ArctisManager.service >/dev/null 2>&1 || true
+        # Only start one if there is none. A tray the user already has open is
+        # a live single-instance socket: the one we would start hands its
+        # command over and exits, and the command is \"show\" — so the reward
+        # for installing is somebody else's window opening on your desktop.
+        pgrep -u \"\$(id -u)\" -f 'asm-gui' >/dev/null 2>&1 || \
+            systemctl --user start app-ArctisManager.service >/dev/null 2>&1 || true
     " >/dev/null 2>&1 || true
 }
 
