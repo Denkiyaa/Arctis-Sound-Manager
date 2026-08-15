@@ -270,6 +270,16 @@ def _audio_graph(objects: list | None) -> str:
         extra = ''
         wanted = _ROUTING_PROPS if _is_asm_node(name) else ('target.object', 'node.target')
         kept = [f'{k}={props[k]}' for k in wanted if k in props]
+        # Which client owns the node decides whether a link is even allowed.
+        # PipeWire refuses one when the client owning either end cannot see the
+        # other node, which is a check between the two owning clients and not
+        # between the user and the nodes: ports list fine while linking fails
+        # with EPERM (#181). A node with no owner is exempt from that check
+        # entirely, so the presence or absence of this field is itself the
+        # answer, and it is cross-referenced with the client table below.
+        owner = props.get('client.id')
+        if owner is not None:
+            kept.append(f'client.id={owner}')
         if kept:
             app = props.get('application.name')
             label = f'app={app} ' if app and not _is_asm_node(name) else ''
@@ -304,6 +314,39 @@ def _audio_graph(objects: list | None) -> str:
     else:
         out.append('(no links — nothing is connected to anything)')
     return '\n'.join(out)
+
+
+def _pw_clients(objects: list | None) -> str:
+    """PipeWire clients, with the access level each was granted.
+
+    The other half of "why was this link refused". PipeWire decides that from
+    the permissions of the clients owning the two nodes, so the node table
+    alone cannot answer it: this maps the ``client.id`` shown there to what
+    that client was actually allowed.
+
+    ``pipewire.access`` is what module-access assigned (typically "default" on
+    the normal socket, "unrestricted" on the manager one). Any ``pipewire.sec.*``
+    field means the client came in through a security context and is
+    restricted, which on its own explains a refused link (#181).
+    """
+    if objects is None:
+        return '(pw-dump unavailable)'
+    rows = []
+    for obj in objects:
+        if obj.get('type') != 'PipeWire:Interface:Client':
+            continue
+        props = (obj.get('info') or {}).get('props') or {}
+        sec = ' '.join(f'{k}={v}' for k, v in props.items()
+                       if k.startswith('pipewire.sec.'))
+        rows.append(
+            f"{obj.get('id', -1):>6}  "
+            f"access={props.get('pipewire.access', '?'):<14} "
+            f"{props.get('application.process.binary') or props.get('application.name', '?')}"
+            + (f'  [{sec}]' if sec else '')
+        )
+    if not rows:
+        return '(no clients — pw-dump returned none)'
+    return '\n'.join(sorted(rows))
 
 
 def _alsa_pcm_state() -> str:
@@ -512,6 +555,26 @@ def collect_system_info() -> dict:
     # stated, and finding it out cost a round of questions with a user whose
     # setup was perfectly deliberate.
     info['default_sink'] = _run_out(['pactl', 'get-default-sink']) or 'unknown'
+
+    # Sections the CLI dump had and this one did not. Keeping two generators
+    # that drift apart is how #181 ended up with a report that could not answer
+    # the question it was filed about, so the unique halves are shared rather
+    # than reimplemented.
+    #
+    # The settings are the valuable half: whether Spatial Audio is on, which
+    # HRIR, whether the headset is made the default output on connect, the
+    # forced quantum. Every one of those has been asked by hand in a recent
+    # issue. Redaction (city, tokens, e-mail) happens inside _section_settings.
+    #
+    # Imported here rather than at module scope: diagnose imports this module,
+    # so a top-level import would be circular.
+    try:
+        from arctis_sound_manager.diagnose import _section_settings, _section_yamls
+        info['asm_settings'] = _section_settings()
+        info['device_yaml_overrides'] = _section_yamls()
+    except Exception as exc:
+        info['asm_settings'] = f'(could not collect: {exc!r})'
+        info['device_yaml_overrides'] = ''
     info['pw_service_status'] = ' '.join(
         f"{unit}={_run_out(['systemctl', '--user', 'is-active', unit]) or 'unknown'}"
         for unit in ('pipewire', 'pipewire-pulse')
@@ -522,6 +585,7 @@ def collect_system_info() -> dict:
     _pw_objs = _pw_objects()
     info['pw_arctis_nodes'] = _arctis_pw_nodes(_pw_objs)
     info['pw_audio_graph'] = _audio_graph(_pw_objs)
+    info['pw_clients'] = _pw_clients(_pw_objs)
     info['alsa_pcm_state'] = _alsa_pcm_state()
     # Which nodes are actually processing audio, as opposed to merely being
     # connected. Also carries the xrun counters (#183).
@@ -789,6 +853,16 @@ def format_bug_report(traceback_str: Optional[str] = None) -> str:
         info.get('pw_audio_graph', '') or '(not collected)',
         '```',
         '',
+        '## PipeWire clients and their access level',
+        '<!-- Cross-reference with client.id in the graph above. A link is',
+        '     refused when the client owning either end cannot see the other',
+        '     node, so this is where a refused link is explained. Any',
+        '     pipewire.sec.* field means a security context is restricting',
+        '     that client. -->',
+        '```',
+        info.get('pw_clients', '') or '(not collected)',
+        '```',
+        '',
         '## Nodes actually processing audio (`pw-top`)',
         '<!-- Connected is not the same as running. The ERR column is the xrun',
         '     counter: sustained xruns on the surround chain are audible as',
@@ -804,7 +878,27 @@ def format_bug_report(traceback_str: Optional[str] = None) -> str:
         info.get('alsa_pcm_state', '') or '(not collected)',
         '```',
         '',
+        '## ASM settings (redacted)',
+        '<!-- Spatial Audio, HRIR choice, "make the headset the default output",',
+        '     forced quantum: each of these has had to be asked for by hand in a',
+        '     recent issue. City, tokens and e-mail are stripped. -->',
+        '```json',
+        info.get('asm_settings', '') or '(not collected)',
+        '```',
+        '',
     ]
+
+    yaml_overrides = info.get('device_yaml_overrides', '')
+    if yaml_overrides:
+        lines += [
+            '## User device YAML overrides',
+            '<!-- A stale copy here shadows the packaged profile and can hide a',
+            "     product id added by a later release (#146). Usually empty. -->",
+            '```',
+            yaml_overrides,
+            '```',
+            '',
+        ]
 
     wpctl = info.get('wpctl', '')
     if wpctl:

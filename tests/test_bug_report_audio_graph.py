@@ -16,6 +16,7 @@ from arctis_sound_manager.bug_reporter import (
     _arctis_pw_nodes,
     _audio_graph,
     _is_asm_node,
+    _pw_clients,
 )
 
 
@@ -164,3 +165,56 @@ def test_alsa_pcm_state_never_raises():
     """Runs on machines with no /proc/asound at all (containers, CI)."""
     result = _alsa_pcm_state()
     assert isinstance(result, str) and result
+
+
+# ── link permissions (#181) ──────────────────────────────────────────────────
+
+def _client(cid: int, access: str, binary: str, **extra) -> dict:
+    return {
+        'id': cid,
+        'type': 'PipeWire:Interface:Client',
+        'info': {'props': {'pipewire.access': access,
+                           'application.process.binary': binary, **extra}},
+    }
+
+
+def test_node_owner_is_reported():
+    """PipeWire refuses a link when the client owning either end cannot see
+    the other node, so the owner is half the answer to "why was this refused"
+    (#181). A node with no owner is exempt from that check entirely, which
+    makes the field's absence meaningful too."""
+    graph = _graph() + [
+        _node(300, 'effect_input.sonar-chat-eq', 'Audio/Sink/Internal', 'idle',
+              **{'client.id': '155'}),
+    ]
+    line = next(l for l in _audio_graph(graph).splitlines()
+                if 'effect_input.sonar-chat-eq' in l)
+    assert 'client.id=155' in line
+    # The daemon-owned node in _graph() has none, and must not grow a fake one.
+    other = next(l for l in _audio_graph(graph).splitlines()
+                 if 'effect_input.sonar-game-eq' in l)
+    assert 'client.id' not in other
+
+
+def test_client_table_shows_access_level():
+    """The other half: what each owning client was actually granted."""
+    text = _pw_clients([
+        _client(112, 'default', 'pw-loopback'),
+        _client(155, 'unrestricted', 'pipewire'),
+    ])
+    assert 'access=default' in text and 'pw-loopback' in text
+    assert 'access=unrestricted' in text
+
+
+def test_security_context_is_surfaced():
+    """A client behind a security context is restricted, which on its own
+    explains a refused link. It must not be silently dropped."""
+    text = _pw_clients([
+        _client(200, 'flatpak', 'someapp', **{'pipewire.sec.engine': 'org.flatpak'}),
+    ])
+    assert 'pipewire.sec.engine=org.flatpak' in text
+
+
+def test_client_table_degrades_without_a_dump():
+    assert 'unavailable' in _pw_clients(None)
+    assert 'no clients' in _pw_clients([])
