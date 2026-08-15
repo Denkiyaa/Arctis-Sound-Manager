@@ -765,6 +765,22 @@ class ClipsPage(QWidget):
         if game:
             self._game_gone_since = None
             if self._capture is None and not self._auto_start_blocked:
+                # Without a saved source the portal has to ask, and asking is
+                # not something this is allowed to do on its own: the picker
+                # would land on top of the game the user is playing, for a
+                # question they never opened this page to answer. Say what is
+                # needed and wait to be asked.
+                from arctis_sound_manager.clip_capture import has_saved_source
+                if not has_saved_source():
+                    self._auto_start_blocked = True
+                    logger.info("clips: '%s' is playing but no screen has been "
+                                "picked yet — not opening the portal picker", game)
+                    self._status.setText(_tr(
+                        "clips_pick_source_first",
+                        "A game is running, but no screen has been chosen to "
+                        "record yet. Press Start once to pick one — after that "
+                        "it starts on its own."))
+                    return
                 logger.info("clips: '%s' is playing — starting the capture", game)
                 self._start_capture()
                 if self._capture is not None:

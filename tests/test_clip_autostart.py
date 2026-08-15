@@ -41,6 +41,12 @@ def page(tmp_path, monkeypatch):
     monkeypatch.undo()
     monkeypatch.setattr(clips_page, "CLIP_DIR", tmp_path)
 
+    # A screen has been picked at some point, which is the ordinary state and
+    # the only one where an automatic start is allowed to happen at all. The
+    # tests about *not* having one say so themselves.
+    monkeypatch.setattr("arctis_sound_manager.clip_capture.has_saved_source",
+                        lambda: True)
+
     started: list[bool] = []
     stopped: list[bool] = []
 
@@ -212,3 +218,35 @@ def test_pressing_start_answers_the_question(page, monkeypatch):
 
     assert page._auto_start_blocked is False
     assert page._capture is not None
+
+
+# ── the picker is never opened uninvited ───────────────────────────────────────
+
+def _saved_source(monkeypatch, exists: bool):
+    monkeypatch.setattr("arctis_sound_manager.clip_capture.has_saved_source",
+                        lambda: exists)
+
+
+def test_no_saved_screen_means_no_picker(page, monkeypatch):
+    """The portal must ask when nothing is saved, so the automatic start does
+    not go there at all — the dialog would land on top of the game, for a
+    question the user never opened this page to answer."""
+    _game(monkeypatch, "GenshinImpact")
+    _saved_source(monkeypatch, False)
+    page._autostart.setChecked(True)
+
+    page._poll_game()
+    page._poll_game()
+
+    assert page.started == []
+    assert "Press Start" in page._status.text()
+
+
+def test_a_saved_screen_starts_in_silence(page, monkeypatch):
+    _game(monkeypatch, "GenshinImpact")
+    _saved_source(monkeypatch, True)
+    page._autostart.setChecked(True)
+
+    page._poll_game()
+
+    assert page.started == [True]

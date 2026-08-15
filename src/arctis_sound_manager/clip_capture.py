@@ -49,6 +49,21 @@ log = logging.getLogger(__name__)
 
 CONFIG_DIR = Path.home() / ".config" / "arctis_manager"
 TOKEN_FILE = CONFIG_DIR / "clip_screencast_token.json"
+
+
+def has_saved_source() -> bool:
+    """Whether a screen has been picked already and the portal can restore it.
+
+    The difference between a capture that starts in silence and one that throws
+    a system dialog in front of whatever is on screen. Without a token the
+    portal *must* ask — that is the Wayland bargain — so anything that starts a
+    capture on its own has to check this first and stay out of the way when the
+    answer is no. Only a person pressing Start is allowed to summon the picker.
+    """
+    try:
+        return bool(json.loads(TOKEN_FILE.read_text()).get("restore_token"))
+    except Exception:  # noqa: BLE001 — missing, unreadable or malformed: no token
+        return False
 CLIP_DIR = Path.home() / "Videos" / "ASM Clips"
 
 PORTAL = "org.freedesktop.portal.Desktop"
