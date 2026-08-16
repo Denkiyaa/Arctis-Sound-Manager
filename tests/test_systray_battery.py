@@ -80,3 +80,83 @@ def test_handles_empty_and_malformed_input():
     assert _extract({}) is None
     assert _extract("not a dict") is None
     assert _extract({"headset": None}) is None
+
+
+# ── when the menu is rebuilt ──────────────────────────────────────────────────
+
+def _menu_stub(visible: bool = False):
+    import types
+
+    rebuilds: list[int] = []
+    stub = types.SimpleNamespace(
+        menu=types.SimpleNamespace(isVisible=lambda: visible),
+        menu_setup=lambda: rebuilds.append(1),
+        _menu_open=False,
+        _menu_stale=False,
+        do_polling=False,
+        last_device_status={},
+        _update_tray_icon=lambda _status: None,
+    )
+    # on_new_status goes through this, so the stub needs it bound to itself.
+    from arctis_sound_manager.gui.systray_app import QSystrayApp
+
+    stub._rebuild_menu_if_stale = lambda: QSystrayApp._rebuild_menu_if_stale(stub)
+    return stub, rebuilds
+
+
+def test_opening_the_menu_does_not_rebuild_it():
+    """aboutToShow is when KDE exports the menu over DBusMenu. Clearing it
+    there leaves the exporter with actions it never gave ids to — the journal
+    fills with "fillLayoutItem: No id for action" and the entries Plasma draws
+    map to nothing, so clicking them does nothing."""
+    from arctis_sound_manager.gui.systray_app import QSystrayApp
+
+    stub, rebuilds = _menu_stub()
+
+    QSystrayApp.start_polling(stub)
+
+    assert rebuilds == []
+    assert stub._menu_open and stub.do_polling
+
+
+def test_a_status_arriving_with_the_menu_closed_is_drawn_at_once():
+    from arctis_sound_manager.gui.systray_app import QSystrayApp
+
+    stub, rebuilds = _menu_stub()
+
+    QSystrayApp.on_new_status(stub, {"dev": {}})
+
+    assert rebuilds == [1]
+    assert stub._menu_stale is False
+
+
+def test_a_status_arriving_with_the_menu_open_is_held_not_dropped():
+    """Dropping it left the menu showing the previous status until some later
+    poll happened to differ — for a headset that just connected, never."""
+    from arctis_sound_manager.gui.systray_app import QSystrayApp
+
+    stub, rebuilds = _menu_stub()
+    QSystrayApp.start_polling(stub)          # menu open
+
+    QSystrayApp.on_new_status(stub, {"dev": {}})
+
+    assert rebuilds == []
+    assert stub._menu_stale is True
+
+    stub._menu_open = False
+    QSystrayApp._rebuild_menu_if_stale(stub)
+
+    assert rebuilds == [1]
+
+
+def test_a_menu_qt_is_showing_itself_is_left_alone():
+    """The plain-Qt popup has a real surface; clearing it under queued paint
+    events is a use-after-free in QWaylandWindow."""
+    from arctis_sound_manager.gui.systray_app import QSystrayApp
+
+    stub, rebuilds = _menu_stub(visible=True)
+    stub._menu_stale = True
+
+    QSystrayApp._rebuild_menu_if_stale(stub)
+
+    assert rebuilds == []

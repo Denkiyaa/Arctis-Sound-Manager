@@ -172,6 +172,10 @@ class QSystrayApp(QBaseDesktopApp):
         self._maintenance_workers: list = []
 
         self.menu = QMenu()
+        # Open per the aboutToShow/aboutToHide pair, and whether a status
+        # arrived while it was open (see _rebuild_menu_if_stale).
+        self._menu_open = False
+        self._menu_stale = False
         # Connect signals once on the persistent menu object
         self.menu.aboutToShow.connect(self.start_polling)
         self.menu.aboutToHide.connect(self.stop_polling)
@@ -189,14 +193,45 @@ class QSystrayApp(QBaseDesktopApp):
         self.dbus_poll_thread.start()
 
     def start_polling(self):
-        # Rebuild the menu NOW, before the popup window is created by Qt.
-        # This avoids calling menu.clear() while the popup Wayland surface is
-        # already alive (which causes a use-after-free SIGSEGV in Qt Wayland).
-        self.menu_setup()
+        # Deliberately no menu_setup() here. This runs from aboutToShow, which
+        # under KDE is the moment the menu is being exported over DBusMenu:
+        # clear()-ing it there makes the exporter serialise actions it never
+        # assigned ids to — "fillLayoutItem: No id for action" in the journal,
+        # thirteen of them in one session — and the entries Plasma then draws
+        # map back to nothing, so clicking them does nothing at all.
+        #
+        # Nothing goes stale by not rebuilding here: menu_setup() renders
+        # last_device_status, which only on_new_status() writes, so this
+        # rebuild was already drawing the previous poll's data.
+        self._menu_open = True
         self.do_polling = True
 
     def stop_polling(self):
+        self._menu_open = False
         self.do_polling = False
+        # Draw whatever arrived while it was open, once it is really gone.
+        if self._menu_stale:
+            QTimer.singleShot(200, self._rebuild_menu_if_stale)
+
+    def _rebuild_menu_if_stale(self) -> None:
+        """Rebuild the menu, but only while it is closed.
+
+        Two failures meet here. Clearing a menu whose popup is on screen frees
+        a live Wayland surface under queued paint events — a use-after-free in
+        QWaylandWindow — which is why the rebuild used to sit in aboutToShow.
+        But there it collided with KDE's DBusMenu export instead (see
+        start_polling).
+
+        Open state comes from the aboutToShow/aboutToHide pair, not from
+        isVisible(): under KDE the menu is exported and drawn by Plasma, so the
+        QMenu itself is never shown and isVisible() reads False the entire time
+        it is on screen. isVisible() is still consulted for the plain-Qt popup,
+        where the surface is real.
+        """
+        if self._menu_open or self.menu.isVisible():
+            return
+        self._menu_stale = False
+        self.menu_setup()
 
     def poll_dbus_thread(self):
         last_bg = 0.0
@@ -248,11 +283,14 @@ class QSystrayApp(QBaseDesktopApp):
 
         self.last_device_status = status
         self._update_tray_icon(status)
-        # Do NOT call menu_setup() here: the menu popup window may already be
-        # visible (Wayland surface exists) and clear()-ing it while paint events
-        # are queued causes a use-after-free SIGSEGV in QWaylandWindow.
-        # menu_setup() is called in start_polling() instead, just before Qt
-        # creates the popup surface.
+        # The menu draws this status, so it needs rebuilding — but only when it
+        # is closed, and _rebuild_menu_if_stale is what knows the difference. An
+        # update that lands with the menu open is held rather than dropped:
+        # dropping it left the menu showing the old status until some *later*
+        # poll happened to differ, which for a headset that just connected can
+        # be never.
+        self._menu_stale = True
+        self._rebuild_menu_if_stale()
 
     def _on_settings_file_changed(self, path: str) -> None:
         # Settings are written atomically (temp + rename), which drops the
@@ -754,8 +792,23 @@ class QSystrayApp(QBaseDesktopApp):
             QTimer.singleShot(0, self.open_main_window)
 
     def open_main_window(self):
-        if not hasattr(self, '_main_app'):
-            self._main_app = QMainApp(self.app, self.logger.level)
+        """Show the main window, building it the first time.
+
+        The guard is not `hasattr` alone, because building it is slow — pages,
+        D-Bus, stylesheet — and Qt goes on processing events while it happens.
+        A second click therefore arrives *inside* the first build, finds
+        `_main_app` still unset, and builds another one. Clicking a tray icon
+        that has not responded yet is what everybody does, so the app answered
+        ten impatient clicks with ten windows.
+        """
+        if getattr(self, '_main_app', None) is None:
+            if getattr(self, '_building_main_app', False):
+                return       # already on its way up; this click is the same one
+            self._building_main_app = True
+            try:
+                self._main_app = QMainApp(self.app, self.logger.level)
+            finally:
+                self._building_main_app = False
 
         self._main_app.main_window.show()
         self._main_app.main_window.raise_()
