@@ -58,32 +58,44 @@ _LINK_DENIED = "not permitted"
 _perm_repair_attempted: set[tuple[int, int]] = set()
 
 
-def _node_owner(node_id: int, dump: list | None = None) -> str | None:
-    """The client that owns *node_id*, or None when the daemon owns it."""
+# Node names ASM creates itself. Only the clients behind these are ever
+# granted anything: raising permissions is not something to do on a client we
+# do not own, even within the user's own session.
+_ASM_OWNED_NODES = ("Arctis_", "effect_input.sonar-", "effect_output.sonar-",
+                    "effect_input.virtual-surround", "effect_output.virtual-surround")
+
+
+def _node_owner(node_id: int, dump: list | None = None) -> tuple[str | None, str]:
+    """(owning client id, node name) for *node_id*.
+
+    The client is None when the daemon owns the node, which also means the
+    permission check does not apply to it.
+    """
     data = dump if dump is not None else _pw_dump()
     for obj in data:
         if obj.get("type") != "PipeWire:Interface:Node" or obj.get("id") != node_id:
             continue
         props = (obj.get("info") or {}).get("props") or {}
         owner = props.get("client.id")
-        return str(owner) if owner is not None else None
-    return None
+        return (str(owner) if owner is not None else None,
+                props.get("node.name", ""))
+    return None, ""
 
 
-def _port_owner(port_id: int, dump: list | None = None) -> str | None:
-    """The client owning the node a port belongs to."""
+def _port_owner(port_id: int, dump: list | None = None) -> tuple[str | None, str]:
+    """(owning client id, node name) for the node a port belongs to."""
     data = dump if dump is not None else _pw_dump()
     for obj in data:
         if obj.get("type") != "PipeWire:Interface:Port" or obj.get("id") != port_id:
             continue
         node_id = ((obj.get("info") or {}).get("props") or {}).get("node.id")
         if node_id is None:
-            return None
+            return None, ""
         try:
             return _node_owner(int(node_id), data)
         except (TypeError, ValueError):
-            return None
-    return None
+            return None, ""
+    return None, ""
 
 
 def grant_link_permissions(out_port: int, in_port: int) -> bool:
@@ -114,11 +126,23 @@ def grant_link_permissions(out_port: int, in_port: int) -> bool:
     if shutil.which("pw-cli") is None:
         return False
     dump = _pw_dump()
-    owners = {o for o in (_port_owner(out_port, dump), _port_owner(in_port, dump))
-              if o is not None}
+
+    # Only ever raise permissions for clients behind nodes ASM created. The
+    # other end of a link is often the physical sink, owned by WirePlumber:
+    # granting it anything would be an elevation on a client we do not own,
+    # which is not ours to do even inside the user's own session.
+    owners: set[str] = set()
+    for port in (out_port, in_port):
+        owner, node_name = _port_owner(port, dump)
+        if owner is None:
+            # Daemon-owned: exempt from the check, nothing to grant.
+            continue
+        if not node_name.startswith(_ASM_OWNED_NODES):
+            logger.debug("not raising permissions for client %s (owns %r, not ours)",
+                         owner, node_name)
+            continue
+        owners.add(owner)
     if not owners:
-        # Both ends are daemon-owned, which the permission check exempts, so
-        # the refusal came from somewhere else and this would not help.
         return False
 
     granted = False

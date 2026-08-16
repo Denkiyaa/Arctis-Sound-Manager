@@ -68,6 +68,36 @@ def test_grants_only_the_two_clients_at_the_ends():
     assert all(c[-1] == 'rwxml' for c in calls)
 
 
+def test_third_party_clients_are_never_granted_anything():
+    """The far end of a link is often the physical sink, owned by
+    WirePlumber. Raising permissions there would be an elevation on a client
+    ASM does not own — not ours to do, even inside the user's own session.
+    Only clients behind nodes ASM created are ever touched.
+    """
+    dump = _dump() + [
+        {'id': 40, 'type': 'PipeWire:Interface:Port',
+         'info': {'props': {'node.id': 400}}},
+        {'id': 400, 'type': 'PipeWire:Interface:Node',
+         'info': {'props': {'node.name': 'alsa_output.usb-SteelSeries_Arctis_7_-00',
+                            'client.id': '56'}}},
+    ]
+    calls: list[list[str]] = []
+
+    def run(argv, **_k):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+
+    with patch.object(pw_utils, '_pw_dump', lambda: dump), \
+         patch.object(pw_utils, '_pw_run', run), \
+         patch.object(pw_utils.shutil, 'which', lambda _: '/usr/bin/pw-cli'):
+        # Our node at one end, the device at the other.
+        assert pw_utils.grant_link_permissions(10, 40) is True
+
+    targets = [c[2] for c in calls if c[:2] == ['pw-cli', 'permissions']]
+    assert targets == ['232'], 'only the ASM-owned end may be granted'
+    assert '56' not in targets, "WirePlumber's client must be left alone"
+
+
 def test_daemon_owned_ends_are_left_alone():
     """A node with no owning client is exempt from the check already, so a
     refusal there came from somewhere else and this must not pretend to fix

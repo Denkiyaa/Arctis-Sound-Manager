@@ -346,9 +346,15 @@ def _section_audio_graph() -> str:
     the two cannot drift again.
     """
     from arctis_sound_manager.bug_reporter import (
-        _alsa_pcm_state, _audio_graph, _pw_objects,
+        _alsa_pcm_state, _audio_graph, _pw_clients, _pw_objects,
     )
-    parts = [_audio_graph(_pw_objects())]
+    objects = _pw_objects()
+    parts = [_audio_graph(objects)]
+
+    # Which client owns which node, and what each was granted. PipeWire
+    # refuses a link when the client owning one end cannot see the other, so
+    # without this the graph shows a missing link and no reason for it (#181).
+    parts.append(f'\n-- PipeWire clients and their access level --\n{_pw_clients(objects)}')
 
     default_sink = _run(['pactl', 'get-default-sink'])
     parts.append(f'\n-- default output --\n{default_sink}')
