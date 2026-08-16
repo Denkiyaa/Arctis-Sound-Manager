@@ -325,11 +325,11 @@ def main() -> int:
     bug = home / f"asm-report-{args.variant}-{stamp}.txt"
     if shutil.which("asm-cli"):
         print("\nCollecting ASM's full report ...")
-        res = as_user(["asm-cli", "bug-report", "--output", str(bug)], timeout=180)
+        res = as_user(["asm-cli", "diagnose", "--output", str(bug)], timeout=180)
         if res.returncode == 0 and bug.exists():
             print(f"Saved to {bug}")
         else:
-            print("  (asm-cli bug-report did not complete; the file above is "
+            print("  (asm-cli diagnose did not complete; the file above is "
                   "still worth attaching)")
             bug = None
     else:
