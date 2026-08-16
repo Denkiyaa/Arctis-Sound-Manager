@@ -239,13 +239,13 @@ def _token_file(monkeypatch, tmp_path, payload):
     return path
 
 
-def test_a_window_token_is_not_restored_for_a_screen(monkeypatch, tmp_path):
-    """The reported bug, in one line: a token restores the exact source it was
-    made for, so a window saved when windows were on offer kept coming back as
-    a clip of a file manager labelled with the game the audio came from."""
+def test_a_window_the_user_picked_is_restored(monkeypatch, tmp_path):
+    """Most clips are of a game, and a game is a window. A deliberate choice is
+    exactly what the token exists to replay — asking again on every start is
+    the thing it prevents."""
     _token_file(monkeypatch, tmp_path, {"restore_token": "abc", "kind": "window"})
 
-    assert ScreenCastPortal._load_token("monitor") is None
+    assert ScreenCastPortal._load_token() == "abc"
 
 
 def test_a_token_from_before_the_kind_was_recorded_is_ignored(monkeypatch, tmp_path):
@@ -254,13 +254,13 @@ def test_a_token_from_before_the_kind_was_recorded_is_ignored(monkeypatch, tmp_p
     corrected without asking."""
     _token_file(monkeypatch, tmp_path, {"restore_token": "abc"})
 
-    assert ScreenCastPortal._load_token("monitor") is None
+    assert ScreenCastPortal._load_token() is None
 
 
 def test_a_screen_token_is_restored(monkeypatch, tmp_path):
-    _token_file(monkeypatch, tmp_path, {"restore_token": "abc", "kind": "monitor"})
+    _token_file(monkeypatch, tmp_path, {"restore_token": "abc", "kind": "any"})
 
-    assert ScreenCastPortal._load_token("monitor") == "abc"
+    assert ScreenCastPortal._load_token() == "abc"
 
 
 def test_saving_records_which_kind_it_was(monkeypatch, tmp_path):
@@ -268,20 +268,20 @@ def test_saving_records_which_kind_it_was(monkeypatch, tmp_path):
 
     path = _token_file(monkeypatch, tmp_path, None)
 
-    ScreenCastPortal._save_token("abc", "monitor")
+    ScreenCastPortal._save_token("abc", "any")
 
     assert json.loads(path.read_text()) == {"restore_token": "abc",
-                                            "kind": "monitor"}
+                                            "kind": "any"}
 
 
 def test_has_saved_source_follows_the_same_rule(monkeypatch, tmp_path):
     from arctis_sound_manager.clip_capture import has_saved_source
 
-    _token_file(monkeypatch, tmp_path, {"restore_token": "abc", "kind": "window"})
-    assert has_saved_source("monitor") is False
+    _token_file(monkeypatch, tmp_path, {"restore_token": "abc"})
+    assert has_saved_source() is False
 
-    _token_file(monkeypatch, tmp_path, {"restore_token": "abc", "kind": "monitor"})
-    assert has_saved_source("monitor") is True
+    _token_file(monkeypatch, tmp_path, {"restore_token": "abc", "kind": "any"})
+    assert has_saved_source() is True
 
 
 # ── what the picker is allowed to offer ────────────────────────────────────────
@@ -341,13 +341,14 @@ def _opened(monkeypatch, tmp_path, kind_arg):
     return seen
 
 
-def test_the_picker_offers_screens_only(monkeypatch, tmp_path):
-    """1 is MONITOR. Offering 1|2 let a window be chosen, and the clip that
-    came out was a file manager — recorded faithfully, for weeks, because the
-    choice was then restored every time."""
+def test_the_picker_offers_screens_and_windows(monkeypatch, tmp_path):
+    """1|2 is MONITOR|WINDOW. Most clips are of a game, and a game is a window,
+    so taking windows off the list would be protecting people from the feature.
+    What the file-manager clips needed was a token that says what it was made
+    for and a status line that admits when the source is a remembered one."""
     asked = _opened(monkeypatch, tmp_path, {})
 
-    assert asked["types"].value == 1
+    assert asked["types"].value == 3
 
 
 def test_asking_for_a_window_still_asks_for_a_window(monkeypatch, tmp_path):
@@ -363,4 +364,4 @@ def test_the_token_is_saved_under_the_kind_that_was_asked_for(monkeypatch, tmp_p
 
     _opened(monkeypatch, tmp_path, {})
 
-    assert json.loads(clip_capture.TOKEN_FILE.read_text())["kind"] == "monitor"
+    assert json.loads(clip_capture.TOKEN_FILE.read_text())["kind"] == "any"

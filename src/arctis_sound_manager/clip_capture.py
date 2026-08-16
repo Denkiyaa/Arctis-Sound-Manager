@@ -51,7 +51,7 @@ CONFIG_DIR = Path.home() / ".config" / "arctis_manager"
 TOKEN_FILE = CONFIG_DIR / "clip_screencast_token.json"
 
 
-def has_saved_source(kind: str = "monitor") -> bool:
+def has_saved_source() -> bool:
     """Whether a screen has been picked already and the portal can restore it.
 
     The difference between a capture that starts in silence and one that throws
@@ -62,11 +62,13 @@ def has_saved_source(kind: str = "monitor") -> bool:
     """
     try:
         saved = json.loads(TOKEN_FILE.read_text())
-        # Same rule as _load_token: a token for another kind of source is not
-        # one the portal can restore for this one.
-        return saved.get("kind") == kind and bool(saved.get("restore_token"))
+        # Same rule as _load_token: a token that does not say what it was made
+        # for is not one to restore behind the user's back.
+        return bool(saved.get("kind")) and bool(saved.get("restore_token"))
     except Exception:  # noqa: BLE001 — missing, unreadable or malformed: no token
         return False
+
+
 CLIP_DIR = Path.home() / "Videos" / "ASM Clips"
 
 PORTAL = "org.freedesktop.portal.Desktop"
@@ -562,6 +564,10 @@ class ScreenCastPortal:
         self.unique = self.bus.get_unique_name()[1:].replace(".", "_")
         self.session: str | None = None
         self.closed = False
+        # Whether this session replayed a saved source rather than asking. The
+        # page says so, because a picture nobody chose *today* is the thing
+        # that went unnoticed for weeks.
+        self.restored = False
         self._result: tuple[int, dict] | None = None
         self._token = 0
         # Kept so close() can drop it: a subscription outlives the session it
@@ -618,22 +624,27 @@ class ScreenCastPortal:
             None, Gio.DBusSignalFlags.NONE,
             lambda *a: setattr(self, "closed", True))
 
-        # A screen, not a window. Offering both let a window be picked, and a
-        # window is the wrong thing to hold for this feature twice over: the
-        # game is not the only window that will ever be in front, and the
-        # choice is then restored for good — a clip labelled with the game the
-        # audio came from, showing a file manager, over and over, with no hint
-        # that the saved answer is what is wrong. A screen keeps recording
-        # whatever is on it, which is what "clip what just happened" means.
-        kind = "window" if window else "monitor"
+        # Screens *and* windows. A window is what most people are actually
+        # after — this records games, and a game is a window — so taking that
+        # away to protect the choice would be protecting them from the feature.
+        #
+        # What went wrong was never that a window could be picked. It was that
+        # a token written before the kind was recorded got restored silently
+        # and for good: a clip labelled with the game the audio came from,
+        # showing a file manager, over and over, with nothing on screen tying
+        # the picture to a choice made weeks earlier. Tokens now carry what
+        # they were made for, the ones that do not are ignored, and the status
+        # line says when a source is being restored rather than picked.
+        kind = "window" if window else "any"
         select = {
-            "types": GLib.Variant("u", 2 if window else 1),
+            "types": GLib.Variant("u", 2 if window else 1 | 2),
             "multiple": GLib.Variant("b", False),
             "cursor_mode": GLib.Variant("u", 2),
             "persist_mode": GLib.Variant("u", 2),
         }
-        if (saved := self._load_token(kind)):
+        if (saved := self._load_token()):
             select["restore_token"] = GLib.Variant("s", saved)
+            self.restored = True
 
         self._call("SelectSources", "(oa{sv})", (self.session,), select)
         res = self._call("Start", "(osa{sv})", (self.session, ""), {})
@@ -696,19 +707,20 @@ class ScreenCastPortal:
         TOKEN_FILE.unlink(missing_ok=True)
 
     @staticmethod
-    def _load_token(kind: str = "monitor") -> str | None:
-        """The saved token, but only if it was made for the same kind of source.
+    def _load_token() -> str | None:
+        """The saved source, if it is one this version wrote.
 
-        A token restores the exact thing that was picked, so one saved when
-        windows were on offer restores a window — which is how a clip of a file
-        manager kept coming back after the picker stopped offering windows at
-        all. Tokens written before the kind was recorded carry no `kind` and are
-        therefore ignored: one more picker, once, against a wrong recording that
-        never corrects itself.
+        A token restores exactly what was picked — a screen or a window — and
+        that is wanted: the choice was deliberate and repeating the picker on
+        every start is the thing this exists to avoid. What is not wanted is
+        restoring a choice nobody now remembers making. Tokens written before
+        the kind was recorded are ignored for that reason: it costs one picker,
+        once, against a recording of the wrong thing that never corrects
+        itself.
         """
         try:
             saved = json.loads(TOKEN_FILE.read_text())
-            if saved.get("kind") != kind:
+            if not saved.get("kind"):
                 return None
             return saved.get("restore_token")
         except Exception:

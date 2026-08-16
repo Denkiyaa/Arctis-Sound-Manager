@@ -783,9 +783,9 @@ class ClipsPage(QWidget):
                                 "picked yet — not opening the portal picker", game)
                     self._status.setText(_tr(
                         "clips_pick_source_first",
-                        "A game is running, but no screen has been chosen to "
-                        "record yet. Press Start once to pick one — after that "
-                        "it starts on its own."))
+                        "A game is running, but nothing has been chosen to "
+                        "record yet. Press Start once to pick a screen or a "
+                        "window — after that it starts on its own."))
                     return
                 logger.info("clips: '%s' is playing — starting the capture", game)
                 self._start_capture()
@@ -1247,6 +1247,15 @@ class ClipsPage(QWidget):
         tracks = [name for name, _ in getattr(self._capture, "audio_tracks", [])]
         if tracks:
             parts.append(_tr("clips_tracks", "Tracks:") + " " + ", ".join(tracks))
+
+        # Say when the picture is a remembered answer rather than one given
+        # today. Wayland never tells us *what* the source is, so this is the
+        # nearest honest thing — and its absence is what let a clip of a file
+        # manager come back for weeks, each one labelled with the game the
+        # audio was carrying.
+        if getattr(getattr(self._capture, "portal", None), "restored", False):
+            parts.append(_tr("clips_source_restored",
+                             "source: the one picked before (Change… to re-pick)"))
         self._status.setText("    ".join(parts))
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
