@@ -159,15 +159,19 @@ def test_show_hidden_restores_every_dismissed_app():
 # ── the 500 ms poll must not rebuild what has not changed ─────────────────────
 
 class _FakeCard:
+    """Stands in for AudioCard: the row, and the signature it remembers."""
+
     _accent = "#333"
 
     def __init__(self):
         self.cleared = 0
         self.tags: list[tuple] = []
+        self._app_sig = None
 
     def clear_apps(self):
         self.cleared += 1
         self.tags = []
+        self._app_sig = None
 
     def add_app_tag(self, name, si_index, pid, bg_color=""):
         self.tags.append((name, si_index, pid))

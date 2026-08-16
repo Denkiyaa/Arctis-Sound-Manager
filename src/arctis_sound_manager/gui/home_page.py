@@ -258,6 +258,9 @@ class AudioCard(QWidget):
 
         self._apps_area = QVBoxLayout()
         self._apps_area.setSpacing(4)
+        # What the application row currently shows, so a poll that would draw
+        # the same thing can leave it alone. None means "nothing drawn yet".
+        self._app_sig: tuple | None = None
         apps_layout.addLayout(self._apps_area)
         apps_layout.addStretch(1)
 
@@ -389,6 +392,7 @@ class AudioCard(QWidget):
         self._apps_area.addWidget(tag)
 
     def clear_apps(self):
+        self._app_sig = None
         while self._apps_area.count():
             item = self._apps_area.takeAt(0)
             if item.widget():
@@ -973,6 +977,9 @@ class HomePage(QWidget):
 
         self._unassigned_expanded = True
         self._hidden_apps: set[str] = _load_hidden_apps()
+        # The row the "other applications" list is currently showing, so a
+        # poll that would draw the same one can leave it alone.
+        self._unassigned_sig: tuple | None = None
         self._unassigned_wrap.setVisible(False)
         self._style_unassigned()
         root.addWidget(self._unassigned_wrap)
@@ -1735,7 +1742,7 @@ class HomePage(QWidget):
         row that is already there, and left alone otherwise.
         """
         if not sinks:
-            if getattr(card, "_app_sig", None) != ():
+            if card._app_sig != ():
                 card.clear_apps()
                 card._app_sig = ()
             return
@@ -1756,13 +1763,13 @@ class HomePage(QWidget):
                          int(si.proplist.get("application.process.id", 0))))
 
         signature = tuple(rows)
-        if getattr(card, "_app_sig", None) == signature:
+        if card._app_sig == signature:
             return
-        card._app_sig = signature
 
         card.clear_apps()
         for app_name, si_index, pid in rows:
             card.add_app_tag(app_name, si_index, pid, bg_color=card._accent)
+        card._app_sig = signature
 
     def _style_unassigned(self) -> None:
         """Header styling, kept flat and quiet: this is a list, not an alert."""
@@ -1874,7 +1881,7 @@ class HomePage(QWidget):
         # whatever they are doing on top of it.
         signature = tuple((r["key"], r["label"], r["where"], r["si_index"], r["pid"])
                           for r in rows)
-        if signature == getattr(self, "_unassigned_sig", None):
+        if signature == self._unassigned_sig:
             return
         self._unassigned_sig = signature
 
