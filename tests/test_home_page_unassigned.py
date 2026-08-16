@@ -154,3 +154,71 @@ def test_show_hidden_restores_every_dismissed_app():
     with patch("arctis_sound_manager.gui.home_page._save_hidden_apps"):
         page._on_unhide_all()
     assert page._hidden_apps == set()
+
+
+# ── the 500 ms poll must not rebuild what has not changed ─────────────────────
+
+class _FakeCard:
+    _accent = "#333"
+
+    def __init__(self):
+        self.cleared = 0
+        self.tags: list[tuple] = []
+
+    def clear_apps(self):
+        self.cleared += 1
+        self.tags = []
+
+    def add_app_tag(self, name, si_index, pid, bg_color=""):
+        self.tags.append((name, si_index, pid))
+
+
+class _FakeSink:
+    def __init__(self, index, name):
+        self.index, self.name = index, name
+
+
+class _FakeSI:
+    def __init__(self, index, sink, app, pid=1):
+        self.index, self.sink = index, sink
+        self.proplist = {"application.name": app, "application.process.id": str(pid)}
+
+
+def test_an_unchanged_row_of_apps_is_left_alone():
+    """It ran twice a second, tearing down every tag widget and building it
+    again — while the user was dragging one of them to another channel."""
+    from arctis_sound_manager.gui.home_page import HomePage
+
+    card = _FakeCard()
+    sinks = [_FakeSink(1, "Arctis_Game")]
+    sis = [_FakeSI(10, 1, "GenshinImpact.exe")]
+
+    for _ in range(5):
+        HomePage._update_apps(HomePage, sis, sinks, card)
+
+    assert card.cleared == 1
+    assert card.tags == [("GenshinImpact.exe", 10, 1)]
+
+
+def test_a_changed_row_is_rebuilt():
+    from arctis_sound_manager.gui.home_page import HomePage
+
+    card = _FakeCard()
+    sinks = [_FakeSink(1, "Arctis_Game")]
+
+    HomePage._update_apps(HomePage, [_FakeSI(10, 1, "GenshinImpact.exe")], sinks, card)
+    HomePage._update_apps(HomePage, [_FakeSI(10, 1, "GenshinImpact.exe"),
+                                     _FakeSI(11, 1, "Discord")], sinks, card)
+
+    assert card.cleared == 2
+    assert [t[0] for t in card.tags] == ["GenshinImpact.exe", "Discord"]
+
+
+def test_a_channel_that_lost_its_sink_is_cleared_once():
+    from arctis_sound_manager.gui.home_page import HomePage
+
+    card = _FakeCard()
+    HomePage._update_apps(HomePage, [], [], card)
+    HomePage._update_apps(HomePage, [], [], card)
+
+    assert card.cleared == 1
