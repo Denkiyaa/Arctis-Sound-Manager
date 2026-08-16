@@ -1170,7 +1170,17 @@ class ClipsPage(QWidget):
         try:
             from arctis_sound_manager.gui.clip_editor import ClipEditor
             editor = ClipEditor(Path(path), self)
-            editor.exec()
+            try:
+                editor.exec()
+            finally:
+                # exec() returning is not the end of the dialog. It is parented
+                # to this page, so C++ owns it and dropping the Python name
+                # frees nothing: the editor stays alive with its video player,
+                # one player per channel and every decoder thread behind them.
+                # Browsing a library that way cost a set of players per clip —
+                # 116 threads and a gigabyte in the crash dump from one
+                # evening's clips.
+                editor.deleteLater()
             self.refresh_clips()     # an export lands next to the original
         except Exception:
             logger.exception("could not open the clip editor")

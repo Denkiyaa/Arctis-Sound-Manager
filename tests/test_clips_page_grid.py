@@ -196,3 +196,70 @@ def test_the_menu_keeps_its_shape_whatever_is_selected():
     many = [name for name, _, _ in ClipsPage.context_actions(4)]
 
     assert one == many
+
+
+# ── what opening a clip leaves behind ─────────────────────────────────────────
+
+def test_the_editor_is_handed_back_when_it_closes(monkeypatch):
+    """`exec()` returning is not the end of a dialog parented to the page: C++
+    owns it, so dropping the Python name leaves the editor alive with a player
+    per channel and a decoder thread behind each. Opening clips all evening is
+    what filled the crash dump with 116 threads."""
+    from arctis_sound_manager.gui import clip_editor, clips_page
+
+    seen = {}
+
+    class _FakeEditor:
+        def __init__(self, path, parent):
+            seen["path"] = path
+
+        def exec(self):
+            seen["exec"] = True
+
+        def deleteLater(self):
+            seen["deleted"] = True
+
+    class _Item:
+        @staticmethod
+        def data(_role):
+            return "/tmp/clip.mkv"
+
+    class _Page:
+        @staticmethod
+        def refresh_clips():
+            seen["refreshed"] = True
+
+    monkeypatch.setattr(clip_editor, "ClipEditor", _FakeEditor)
+
+    clips_page.ClipsPage._on_open_clip(_Page(), _Item())
+
+    assert seen.get("exec") and seen.get("deleted") and seen.get("refreshed")
+
+
+def test_an_editor_that_throws_is_still_handed_back(monkeypatch):
+    from arctis_sound_manager.gui import clip_editor, clips_page
+
+    seen = {}
+
+    class _ExplodingEditor:
+        def __init__(self, path, parent):
+            pass
+
+        def exec(self):
+            raise RuntimeError("no multimedia here")
+
+        def deleteLater(self):
+            seen["deleted"] = True
+
+    class _Item:
+        @staticmethod
+        def data(_role):
+            return "/tmp/clip.mkv"
+
+    monkeypatch.setattr(clip_editor, "ClipEditor", _ExplodingEditor)
+    # The fallback opens the file in the system player; not on a test machine.
+    monkeypatch.setattr(clips_page.QDesktopServices, "openUrl", lambda _url: True)
+
+    clips_page.ClipsPage._on_open_clip(object(), _Item())
+
+    assert seen.get("deleted")

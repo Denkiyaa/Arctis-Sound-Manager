@@ -248,9 +248,21 @@ class _ChannelMixer:
                 player.setPosition(ms)
 
     def release(self) -> None:
-        for player in self._players:
+        """Stop the channels and hand the objects back.
+
+        Clearing the lists only drops Python's references; the players are
+        parented to the dialog, so they and their decoder threads live on until
+        it dies. deleteLater rather than a synchronous teardown: this runs from
+        the dialog's close event, and the crash dump that started this had the
+        GUI thread stopped there — inside the ffmpeg backend, waiting on a
+        blocking cross-thread call it made while being torn down. Nothing needs
+        the file handle released this instant; the split tracks are in a temp
+        directory that unlinks happily underneath an open descriptor.
+        """
+        for player, output in zip(self._players, self._outputs):
             player.stop()
-            player.setSource(QUrl())
+            player.deleteLater()
+            output.deleteLater()
         self._players.clear()
         self._outputs.clear()
 

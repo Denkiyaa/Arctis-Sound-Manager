@@ -65,3 +65,56 @@ def test_the_band_cannot_be_squeezed_under_its_own_markers():
 
     # A width the band is guaranteed by the dialog minimum, less the margins.
     assert MIN_SIZE.width() - 2 * 18 - 2 * EDGE_PAD >= 360
+
+
+def test_every_offered_frame_rate_has_a_label():
+    """The rate menu builds its keys as `clip_fps_<n>`, so adding a rate to
+    FPS_CHOICES without adding a line to en.ini shows the user the key itself —
+    "ui.clip_fps_15" in the menu, which is what happened when 15 was added."""
+    import configparser
+    from pathlib import Path
+
+    from arctis_sound_manager.clip_export import FPS_CHOICES
+    from arctis_sound_manager.lang_sanitize import sanitize_ini_text
+
+    english = (Path(__file__).parent.parent / "src" / "arctis_sound_manager"
+               / "lang" / "en.ini")
+    parser = configparser.ConfigParser()
+    parser.read_string(sanitize_ini_text(english.read_text(encoding="utf-8")))
+    keys = {k for section in parser.sections() for k in parser[section]}
+
+    for rate in FPS_CHOICES:
+        assert f"clip_fps_{rate}" in keys, f"no label for {rate} fps"
+    assert "clip_fps_source" in keys
+
+
+# ── what an editor leaves behind ──────────────────────────────────────────────
+
+def test_release_hands_the_players_back_not_just_the_python_names():
+    """The players are parented to the dialog, so clearing the lists frees
+    nothing — they and their decoder threads outlive the close. The crash dump
+    behind this had 116 threads and a gigabyte of memory after an evening of
+    opening clips."""
+    from arctis_sound_manager.gui.clip_editor import _ChannelMixer
+
+    class _Fake:
+        def __init__(self):
+            self.stopped = self.deleted = False
+
+        def stop(self):
+            self.stopped = True
+
+        def deleteLater(self):
+            self.deleted = True
+
+    mixer = _ChannelMixer(None)
+    players = [_Fake(), _Fake()]
+    outputs = [_Fake(), _Fake()]
+    mixer._players.extend(players)
+    mixer._outputs.extend(outputs)
+
+    mixer.release()
+
+    assert all(p.stopped and p.deleted for p in players)
+    assert all(o.deleted for o in outputs)
+    assert mixer._players == [] and mixer._outputs == []
