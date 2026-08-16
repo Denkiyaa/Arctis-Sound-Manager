@@ -40,6 +40,30 @@ CHANNEL_OUTPUTS_FILE = Path.home() / ".config" / "arctis_manager" / "channel_out
 # which made repatriation asymmetric between channels.
 ARCTIS_VIRTUAL_SINKS = {"Arctis_Game", "Arctis_Chat", "Arctis_Media", "effect_input.sonar"}
 
+def _is_asm_channel(sink_name: str) -> bool:
+    """True when *sink_name* is one of ASM's channels, not the hardware.
+
+    Sitting on the headset's own sink is not the same as sitting on a
+    channel. A stream there gets no EQ, no per-channel volume, no ChatMix
+    and never appears in the mixer, because it never enters ASM's graph at
+    all. It is also where a stream lands by default whenever the system
+    default sink is the headset itself, so it carries no intent: it is
+    where audio goes when nobody has decided anything.
+
+    The two are easy to conflate because the hardware sink is named
+    ``alsa_output.usb-SteelSeries_Arctis_Nova_Pro_Wireless-00.analog-stereo``
+    — it contains ``Arctis_``, so a fragment test written to mean "is this
+    app on one of our channels?" answers yes for the bare device. That is
+    what left applications stranded on the hardware, outside every channel
+    and absent from the mixer (reported on Discord by autune). The
+    distinction already existed as :func:`_is_physical_arctis`; this is the
+    same rule, stated from the other side.
+    """
+    if not sink_name or _is_physical_arctis(sink_name):
+        return False
+    return (any(k in sink_name for k in ARCTIS_VIRTUAL_SINKS)
+            or sink_name.startswith("effect_input."))
+
 # D-Bus query for the daemon's headset power status (fix for the sovereignty
 # bug: routing decisions must key off online/offline, not off the current
 # default sink). Cached briefly so the router doesn't hit D-Bus every tick;
@@ -536,15 +560,17 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
                 # but a stream still plays through another physical
                 # output (Logitech, internal speakers, etc.), pull it
                 # onto Arctis_Media so the user actually hears it in
-                # the headset. Skipped if the stream is already on any
-                # Arctis sink (virtual or filter-chain) so manual moves
-                # are preserved.
+                # the headset. Skipped if the stream is already on one of
+                # ASM's channels (virtual or filter-chain) so manual moves
+                # are preserved — the headset's own sink is NOT one of
+                # them (see _is_asm_channel), which is what used to leave
+                # everything the heuristics don't name stranded on the
+                # hardware, outside every channel and absent from the mixer.
+                # A deliberate placement there is still safe: it is saved as
+                # an override by _confirm_manual_move, and this branch only
+                # runs for streams that have none.
                 current_name = sink_idx_to_name.get(si.sink, "")
-                on_arctis = any(
-                    k in current_name
-                    for k in ("Arctis_", "SteelSeries_Arctis", "effect_input.sonar")
-                )
-                if not on_arctis:
+                if current_name and not _is_asm_channel(current_name):
                     auto = "Arctis_Media"
                     log.info(
                         "Adopt: '%s' was on '%s' while Arctis is default — moving to %s",
@@ -634,16 +660,13 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
             auto = _auto_route(app, s.get("props", {}))
             if not auto:
                 # Same adoption fallback as for PA streams (issue #20):
-                # native PW stream playing on a non-Arctis sink while
-                # Arctis is default → move to Arctis_Media. Skip when
-                # the stream is already on an Arctis target (manual
-                # placement preserved).
+                # native PW stream playing outside ASM's channels while
+                # Arctis is default → move to Arctis_Media. Skip when the
+                # stream is already on one of our channels (manual
+                # placement preserved). Same correction as above: the
+                # headset's own sink is a device, not a channel.
                 current = s.get("sink_name") or ""
-                on_arctis = any(
-                    k in current
-                    for k in ("Arctis_", "SteelSeries_Arctis", "effect_input.sonar")
-                )
-                if current and not on_arctis:
+                if current and not _is_asm_channel(current):
                     auto = "Arctis_Media"
                     log.info(
                         "Adopt (native): '%s' was on '%s' while Arctis is default — moving to %s",

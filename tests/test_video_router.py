@@ -749,3 +749,51 @@ def test_tick_offline_pinned_stream_not_repatriated():
 
     assert pulse.moves == []
     assert si.sink == sounddeck.index
+
+
+# ── the headset's own sink is not a channel ──────────────────────────────────
+#
+# Reported on Discord by autune: the mixer showed almost nothing, because
+# every application that the name heuristics do not cover was sitting on the
+# physical headset sink and was never adopted onto a channel. The adoption
+# guard tested for "Arctis" as a fragment, and
+# alsa_output.usb-SteelSeries_Arctis_Nova_Pro_Wireless-00.analog-stereo
+# contains it, so the hardware counted as a channel that the stream was
+# already on.
+
+from arctis_sound_manager.scripts.video_router import (
+    _is_asm_channel,
+    _is_physical_arctis,
+)
+
+
+def test_physical_headset_is_not_a_channel():
+    """A stream there gets no EQ, no channel volume, no mixer entry."""
+    for name in ("alsa_output.usb-SteelSeries_Arctis_Nova_Pro_Wireless-00.analog-stereo",
+                 "alsa_output.usb-SteelSeries_Arctis_7_-00.analog-stereo"):
+        assert not _is_asm_channel(name), name
+
+
+def test_asm_channels_are_channels():
+    for name in ("Arctis_Game", "Arctis_Chat", "Arctis_Media",
+                 "effect_input.sonar-game-eq", "effect_input.sonar-media-eq"):
+        assert _is_asm_channel(name), name
+
+
+def test_other_hardware_is_not_a_channel():
+    for name in ("alsa_output.pci-0000_00_1f.3.analog-stereo",
+                 "bluez_output.AA_BB_CC_DD_EE_FF.a2dp-sink",
+                 "alsa_output.usb-Logitech_G560-00.analog-stereo", ""):
+        assert not _is_asm_channel(name), name
+
+
+def test_adoption_guard_and_pin_guard_agree_on_the_hardware():
+    """Both must classify the headset sink the same way.
+
+    _explicit_pin_target already documents that pins to hardware outputs are
+    not exempt from adoption, on purpose (issue #20). The adoption guard used
+    to disagree with it for this one sink, which is the whole bug.
+    """
+    headset = "alsa_output.usb-SteelSeries_Arctis_Nova_Pro_Wireless-00.analog-stereo"
+    assert _is_physical_arctis(headset)
+    assert not _is_asm_channel(headset)
