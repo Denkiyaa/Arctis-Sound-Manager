@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.34] - 16 August 2026
+
+### Fixed
+
+- **Applications could stay stuck on the headset itself, outside every channel.** Anything ASM does not recognise by name, which is most things once you go past browsers and the usual chat apps, would sit directly on the headset output rather than on Game, Chat or Media: audible, but with no equaliser, no per-channel volume, no ChatMix, and absent from the mixer. ASM has a pass whose whole purpose is to bring such applications back onto a channel, and it was skipping them, because the headset's own output is named after the headset and so counted as a channel it was already on. The two are now told apart. Applications you deliberately placed on the hardware yourself stay where you put them. Reported on Discord by autune.
+- **Moving an application between channels no longer stutters.** The Home page rebuilt every application tag and every row of the "other applications" list twice a second, including while you were dragging one of those widgets onto another channel. Both are now left alone when nothing about them has changed. Contributed by @Denkiyaa. (#187)
+
+### Changed
+
+- **The full test suite now runs on every push.** Continuous integration ran a single test file out of the fourteen hundred tests in the project; everything covering routing, the mixer, the audio graph and bug reports was never executed. It caught five tests that had been failing silently since the Media channel gained its own surround chain, and it means a contributed change is now verified by the project rather than by whoever happened to run the tests locally.
+
 ## [1.2.33] - 16 August 2026
 
 ### Fixed
