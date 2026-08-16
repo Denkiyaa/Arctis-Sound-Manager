@@ -1789,10 +1789,13 @@ def test_ensure_physical_output_links_links_both_channels(monkeypatch):
         lambda playback, target, data=None: calls.append((playback, target)) or True,
     )
     result = _s2p_p3.ensure_physical_output_links()
-    assert result == {"chat": True, "hesuvi": True}
+    # Media carries its own HeSuVi chain since #169, onto the same physical
+    # game output: three last hops, not two.
+    assert result == {"chat": True, "hesuvi": True, "hesuvi_media": True}
     assert calls == [
         ("effect_output.sonar-chat-eq", "alsa_output.test-chat"),
         ("effect_output.virtual-surround-7.1-hesuvi", "alsa_output.test-game"),
+        ("effect_output.virtual-surround-7.1-hesuvi-media", "alsa_output.test-game"),
     ]
 
 
@@ -1840,7 +1843,8 @@ def test_ensure_physical_output_links_reuses_shared_pw_dump(monkeypatch):
     )
     sentinel = ["sentinel-pw-dump"]
     _s2p_p3.ensure_physical_output_links(data=sentinel)
-    assert seen_data == [sentinel, sentinel]
+    # chat, game HeSuVi, and media's own HeSuVi chain (#169).
+    assert seen_data == [sentinel, sentinel, sentinel]
 
 
 # ── ensure_physical_output_links — the Output channel's last hop ────────────
@@ -1979,6 +1983,12 @@ def _po_graph(extra=None):
         _po_node(40, _PO_GAME_TARGET),
         _po_port(31, 30, "out", "FL"), _po_port(32, 30, "out", "FR"),
         _po_port(41, 40, "in", "FL"), _po_port(42, 40, "in", "FR"),
+        # Media's parallel HeSuVi chain (#169) shares the physical game
+        # output. Two sources into one sink is fine: the stray-link cleanup
+        # is indexed on the source node, so neither chain tears down the
+        # other's link.
+        _po_node(50, "effect_output.virtual-surround-7.1-hesuvi-media"),
+        _po_port(51, 50, "out", "FL"), _po_port(52, 50, "out", "FR"),
     ]
     data.extend(extra or [])
     return data
@@ -1995,9 +2005,10 @@ class TestEnsurePhysicalOutputLinksRealGraph:
 
         result = _s2p_p3.ensure_physical_output_links(data=_po_graph())
 
-        assert result == {"chat": True, "hesuvi": True}
+        assert result == {"chat": True, "hesuvi": True, "hesuvi_media": True}
         created = {(c[1], c[2]) for c in calls if "-d" not in c}
-        assert created == {("11", "21"), ("12", "22"), ("31", "41"), ("32", "42")}
+        assert created == {("11", "21"), ("12", "22"), ("31", "41"), ("32", "42"),
+                           ("51", "41"), ("52", "42")}
 
     def test_noop_when_already_linked(self, monkeypatch):
         """Both hops already correctly linked → no pw-link calls at all."""
@@ -2007,11 +2018,12 @@ class TestEnsurePhysicalOutputLinksRealGraph:
         existing = [
             _po_link(5001, 10, 11, 20, 21), _po_link(5002, 10, 12, 20, 22),
             _po_link(5003, 30, 31, 40, 41), _po_link(5004, 30, 32, 40, 42),
+            _po_link(5005, 50, 51, 40, 41), _po_link(5006, 50, 52, 40, 42),
         ]
 
         result = _s2p_p3.ensure_physical_output_links(data=_po_graph(existing))
 
-        assert result == {"chat": True, "hesuvi": True}
+        assert result == {"chat": True, "hesuvi": True, "hesuvi_media": True}
         assert calls == []
 
     def test_physical_output_absent_does_nothing(self, monkeypatch):
@@ -2043,7 +2055,7 @@ class TestEnsurePhysicalOutputLinksRealGraph:
 
         result = _s2p_p3.ensure_physical_output_links(data=data)
 
-        assert result == {"chat": False, "hesuvi": False}
+        assert result == {"chat": False, "hesuvi": False, "hesuvi_media": False}
         assert calls == []
 
 
