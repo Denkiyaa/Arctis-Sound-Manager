@@ -118,3 +118,46 @@ def test_release_hands_the_players_back_not_just_the_python_names():
     assert all(p.stopped and p.deleted for p in players)
     assert all(o.deleted for o in outputs)
     assert mixer._players == [] and mixer._outputs == []
+
+
+# ── the playhead, and why it is polled ────────────────────────────────────────
+
+def test_the_playhead_is_polled_not_pushed():
+    """Qt's ffmpeg backend drives the clock from its audio renderer thread, so
+    a Python slot on positionChanged is entered *from that thread* — PySide
+    takes the GIL there while the thread holds a Qt mutex, and the GUI thread
+    calling into the same plugin holds the GIL and wants that mutex. A live
+    hang showed both halves: 38 threads in futex_wait behind a window that
+    would not close. Nothing may connect to it again."""
+    from pathlib import Path
+
+    source = (Path(__file__).parent.parent / "src" / "arctis_sound_manager"
+              / "gui" / "clip_editor.py").read_text(encoding="utf-8")
+
+    assert "positionChanged.connect" not in source
+    assert "durationChanged.connect" not in source
+
+
+def test_polling_moves_the_band_and_notices_the_duration():
+    import types
+
+    from arctis_sound_manager.gui.clip_editor import ClipEditor
+
+    moved: list[float] = []
+    durations: list[int] = []
+
+    editor = types.SimpleNamespace(
+        _player=types.SimpleNamespace(position=lambda: 4_000,
+                                      duration=lambda: 30_000),
+        _band=types.SimpleNamespace(set_position=moved.append, end_s=99.0),
+        _last_duration_ms=-1,
+        _is_playing=lambda: False,
+        _on_media_duration=durations.append,
+    )
+    editor._on_position = lambda ms: ClipEditor._on_position(editor, ms)
+
+    ClipEditor._poll_position(editor)
+    ClipEditor._poll_position(editor)          # duration reported once only
+
+    assert moved == [4.0, 4.0]
+    assert durations == [30_000]

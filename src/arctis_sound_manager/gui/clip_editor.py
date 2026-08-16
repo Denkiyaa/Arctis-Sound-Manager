@@ -24,7 +24,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QThread, QUrl, Signal
+from PySide6.QtCore import QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -374,9 +374,40 @@ class ClipEditor(QDialog):
         # the first frame without the clip starting up on its own.
         self._player.play()
         self._player.pause()
-        self._player.positionChanged.connect(self._on_position)
-        self._player.durationChanged.connect(self._on_media_duration)
+
+        # The position is *polled*, not received. Connecting a Python slot to
+        # positionChanged deadlocks the application, and the stack from a live
+        # hang says exactly how: Qt's ffmpeg backend drives the clock from its
+        # audio renderer thread, so that thread emits positionChanged, and
+        # PySide has to take the GIL there to call into Python. Meanwhile the
+        # GUI thread — holding the GIL, because it is running Python — calls
+        # into the same plugin and blocks on a Qt mutex the renderer holds.
+        # Each waits for what the other has: 38 threads in futex_wait, a window
+        # that will not close, "not responding".
+        #
+        # Reading position() from a timer on the GUI thread breaks the cycle at
+        # its root: no plugin thread ever needs to enter Python, so the pair of
+        # locks can never be taken in opposite orders. The cost is that the
+        # playhead moves on the timer's beat rather than the decoder's, which
+        # at 50 ms is not a difference anybody can see.
+        self._position_timer = QTimer(self)
+        self._position_timer.setInterval(50)
+        self._position_timer.timeout.connect(self._poll_position)
+        self._position_timer.start()
+        self._last_duration_ms = -1
         return video
+
+    def _poll_position(self) -> None:
+        """Read the player's clock, and notice a duration when it arrives."""
+        player = getattr(self, "_player", None)
+        if player is None:
+            return
+        duration = player.duration()
+        if duration != self._last_duration_ms:
+            self._last_duration_ms = duration
+            if duration > 0:
+                self._on_media_duration(duration)
+        self._on_position(player.position())
 
     def _toggle_play(self) -> None:
         player = getattr(self, "_player", None)
@@ -790,6 +821,11 @@ class ClipEditor(QDialog):
 
     def closeEvent(self, event) -> None:
         self._remember()
+        # Before anything is torn down: a timer that fires into a half-released
+        # player is the other way to reach the same hang.
+        timer = getattr(self, "_position_timer", None)
+        if timer is not None:
+            timer.stop()
         player = getattr(self, "_player", None)
         if player is not None:
             player.stop()
