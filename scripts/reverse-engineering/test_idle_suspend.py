@@ -97,19 +97,29 @@ def apply_variant(path: Path, variant: str) -> None:
         pyc.unlink(missing_ok=True)
 
 
-def user_ctl(*args: str) -> subprocess.CompletedProcess:
-    """systemctl --user, usable from a sudo shell.
+def as_user(argv: list[str], **kw) -> subprocess.CompletedProcess:
+    """Run *argv* as the logged-in user, from a root shell.
 
-    The daemon is a user unit, so it must be addressed as the logged-in user
-    rather than as root, which has its own empty session bus.
+    Everything this script asks about lives in the user's session: the daemon
+    is a user unit, and PipeWire's socket is under their runtime directory.
+    Root has its own empty session bus and no PipeWire at all, so running any
+    of it directly gets "could not connect" and an empty result that looks
+    like a finding. Reported on #180, where pw-dump had to be fixed by hand
+    before the capture said anything.
     """
     user = os.environ.get("SUDO_USER")
-    if user:
-        uid = run(["id", "-u", user]).stdout.strip()
-        env = {**os.environ, "XDG_RUNTIME_DIR": f"/run/user/{uid}",
-               "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus"}
-        return run(["sudo", "-u", user, "-E", "systemctl", "--user", *args], env=env)
-    return run(["systemctl", "--user", *args])
+    if not user:
+        return run(argv, **kw)
+    uid = run(["id", "-u", user]).stdout.strip()
+    env = {**os.environ,
+           "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+           "PULSE_RUNTIME_PATH": f"/run/user/{uid}/pulse",
+           "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus"}
+    return run(["sudo", "-u", user, "-E", *argv], env=env, **kw)
+
+
+def user_ctl(*args: str) -> subprocess.CompletedProcess:
+    return as_user(["systemctl", "--user", *args])
 
 
 def restart_stack() -> None:
@@ -151,29 +161,96 @@ def verify_applied(variant: str) -> bool:
     return ok
 
 
-def node_states() -> list[tuple[str, str]]:
+def pw_dump() -> list:
     if shutil.which("pw-dump") is None:
         return []
     try:
-        dump = json.loads(run(["pw-dump"]).stdout)
+        data = json.loads(as_user(["pw-dump"]).stdout)
     except Exception:
         return []
-    rows = []
+    return data if isinstance(data, list) else []
+
+
+def graph_report(dump: list) -> list[str]:
+    """Node states, the links between them, and anything still playing.
+
+    The states alone are not enough, which is what the first round of #180
+    ran into: a chain that is suspended because nothing drives it and a chain
+    that is suspended because its last link is missing look exactly the same
+    in a list of states. The links tell those apart. The playing streams
+    matter for the opposite reason, "nothing is playing" has to be a
+    measurement rather than an assumption, since one forgotten browser tab
+    holding a channel open explains the whole symptom.
+    """
+    if not dump:
+        return ["  (pw-dump unavailable)"]
+
+    names: dict[int, str] = {}
+    nodes: list[tuple[str, str]] = []
+    streams: list[str] = []
     for obj in dump:
         if obj.get("type") != "PipeWire:Interface:Node":
             continue
         info = obj.get("info") or {}
         props = info.get("props") or {}
         name = props.get("node.name", "?")
+        names[obj.get("id")] = name
         mclass = props.get("media.class", "")
         if "Audio" not in mclass:
             continue
-        interesting = (name.startswith(("alsa_output.", "bluez_output."))
-                       or "Arctis_" in name or "sonar-" in name
-                       or "virtual-surround" in name)
-        if interesting:
-            rows.append((info.get("state", "?"), name))
-    return sorted(rows, key=lambda r: r[1])
+        state = info.get("state", "?")
+        if name.startswith(("alsa_output.", "alsa_input.", "bluez_output.")) \
+                or "Arctis_" in name or "sonar-" in name or "virtual-surround" in name:
+            nodes.append((state, name))
+        app = props.get("application.name")
+        if app and mclass.startswith("Stream/Output"):
+            streams.append(f"  {state:<10} {app}  (node {name})")
+
+    out = ["== node states with nothing playing ==",
+           "(suspended/idle = not holding the device; running = holding it)", ""]
+    out += [f"  {s:<10} {n}" for s, n in sorted(nodes, key=lambda r: r[1])] or \
+           ["  (no audio nodes found)"]
+
+    out += ["", "== links ==",
+            "(a chain with no link out is suspended because it reaches nothing,",
+            " which is a different fault from one that is simply not driven)", ""]
+    links = []
+    for obj in dump:
+        if obj.get("type") != "PipeWire:Interface:Link":
+            continue
+        info = obj.get("info") or {}
+        src = names.get(info.get("output-node-id"), "?")
+        dst = names.get(info.get("input-node-id"), "?")
+        if any(f in src or f in dst for f in
+               ("Arctis_", "sonar-", "virtual-surround", "alsa_output.")):
+            links.append(f"  {info.get('state', '?'):<10} {src}  ->  {dst}")
+    out += sorted(set(links)) or ["  (no links at all, that alone is the fault)"]
+
+    out += ["", "== application streams ==",
+            "(this must be empty, or 'nothing playing' was not true)", ""]
+    out += sorted(set(streams)) or ["  (none, nothing is playing)"]
+    return out
+
+
+def driver_report() -> list[str]:
+    """Which node drives the graph, from pw-top.
+
+    pw-top lists each driver with the nodes that follow it indented beneath.
+    That is the one question the states cannot answer: something has to be
+    keeping the device awake, and this names it directly instead of leaving
+    it to be inferred from what happens to be running.
+    """
+    if shutil.which("pw-top") is None:
+        return ["  (pw-top not installed)"]
+    res = as_user(["pw-top", "-b", "-n", "2"], timeout=30)
+    lines = [l.rstrip() for l in (res.stdout or "").splitlines() if l.strip()]
+    if not lines:
+        return ["  (pw-top produced nothing)"]
+    # -n 2 prints two full batches; the second one is the settled reading.
+    starts = [i for i, l in enumerate(lines) if l.lstrip().startswith("S ")]
+    if len(starts) > 1:
+        lines = lines[starts[-1]:]
+    return [f"  {l}" for l in lines]
 
 
 def main() -> int:
@@ -221,27 +298,20 @@ def main() -> int:
     print(" " * 30, end="\r")
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    lines = [
-        f"# ASM idle test — variant={args.variant} — {stamp}",
-        "",
-        "== node states with nothing playing ==",
-        "(suspended/idle = not holding the device; running = holding it)",
-        "",
-    ]
-    rows = node_states()
-    if rows:
-        lines += [f"  {state:<10} {name}" for state, name in rows]
-    else:
-        lines.append("  (pw-dump unavailable)")
+    lines = [f"# ASM idle test, variant={args.variant}, {stamp}", ""]
+    lines += graph_report(pw_dump())
+    lines += ["", "== what drives the graph (pw-top) ==",
+              "(followers are indented under their driver)", ""]
+    lines += driver_report()
     lines += ["", "== pw-loopback command lines ==", ""]
     lines += [f"  {l}" for l in loopback_cmdlines()] or ["  (none running)"]
 
     report = "\n".join(lines)
     print(report)
 
-    out = Path.home() / f"asm-idle-test-{args.variant}-{stamp}.txt"
-    if os.environ.get("SUDO_USER"):
-        out = Path(f"/home/{os.environ['SUDO_USER']}") / out.name
+    home = Path(f"/home/{os.environ['SUDO_USER']}") if os.environ.get("SUDO_USER") \
+        else Path.home()
+    out = home / f"asm-idle-test-{args.variant}-{stamp}.txt"
     try:
         out.write_text(report + "\n", encoding="utf-8")
         if os.environ.get("SUDO_USER"):
@@ -250,10 +320,27 @@ def main() -> int:
     except OSError as exc:
         print(f"\n(could not save a copy: {exc})")
 
+    # ASM's own report carries the rest, settings, config files, the device
+    # state, the kernel's view, so there is nothing left to collect by hand.
+    bug = home / f"asm-report-{args.variant}-{stamp}.txt"
+    if shutil.which("asm-cli"):
+        print("\nCollecting ASM's full report ...")
+        res = as_user(["asm-cli", "bug-report", "--output", str(bug)], timeout=180)
+        if res.returncode == 0 and bug.exists():
+            print(f"Saved to {bug}")
+        else:
+            print("  (asm-cli bug-report did not complete; the file above is "
+                  "still worth attaching)")
+            bug = None
+    else:
+        bug = None
+
     print("\n== what to do now ==")
     print("1. Leave the headset alone and see whether it finally powers off.")
     print("2. Check that sound still works normally afterwards.")
-    print(f"3. Attach {out.name} to issue #180 with the answer to 1 and 2.")
+    print(f"3. Attach {out.name}"
+          + (f" and {bug.name}" if bug else "")
+          + " to issue #180, with the answer to 1 and 2.")
     print(f"\nTo undo:  sudo python3 {sys.argv[0]} --revert")
     return 0
 
