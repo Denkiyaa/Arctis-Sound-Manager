@@ -148,20 +148,20 @@ A Linux GUI for SteelSeries Arctis headsets — device settings, 4-channel audio
 | Device | Working | Users | Product ID(s) |
 |---|---|---|---|
 | Arctis 1 / 7X / 7P Wireless | ✅ | 6 | $\color{royalblue}{\textbf{12b3}}$, 12b6, 12d5, 12d7 |
-| Arctis 7 / 7 2019 / Pro 2019 / Pro GameDAC | ✅ | 15 | 1260, $\color{royalblue}{\textbf{12ad}}$, 1252, 1280 |
+| Arctis 7 / 7 2019 / Pro 2019 / Pro GameDAC | ✅ | 14 | 1260, $\color{royalblue}{\textbf{12ad}}$, 1252, 1280 |
 | Arctis 7+ / PS5 / Xbox / Destiny | ✅ | 20 | $\color{royalblue}{\textbf{220e}}$, 2212, 2216, 2236 |
-| Arctis 9 Wireless | ✅ | 14 | $\color{royalblue}{\textbf{12c2}}$ |
+| Arctis 9 Wireless | ✅ | 15 | $\color{royalblue}{\textbf{12c2}}$ |
 | Arctis Pro Wireless | ✅ | 30 | $\color{royalblue}{\textbf{1290}}$, 1294 |
-| Arctis Nova Pro Wireless / X | ✅ | 218 | $\color{royalblue}{\textbf{12e0}}$, $\color{royalblue}{\textbf{12e5}}$, $\color{royalblue}{\textbf{225d}}$ |
+| Arctis Nova Pro Wireless / X | ✅ | 222 | $\color{royalblue}{\textbf{12e0}}$, $\color{royalblue}{\textbf{12e5}}$, $\color{royalblue}{\textbf{225d}}$ |
 | Arctis Nova Pro Wired / Xbox Wired | ✅ | 23 | $\color{royalblue}{\textbf{12cb}}$, 12cd |
 | Arctis Nova Pro Omni | ✅ | 18 | $\color{royalblue}{\textbf{2290}}$ |
 | Arctis Nova 3 | ✅ | 8 | $\color{royalblue}{\textbf{12ec}}$ |
 | Arctis Nova 3P / 3X Wireless | ✅ | 22 | $\color{royalblue}{\textbf{2269}}$, $\color{royalblue}{\textbf{226d}}$ |
-| Arctis Nova 5 / 5X | ✅ | 52 | $\color{royalblue}{\textbf{2232}}$, $\color{royalblue}{\textbf{2253}}$, 2255, 2264 |
+| Arctis Nova 5 / 5X | ✅ | 54 | $\color{royalblue}{\textbf{2232}}$, $\color{royalblue}{\textbf{2253}}$, 2255, 2264 |
 | Arctis Nova 7 Gen 1 | ✅ | 35 | $\color{royalblue}{\textbf{2202}}$, $\color{royalblue}{\textbf{2206}}$, 223a, 227a, 22a4 |
-| Arctis Nova 7 Gen 2 | ✅ | 111 | $\color{royalblue}{\textbf{22a1}}$, $\color{royalblue}{\textbf{227e}}$, 2258, $\color{royalblue}{\textbf{229e}}$, 22a9, $\color{royalblue}{\textbf{22a5}}$, 22ab |
+| Arctis Nova 7 Gen 2 | ✅ | 112 | $\color{royalblue}{\textbf{22a1}}$, $\color{royalblue}{\textbf{227e}}$, 2258, $\color{royalblue}{\textbf{229e}}$, 22a9, $\color{royalblue}{\textbf{22a5}}$, 22ab |
 | Arctis Nova 7P | ✅ | 17 | $\color{royalblue}{\textbf{220a}}$, $\color{royalblue}{\textbf{22a7}}$ |
-| Arctis Nova Elite | ✅ | 13 | $\color{royalblue}{\textbf{2244}}$, 2249, $\color{royalblue}{\textbf{2270}}$ |
+| Arctis Nova Elite | ✅ | 14 | $\color{royalblue}{\textbf{2244}}$, 2249, $\color{royalblue}{\textbf{2270}}$ |
 | Arctis GameBuds / GameBuds X | ✅ | 16 | $\color{royalblue}{\textbf{230a}}$, $\color{royalblue}{\textbf{2317}}$ |
 <!-- STATS:DEVICES:END -->
 
@@ -731,7 +731,7 @@ To request a new language, open a [GitHub issue](https://github.com/loteran/Arct
 ## Community stats
 
 <!-- STATS:META:START -->
-_Based on **638** anonymous data points — last updated 2026-08-15_
+_Based on **647** anonymous data points — last updated 2026-08-16_
 <!-- STATS:META:END -->
 
 > Anonymous usage data shared voluntarily by opted-in users.
@@ -743,13 +743,13 @@ _Based on **638** anonymous data points — last updated 2026-08-15_
 <!-- STATS:TESTED_DISTROS:START -->
 | Distribution | Install method | Users |
 |---|---|---|
-| CachyOS | 🎯 AUR | 👥 260 |
-| Arch Linux | 🎯 AUR | 👥 119 |
-| Linux Mint 22.3 | 🎯 PPA | 👥 37 |
-| Fedora Linux 44 (KDE Plasma Desktop Edition) | 🎯 COPR | 👥 35 |
-| Nobara Linux 44 (KDE Plasma Desktop Edition) | 🎯 COPR | 👥 34 |
+| CachyOS | 🎯 AUR | 👥 262 |
+| Arch Linux | 🎯 AUR | 👥 120 |
+| Linux Mint 22.3 | 🎯 PPA | 👥 38 |
+| Nobara Linux 44 (KDE Plasma Desktop Edition) | 🎯 COPR | 👥 36 |
+| Fedora Linux 44 (KDE Plasma Desktop Edition) | 🎯 COPR | 👥 36 |
 | Ubuntu 26.04 LTS | 🎯 PPA | 👥 30 |
-| Fedora Linux 44 (Workstation Edition) | 🎯 COPR | 👥 16 |
+| Fedora Linux 44 (Workstation Edition) | 🎯 COPR | 👥 17 |
 | Nobara Linux 43 (KDE Plasma Desktop Edition) | 🎯 COPR | 👥 14 |
 | Pop!_OS 24.04 LTS | 🎯 PPA | 👥 13 |
 | EndeavourOS | 🎯 AUR | 👥 12 |
@@ -771,8 +771,8 @@ _Based on **638** anonymous data points — last updated 2026-08-15_
 | SUSE Linux Enterprise Server for SAP Applications 12 SP2 | 📦 Source | 👥 1 |
 | Russian Nuclear Submarine Ballast Management Controller BMC (OpenBMC Project Reference Distro) 2.8.2-34 | 📦 Source | 👥 1 |
 | OpenMandriva Lx 26.02 (ROME) Rolling | 📦 Source | 👥 1 |
+| Omarchy | 🎯 AUR | 👥 1 |
 | Nyarch Linux | 🎯 AUR | 👥 1 |
-| Linux Mint 22.1 | 🎯 PPA | 👥 1 |
 <!-- STATS:TESTED_DISTROS:END -->
 </details>
 
@@ -782,21 +782,21 @@ _Based on **638** anonymous data points — last updated 2026-08-15_
 <!-- STATS:HEADSETS:START -->
 | Headset | Installs |
 |---|---|
-| Arctis Nova Pro Wireless | 218 |
-| Arctis Nova 7 (Gen 2) | 111 |
-| Arctis Nova 5 Wireless | 52 |
+| Arctis Nova Pro Wireless | 222 |
+| Arctis Nova 7 (Gen 2) | 112 |
+| Arctis Nova 5 Wireless | 54 |
 | Arctis Nova 7 (Gen 1) | 35 |
 | Arctis Pro Wireless | 30 |
 | Arctis Nova Pro Wired | 23 |
 | Arctis 7+ | 20 |
-| Arctis Nova 3 | 20 |
+| Arctis Nova 3 | 19 |
 | Arctis Nova Pro Omni | 18 |
 | Arctis GameBuds | 16 |
 | Arctis Nova 7P (Gen 2) | 16 |
-| Arctis 7/Pro Gaming | 15 |
-| Arctis 9 Wireless | 14 |
-| Arctis Nova Elite | 13 |
-| Arctis Nova 3 Wireless | 10 |
+| Arctis 9 Wireless | 15 |
+| Arctis 7/Pro Gaming | 14 |
+| Arctis Nova Elite | 14 |
+| Arctis Nova 3 Wireless | 11 |
 | Arctis 1/7X/7P Wireless | 6 |
 | Arctis Nova 7P (Gen 1) | 4 |
 <!-- STATS:HEADSETS:END -->
@@ -804,13 +804,13 @@ _Based on **638** anonymous data points — last updated 2026-08-15_
 <!-- STATS:DISTROS:START -->
 | Distribution | Installs |
 |---|---|
-| CachyOS | 260 |
-| Arch Linux | 119 |
-| Linux Mint 22.3 | 37 |
-| Fedora Linux 44 (KDE Plasma Desktop Edition) | 35 |
-| Nobara Linux 44 (KDE Plasma Desktop Edition) | 34 |
+| CachyOS | 262 |
+| Arch Linux | 120 |
+| Linux Mint 22.3 | 38 |
+| Nobara Linux 44 (KDE Plasma Desktop Edition) | 36 |
+| Fedora Linux 44 (KDE Plasma Desktop Edition) | 36 |
 | Ubuntu 26.04 LTS | 30 |
-| Fedora Linux 44 (Workstation Edition) | 16 |
+| Fedora Linux 44 (Workstation Edition) | 17 |
 | Nobara Linux 43 (KDE Plasma Desktop Edition) | 14 |
 | Pop!_OS 24.04 LTS | 13 |
 | EndeavourOS | 12 |
