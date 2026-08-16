@@ -258,6 +258,9 @@ class AudioCard(QWidget):
 
         self._apps_area = QVBoxLayout()
         self._apps_area.setSpacing(4)
+        # What the application row currently shows, so a poll that would draw
+        # the same thing can leave it alone. None means "nothing drawn yet".
+        self._app_sig: tuple | None = None
         apps_layout.addLayout(self._apps_area)
         apps_layout.addStretch(1)
 
@@ -389,6 +392,7 @@ class AudioCard(QWidget):
         self._apps_area.addWidget(tag)
 
     def clear_apps(self):
+        self._app_sig = None
         while self._apps_area.count():
             item = self._apps_area.takeAt(0)
             if item.widget():
@@ -973,6 +977,9 @@ class HomePage(QWidget):
 
         self._unassigned_expanded = True
         self._hidden_apps: set[str] = _load_hidden_apps()
+        # The row the "other applications" list is currently showing, so a
+        # poll that would draw the same one can leave it alone.
+        self._unassigned_sig: tuple | None = None
         self._unassigned_wrap.setVisible(False)
         self._style_unassigned()
         root.addWidget(self._unassigned_wrap)
@@ -1722,23 +1729,47 @@ class HomePage(QWidget):
         return name or "Audio"
 
     def _update_apps(self, sink_inputs, sinks: list, card: "AudioCard"):
+        """Redraw a card's application tags — but only when they changed.
+
+        This runs on the 500 ms poll, and it used to clear the row and build a
+        fresh widget per application every single time: two full teardowns and
+        rebuilds a second, for a list that changes when somebody opens a game.
+        The cost lands exactly where it is most visible — dragging an app to
+        another channel is a drag, a rebuild, and a repaint fighting each other
+        — which is what "moving applications between channels stutters" is.
+
+        The tags are rebuilt when the row they would produce differs from the
+        row that is already there, and left alone otherwise.
+        """
         if not sinks:
-            card.clear_apps()
+            if card._app_sig != ():
+                card.clear_apps()
+                card._app_sig = ()
             return
         sink_indices = {s.index for s in sinks}
         matching = [
             si for si in sink_inputs
             if si.sink in sink_indices and "application.name" in si.proplist
         ]
-        card.clear_apps()
+
+        rows: list[tuple[str, int, int]] = []
         seen_names: set[str] = set()
         for si in matching:
             app_name = self._friendly_app_name(si.proplist)
             if app_name in seen_names:
                 continue
             seen_names.add(app_name)
-            pid = int(si.proplist.get("application.process.id", 0))
-            card.add_app_tag(app_name, si.index, pid, bg_color=card._accent)
+            rows.append((app_name, si.index,
+                         int(si.proplist.get("application.process.id", 0))))
+
+        signature = tuple(rows)
+        if card._app_sig == signature:
+            return
+
+        card.clear_apps()
+        for app_name, si_index, pid in rows:
+            card.add_app_tag(app_name, si_index, pid, bg_color=card._accent)
+        card._app_sig = signature
 
     def _style_unassigned(self) -> None:
         """Header styling, kept flat and quiet: this is a list, not an alert."""
@@ -1832,6 +1863,7 @@ class HomePage(QWidget):
         # entirely rather than sitting there empty.
         if not rows and not hidden_count:
             self._unassigned_wrap.setVisible(False)
+            self._unassigned_sig = None
             return
         self._unassigned_wrap.setVisible(True)
 
@@ -1842,6 +1874,16 @@ class HomePage(QWidget):
             I18n.translate("ui", "unassigned_show_hidden").format(count=hidden_count))
         self._unassigned_show_hidden.setVisible(hidden_count > 0)
         self._unassigned_body.setVisible(self._unassigned_expanded and bool(rows))
+
+        # Same rule as the cards above: this is on the 500 ms poll, and each row
+        # is a composite widget with its own buttons. Rebuilding a list that has
+        # not changed, twice a second, is work the user feels as a stutter in
+        # whatever they are doing on top of it.
+        signature = tuple((r["key"], r["label"], r["where"], r["si_index"], r["pid"])
+                          for r in rows)
+        if signature == self._unassigned_sig:
+            return
+        self._unassigned_sig = signature
 
         while self._unassigned_area.count():
             item = self._unassigned_area.takeAt(0)
