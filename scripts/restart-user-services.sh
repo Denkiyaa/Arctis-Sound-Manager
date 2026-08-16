@@ -18,7 +18,12 @@
 # Copyright (C) 2026 loteran — SPDX-License-Identifier: GPL-3.0-or-later
 set -u
 
-SERVICES="arctis-manager.service arctis-video-router.service arctis-stream-guard.service arctis-gui.service"
+# app-ArctisManager.service is the tray, named for the desktop entry so the
+# portal can read an app id off its cgroup. arctis-gui.service is the name it
+# had before that; upgrading a machine that still has one running has to
+# restart the thing that is actually there, or the new code never loads and
+# the update looks like it did nothing.
+SERVICES="arctis-manager.service arctis-video-router.service arctis-stream-guard.service app-ArctisManager.service arctis-gui.service"
 
 restart_for_session() {
     uid="$1"
