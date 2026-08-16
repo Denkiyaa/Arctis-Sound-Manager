@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.33] - 16 August 2026
+
+### Fixed
+
+- **Channels could be completely silent on SteamOS, with everything appearing to work.** The audio never reached the headset because the system refused to let ASM connect its channels to its own processing, on permission grounds. Nothing in the app looked wrong: the channels were there, the settings were saved, and a video would simply stall after a few seconds with a fraction of a second of sound. Affected users could not work around it either, since connecting the two by hand failed exactly the same way. ASM now recognises that refusal and asks the system for the one permission it needs before trying again. Reported by @baccatuesday, who ran every test that made the diagnosis possible, and confirmed by @emoeckel.
+
+### Added
+
+- **Bug reports explain refused audio connections.** Reports now say which program owns each part of the audio graph and what the system allowed each of them to do, which is what a refused connection turns on. `asm-cli diagnose` and the in-app report button now also carry the same information as each other: until now each had sections the other lacked, so which one you used decided whether your report could answer the question being asked of it.
+
 ## [1.2.32] - 15 August 2026
 
 ### Added
