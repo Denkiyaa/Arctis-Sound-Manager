@@ -27,6 +27,10 @@ from arctis_sound_manager.output_memory import OutputMemory
 
 logger = logging.getLogger("OutputSelector")
 
+#: How many refresh passes a pick may stay ahead of the settings file
+#: before the widget stops believing it (5s each).
+_PENDING_MAX_TICKS = 6
+
 
 def _tr(key: str, fallback: str) -> str:
     try:
@@ -54,6 +58,14 @@ class OutputSelector(QWidget):
         #: opposed to a fallback the memory picked. Keeps the "waiting
         #: for …" note off a device that is not a stand-in at all.
         self._on_configured = False
+        #: A pick that has not reached the settings file yet. Persisting
+        #: goes out over D-Bus on a worker thread, so it lands some time
+        #: after the click — and this widget re-reads the settings every
+        #: 5s. Without holding the choice, that read still sees the old
+        #: value and puts it back, which looks exactly like the Equalizer
+        #: refusing to change.
+        self._pending_pick: str | None = None
+        self._pending_ticks = 0
         self._synced = False
         self._suppress = False
 
@@ -186,6 +198,20 @@ class OutputSelector(QWidget):
         # memory. The memory is the fallback ladder for a device that has gone
         # away, not a second place to keep the user's choice.
         configured = self._configured_target()
+        if self._pending_pick is not None:
+            if configured == self._pending_pick:
+                self._pending_pick = None      # persisted; back to normal
+                self._pending_ticks = 0
+            else:
+                self._pending_ticks += 1
+                # Give up eventually: if the write never lands (daemon
+                # gone, setting refused), holding the pick for ever would
+                # hide the real state instead of showing it.
+                if self._pending_ticks > _PENDING_MAX_TICKS:
+                    self._pending_pick = None
+                    self._pending_ticks = 0
+                else:
+                    configured = self._pending_pick
         self._on_configured = configured is not None
         resolved = configured or self._memory.resolve(
             [d for d, _ in self._devices], fallback=self._headset_id())
@@ -244,6 +270,8 @@ class OutputSelector(QWidget):
             return
         self._memory.remember(device_id)
         self._memory.save()
+        self._pending_pick = device_id
+        self._pending_ticks = 0
         self._current = device_id
         self._update_note()
         self.target_changed.emit(device_id)

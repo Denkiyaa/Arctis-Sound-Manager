@@ -192,3 +192,60 @@ def test_the_round_trip_closes(tmp_path, monkeypatch):
     sel = _selector(tmp_path, monkeypatch, configured=stored, sinks=sinks,
                     memory_prefers=HEADSET)
     assert sel._current == HDMI
+
+
+# ── the user's own pick must survive the next refresh ─────────────────────────
+
+def test_a_pick_is_not_undone_while_it_is_being_saved(tmp_path, monkeypatch):
+    """The regression the settings-first rule introduced.
+
+    Persisting goes out over D-Bus on a worker thread, so it lands after the
+    click — and this widget re-reads the settings every 5s. Reading the old
+    value back and applying it puts the previous device on screen again, which
+    is indistinguishable from the Equalizer refusing to change at all.
+    """
+    sinks = [_FakeSink(HEADSET), _FakeSink(HDMI)]
+    sel = _selector(tmp_path, monkeypatch, configured=HEADSET, sinks=sinks,
+                    memory_prefers=HEADSET)
+    assert sel._current == HEADSET
+
+    # The user picks the other device; the settings file has not caught up.
+    sel._combo.clear()
+    for name, _ in [(s.name, s.name) for s in sinks]:
+        sel._combo.addItem(name, name)
+    sel._combo.setCurrentIndex(sel._combo.findData(HDMI))
+    sel._on_picked(sel._combo.currentIndex())
+    assert sel._current == HDMI
+
+    sel.refresh()      # the settings still say HEADSET
+    assert sel._current == HDMI, "the pending pick was overwritten by a stale read"
+
+
+def test_the_hold_is_released_once_the_write_lands(tmp_path, monkeypatch):
+    sinks = [_FakeSink(HEADSET), _FakeSink(HDMI)]
+    sel = _selector(tmp_path, monkeypatch, configured=HEADSET, sinks=sinks,
+                    memory_prefers=HEADSET)
+    sel._pending_pick = HDMI
+
+    settings = tmp_path / "settings" / "general_settings.yaml"
+    settings.write_text(f"external_output_device: {HDMI}\n")
+    sel.refresh()
+
+    assert sel._pending_pick is None, "the hold should end when the value matches"
+    assert sel._current == HDMI
+
+
+def test_a_write_that_never_lands_stops_being_believed(tmp_path, monkeypatch):
+    """Holding for ever would hide the real state rather than show it."""
+    from arctis_sound_manager.gui import output_selector as osel
+
+    sinks = [_FakeSink(HEADSET), _FakeSink(HDMI)]
+    sel = _selector(tmp_path, monkeypatch, configured=HEADSET, sinks=sinks,
+                    memory_prefers=HEADSET)
+    sel._pending_pick = HDMI
+
+    for _ in range(osel._PENDING_MAX_TICKS + 2):
+        sel.refresh()
+
+    assert sel._pending_pick is None
+    assert sel._current == HEADSET, "should fall back to what is actually configured"
