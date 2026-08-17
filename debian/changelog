@@ -1,3 +1,215 @@
+arctis-sound-manager (1.3.0-1) noble; urgency=medium
+
+  * Clips: save the last thirty seconds, with each Sonar channel on its own
+    audio track. Installed from Settings rather than shipped with ASM, and
+    deliberately so: capture is the one feature that needs packages a
+    desktop does not already have — PyGObject, four GStreamer plugin sets
+    and ffmpeg — and an install that only wants the mixer and the equaliser
+    should not carry a screen recorder's encoders. Settings offers an
+    Install button that fetches exactly those packages and nothing else, and
+    an Uninstall that turns the feature off and offers to take them away
+    again; removal is a separate question with No as the answer it defaults
+    to, because ffmpeg and GStreamer belong to your video player and your
+    browser as much as to this. If a package goes missing afterwards the
+    button says Repair rather than claiming the feature works. A rolling
+    capture runs in the background; the Clips page — or asm-clipd bound to a
+    key — writes the preceding seconds to ~/Videos/ASM Clips as an .mkv
+    carrying Game, Chat and Mic as separate tracks, so what you keep can
+    still be remixed afterwards. The library is a grid of poster frames
+    rather than a list of timestamps that differ only by the second they
+    were taken; the frame is lifted from five seconds before the end, inside
+    the span the editor opens with, because the middle of a clip is usually
+    the part where nothing has happened yet. The editor trims, remembers the
+    span per clip, and exports to a separate Shared/ folder so an export
+    never comes back as another card in the library. Exports are always MP4,
+    whatever the settings: Matroska is the only container that holds a track
+    per channel, and it is also one Discord will upload and then refuse to
+    play, so the recording format and the sharing format are deliberately
+    not the same thing. Exporting ends in a share step with the poster frame
+    as a drag-out card — drag it straight into Discord. Select, rename and
+    delete in bulk; deletion goes through the system trash, because a
+    mis-click on a grid of near-identical cards should be recoverable.
+  * Clips: the editor's preview is a mixer — every channel plays at once,
+    with a live level and mute on each. A media player decodes exactly one
+    audio track and picks the first, Qt's included, so a clip whose Game
+    channel was empty played back in total silence with three perfectly good
+    channels sitting beside it, and the only available reading was that
+    clips record no sound. Each channel is now given a player of its own and
+    run in step with the picture, so the sliders and Mute do what a mixer's
+    controls do: you hear the change while you make it, and what you hear is
+    exactly what the export will contain. Those levels are remembered per
+    clip, alongside the trim — deciding the microphone was too loud is a
+    judgement about *that* recording, and reopening a clip used to make you
+    decide it again. Channels holding nothing are marked *silent*, and if
+    every one of them is, the editor says so and points at the Sonar routing
+    on the Home page, which is where that is actually fixed.
+  * Clips: the editor lost its transport bar and gained a scrubbable
+    timeline. The play button and seek slider above the preview were a
+    second, worse copy of the trim band below them — two scrubbers for one
+    clip, and the one that also showed the span being exported was the one
+    worth keeping. Click the picture to play or pause (or press Space), and
+    drag the playhead along the band to run back and forth over a moment,
+    which was not possible at all before: dragging inside the selection
+    moved the selection, and everywhere else was a single click.
+  * Clips: choose the capture frame rate, and pin an exact one when you
+    export. The Clips page offers 30 or 60 fps, and the editor offers *As
+    recorded*, 30 or 60. These are different things and both are worth
+    having. The screen portal only produces a frame when the picture
+    changes, so what capture takes is a ceiling and never a promise — 30 is
+    the new default because asking for 60 sets the keyframe interval and the
+    encoder's budget against a rate the compositor rarely reaches. A rate
+    can only genuinely be *fixed* on the way out, where the gaps can be
+    filled, so that is where the export offers it (at the cost of a
+    re-encode, which the dialog says up front).
+  * Clips: the capture rate read-out now shows both numbers. A status bar
+    reading 20 fps that saves a 12 fps clip looks like a bug and is not one:
+    the live figure covers the last few seconds and the file averages its
+    whole length, idle stretches included. Both are shown when they
+    disagree, alongside the rate the screencast itself is producing, and a
+    save reports the rate the file actually ended up with.
+  * Clips: you can change what is being captured, without a terminal. The
+    screen picker appears once and never again — the choice is persisted and
+    replayed on every later start, which is what stops a rolling capture
+    from prompting each time it rebuilds its pipeline. The cost was that the
+    first answer was permanent: pick the wrong monitor, or pick a window and
+    later want the whole screen, and the only way back was asm-clipd
+    --forget from a terminal. There is now a Capture control beside Length
+    and Frame rate that asks again, and if a capture is running it restarts
+    there and then rather than springing the picker on you twenty minutes
+    later. What is captured still cannot be *displayed* — the choice lives
+    inside the portal and Wayland never tells the app what was picked — so
+    the control offers the only honest thing, which is the way back to the
+    picker.
+  * Clips: the controls were rearranged, and Select all finally has an
+    opposite. The two things you press, Start and Save, sat in one row among
+    the four you set once and leave alone, so they carried no more weight
+    than a spin box; they are now a row of their own above the settings. The
+    shortcut stopped being a loose sentence with a button after it and
+    became a labelled control like the others. And a grid that offered
+    Select all offered no way out of a selection: clicking empty space
+    clears one in a file manager, but a grid of cards usually leaves no
+    empty space to click, so the only route was ctrl-clicking every card
+    back off.
+  * ASM no longer asks whether audio should go through Sonar — it just does.
+    A dialog used to offer, once per installation, to make a Sonar channel
+    your default output. It was asking permission for the thing ASM exists
+    to do, seconds after launch, before you had seen a single channel; and
+    it read the audio graph only, with no idea whether the headset was
+    switched on, so with a wireless headset off it offered to route audio
+    into a channel pointing at a device that was not there — which would
+    have taken the sound away. The daemon has adopted the default on every
+    connect since 1.2.28 anyway, with redirect_audio_on_connect in Settings
+    to turn it off, and unlike the dialog it checks the headset is actually
+    on first.
+  * Switching Clips on could take your sound away, and keep it away. The
+    switch opened ASM's general dependency dialog whenever a capture package
+    was missing. That dialog lists every failing check in the app, and one
+    of them — "pipewire-pulse running" — is fixed by restarting PipeWire and
+    pipewire-pulse, so its Install-all button restarted the audio stack. The
+    headset's card came back with its profile switched off, WirePlumber
+    remembered that as a deliberate choice, and replugging the headset
+    afterwards did not help because the remembered answer was replayed each
+    time. Clips now installs and removes only its own packages, through its
+    own commands, and cannot restart a service.
+  * Record symbols piled up in the corner of the screen, one per capture you
+    had ever started. Three overlapping indicators, reported from a session
+    that had stopped and restarted the capture a couple of times. They were
+    real: each one was a live screen-share session that ASM had opened and
+    then let go of without closing. Releasing the reference is not the same
+    as closing the session — the portal keeps one alive until its client
+    closes it or leaves the bus, and the app goes on running after a capture
+    stops. So every Stop and Start, every pipeline restart, and every
+    capture that failed to begin left another session open, each still
+    drawing its own indicator and each still telling the desktop that the
+    screen was being recorded. Sessions are now closed when the capture that
+    owns them ends, including the half-made one left behind when the screen
+    picker is cancelled.
+  * A clip opened outside ASM played in silence, with two perfectly loud
+    tracks sitting inside it. Reported as "the clips have no sound — it
+    failed to capture the audio". The capture was fine; the file was telling
+    every player something untrue. Matroska's FlagDefault means *yes* when
+    it is not written, and the muxer never writes it, so a clip carrying
+    five channels announced all five as the default one and each player fell
+    back to its own tie-break. Most channels in a real session hold nothing
+    — nothing routed to Chat, the microphone muted — so what got picked was
+    usually one of the empty ones, and the only available reading was that
+    nothing had been recorded. Exactly one track is now flagged on the way
+    out, chosen by how many encoded bytes each channel holds: Opus
+    compresses silence to almost nothing, so the loudest channel is already
+    known from the capture buffer and costs nothing to find. That beats
+    keeping the first track, which is Game and is empty for anyone playing
+    through the headset directly. It is a stream copy rather than a
+    re-encode, and any failure leaves the clip exactly as it was written —
+    an awkward default flag is worth immeasurably more than no clip.
+  * Clips were labelled after whatever browser happened to be playing. A
+    clip taken while Chrome had a tab open came out named "Google Chrome",
+    and the Clips page announced it as what was being recorded — to a user
+    who had picked their game's window in the screen picker. Two faults met
+    there. The list of applications a clip is never about was matched
+    against whole names, so it caught the bare binary name chrome and missed
+    the Google Chrome that PulseAudio actually reports; the same hole let
+    OBS, Brave and Firefox through under their display names. And the name
+    itself was labelled "Recording:", which it never was — it comes from the
+    audio graph, and what is on screen was chosen in the portal picker,
+    which Wayland never reveals to us. The list now matches on words, so
+    display names are caught without a game called *Observation* being
+    mistaken for OBS, and the label reads "Game:".
+  * Everything that followed the system default was filed as game audio. ASM
+    makes one of its channels the default output when the headset connects,
+    so a browser, a music player, system sounds — anything not routed by
+    name — lands there. That channel was Game, not Media: the constant
+    naming it said "media" and held Arctis_Game, because the headset's
+    ChatMix dial reports its own two halves as "media mix" and "chat mix"
+    and its "media" half *is* Game. So a podcast was equalised as game audio
+    and then balanced against Discord by the ChatMix dial. The default is
+    now the Media channel; the dial keeps driving Game, which is what it is
+    for.
+  * The microphone EQ could be missing entirely, on an install that never
+    opened the Sonar tab. effect_output.sonar-micro-eq is created by a
+    filter-chain config that nothing guaranteed: the config generator
+    covered Game, Media, Chat and Output and skipped the microphone, no
+    package shipped the file, and its only writer was the Apply button in
+    the mic EQ tab. Meanwhile the daemon makes that node the default input
+    at every startup. So on an install where nobody had pressed Apply, the
+    headset microphone was absent from the selectable inputs, and the mic
+    input-source setting and auto-switch did nothing at all. The daemon now
+    writes a flat config when the file is missing — never over an existing
+    one, which would drop your mic processing.
+  * The Output channel's device disagreed with itself across three tabs.
+    Setting it in the Equalizer left Channels and Settings showing the old
+    device, and the other way round. Two causes met: the Equalizer's picker
+    kept its own preference file that nothing else read, and the two sides
+    did not even spell a device the same way — one saves a node.nick, the
+    other keys its list on node.name, so a value that did travel could still
+    fail to match. One setting is the source of truth now, both spellings
+    resolve, and a fresh pick is held until it is saved rather than being
+    overwritten by a stale read.
+  * Every diagnostic report ever filed claimed there was no settings file.
+    The report looked one directory above where settings are actually
+    written, so the section meant to show what you had configured — spatial
+    audio, HRIR, the external output device, the forced quantum — always
+    came up empty, and each of those has had to be asked for by hand in a
+    recent issue. It reads as a clean default configuration and never was
+    one.
+  * The ASM logo at the bottom of the sidebar was cut off. A seventh page
+    pushed the column past the window. The Help icon is a little smaller now
+    and the sidebar's own spacing a little tighter; no other icon changed.
+  * SteamOS: the Distrobox installer stopped part way through, looking as
+    though it had worked. steamos-readonly disable needs root and was called
+    without it, so it failed, the udev step returned an error and the
+    install stopped — after printing the steps it had already completed.
+    Reported and diagnosed by @emoeckel. (#188)
+  * The .deb on the releases page was missing pieces every other package
+    had. Debian is built two ways — debian/rules for the PPA,
+    debian/build-deb.sh for the release attachment — and the second had
+    drifted: no arctis-stream-guard unit, and a hand-kept list of console
+    scripts holding five of the eight entry points, so asm-stream-guard and
+    asm-clipd were not in the package at all. A unit file and a keybinding
+    pointed at executables that did not exist. The list is now read from
+    pyproject.toml, and a test compares the two build paths.
+
+ -- loteran <axel.valadon@gmail.com>  Tue, 18 Aug 2026 00:00:00 +0000
+
 arctis-sound-manager (1.2.34-1) noble; urgency=medium
 
   * Applications could stay stuck on the headset itself, outside every
