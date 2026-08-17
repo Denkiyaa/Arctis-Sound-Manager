@@ -1,0 +1,38 @@
+# Code owners — who GitHub asks to review what.
+#
+# Ownership here is about who knows a subsystem well enough to be the one
+# consulted about it, not about permission to touch it. Anyone may open a pull
+# request against any of these files; the owner simply gets asked.
+#
+# NOTE: GitHub only honours an entry when the owner has write access to this
+# repository. Listing someone who is only a fork contributor silently does
+# nothing — the rule is skipped and no review is requested.
+
+# ── Clips: capture, library, editor, sharing ──────────────────────────────────
+# Written by @Denkiyaa (#156, #159), who maintains it. That includes the
+# capture pipeline, the rolling buffer, thumbnailing, the editor and its trim
+# band, the opt-in installer, and the standalone asm-clipd daemon.
+/src/arctis_sound_manager/clip_buffer.py            @Denkiyaa
+/src/arctis_sound_manager/clip_capture.py           @Denkiyaa
+/src/arctis_sound_manager/clip_export.py            @Denkiyaa
+/src/arctis_sound_manager/clip_feedback.py          @Denkiyaa
+/src/arctis_sound_manager/clip_library.py           @Denkiyaa
+/src/arctis_sound_manager/clip_shortcut.py          @Denkiyaa
+/src/arctis_sound_manager/clip_thumbs.py            @Denkiyaa
+/src/arctis_sound_manager/scripts/clipd.py          @Denkiyaa
+/src/arctis_sound_manager/gui/clip_editor.py        @Denkiyaa
+/src/arctis_sound_manager/gui/clip_share_dialog.py  @Denkiyaa
+/src/arctis_sound_manager/gui/clips_install_page.py @Denkiyaa
+/src/arctis_sound_manager/gui/clips_page.py         @Denkiyaa
+/src/arctis_sound_manager/gui/clips_setup.py        @Denkiyaa
+/src/arctis_sound_manager/gui/trim_band.py          @Denkiyaa
+/tests/test_clip_*.py                               @Denkiyaa
+/tests/test_clips_*.py                              @Denkiyaa
+/tests/test_trim_band.py                            @Denkiyaa
+/docs/clips.md                                      @Denkiyaa
+
+# ── Output routing: the per-channel device picker ─────────────────────────────
+# Also @Denkiyaa's (#159). Shared ownership: it reaches into the audio graph
+# and the settings both, so it is reviewed by both of us.
+/src/arctis_sound_manager/output_memory.py          @Denkiyaa @loteran
+/src/arctis_sound_manager/gui/output_selector.py    @Denkiyaa @loteran
