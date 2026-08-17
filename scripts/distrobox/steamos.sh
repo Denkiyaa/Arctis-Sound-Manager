@@ -312,8 +312,12 @@ install_udev_rules() {
 
     if command -v steamos-readonly &>/dev/null; then
         log_warn "SteamOS: disabling read-only filesystem temporarily..."
-        steamos-readonly disable || { log_error "steamos-readonly disable failed"; return 1; }
-        trap 'steamos-readonly enable 2>/dev/null || true' RETURN
+        # sudo, like every other privileged call in this script. Without it
+        # the command fails as the ordinary user, install_udev_rules returns
+        # 1, and the install stops after having already reported progress —
+        # so it looks like the script half-worked (#188).
+        sudo steamos-readonly disable || { log_error "steamos-readonly disable failed"; return 1; }
+        trap 'sudo steamos-readonly enable 2>/dev/null || true' RETURN
     fi
 
     sudo tee "$_HIDRAW_SYMLINK_RULES" >/dev/null <<'RULES'

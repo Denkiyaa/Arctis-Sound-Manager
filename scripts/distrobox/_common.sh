@@ -380,11 +380,14 @@ asm_install_udev_rules() {
     # P2-D: guarantee steamos-readonly is re-enabled even if we exit early
     if [[ "$mode" == "steamos" ]] && command -v steamos-readonly &>/dev/null; then
         log_warn "SteamOS: disabling read-only filesystem temporarily..."
-        if ! steamos-readonly disable; then
+        # sudo, like every other privileged call here: without it the
+        # command fails as the ordinary user and the caller aborts after
+        # having already reported progress (#188, same bug in steamos.sh).
+        if ! sudo steamos-readonly disable; then
             log_error "steamos-readonly disable failed — cannot write udev rules."
             return 1
         fi
-        trap 'steamos-readonly enable 2>/dev/null || true' RETURN
+        trap 'sudo steamos-readonly enable 2>/dev/null || true' RETURN
         log_info "steamos-readonly disabled (will re-enable on function return)"
     fi
 
