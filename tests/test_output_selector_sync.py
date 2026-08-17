@@ -127,3 +127,68 @@ def test_nothing_configured_falls_back_to_the_memory(tmp_path, monkeypatch):
                     configured=None,
                     sinks=[_FakeSink(HEADSET), _FakeSink(HDMI)])
     assert sel._current == HDMI
+
+
+# ── the outbound direction ────────────────────────────────────────────────────
+
+def test_the_equalizer_saves_the_id_the_other_tabs_use(monkeypatch):
+    """What the Equalizer writes has to be findable by the other two combos.
+
+    dbus_service._device_list builds every option as ``nick or node_name``, and
+    Channels and Settings key their items on it. OutputSelector works in
+    node.name, so persisting it verbatim wrote an id `findData()` could not
+    match: the setting changed, the daemon re-aimed the chain, and the other
+    views did not move. That is the reported symptom, in one line.
+    """
+    pytest.importorskip("PySide6")
+    from arctis_sound_manager.gui.sonar_page import SonarPage
+
+    pulse = MagicMock()
+    pulse.__enter__ = lambda s: s
+    pulse.__exit__ = lambda *a: False
+    pulse.sink_list.return_value = [_FakeSink(HDMI, nick="Q95A"), _FakeSink(HEADSET)]
+    fake_pulsectl = types.ModuleType("pulsectl")
+    fake_pulsectl.Pulse = lambda *a, **kw: pulse
+    monkeypatch.setitem(sys.modules, "pulsectl", fake_pulsectl)
+
+    assert SonarPage._canonical_device_id(HDMI) == "Q95A"
+
+
+def test_a_device_without_a_nick_keeps_its_name(monkeypatch):
+    """Same rule as the daemon's: nick when there is one, node.name otherwise."""
+    pytest.importorskip("PySide6")
+    from arctis_sound_manager.gui.sonar_page import SonarPage
+
+    pulse = MagicMock()
+    pulse.__enter__ = lambda s: s
+    pulse.__exit__ = lambda *a: False
+    pulse.sink_list.return_value = [_FakeSink(HEADSET)]
+    fake_pulsectl = types.ModuleType("pulsectl")
+    fake_pulsectl.Pulse = lambda *a, **kw: pulse
+    monkeypatch.setitem(sys.modules, "pulsectl", fake_pulsectl)
+
+    assert SonarPage._canonical_device_id(HEADSET) == HEADSET
+
+
+def test_the_round_trip_closes(tmp_path, monkeypatch):
+    """Write it from the Equalizer, read it back into the Equalizer.
+
+    The id the EQ persists must be one _configured_target() resolves again —
+    otherwise the two fixes cancel out and the selector drifts back.
+    """
+    pytest.importorskip("PySide6")
+    from arctis_sound_manager.gui.sonar_page import SonarPage
+
+    sinks = [_FakeSink(HDMI, nick="Q95A"), _FakeSink(HEADSET)]
+    pulse = MagicMock()
+    pulse.__enter__ = lambda s: s
+    pulse.__exit__ = lambda *a: False
+    pulse.sink_list.return_value = sinks
+    fake_pulsectl = types.ModuleType("pulsectl")
+    fake_pulsectl.Pulse = lambda *a, **kw: pulse
+    monkeypatch.setitem(sys.modules, "pulsectl", fake_pulsectl)
+
+    stored = SonarPage._canonical_device_id(HDMI)
+    sel = _selector(tmp_path, monkeypatch, configured=stored, sinks=sinks,
+                    memory_prefers=HEADSET)
+    assert sel._current == HDMI

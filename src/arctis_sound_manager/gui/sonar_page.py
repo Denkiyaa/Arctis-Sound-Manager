@@ -3396,6 +3396,31 @@ class SonarPage(QWidget):
             worker.deleteLater()
         self._refresh_safe_mode_banner()
 
+    @staticmethod
+    def _canonical_device_id(node_name: str) -> str:
+        """The id the rest of ASM stores for an output device.
+
+        ``dbus_service._device_list`` builds every option as ``nick or
+        node_name``, and both the Channels tab and the Settings page key their
+        combo items on that. OutputSelector works in ``node.name`` — it has to,
+        the graph does — so persisting its value verbatim wrote an id those
+        combos could not find: picking a device in the Equalizer changed the
+        setting, the daemon re-aimed the chain, and the other two views simply
+        did not move, because ``findData()`` matched nothing.
+
+        The routing side is unaffected: resolvers match either spelling, which
+        is why this only ever showed up as a display bug.
+        """
+        try:
+            import pulsectl
+            with pulsectl.Pulse("asm-output-canonical") as pulse:
+                for sink in pulse.sink_list():
+                    if sink.name == node_name:
+                        return sink.proplist.get("node.nick", "") or node_name
+        except Exception:
+            pass
+        return node_name
+
     def _on_output_device_changed(self, device_id: str) -> None:
         """Point the Output channel at *device_id* and persist the choice.
 
@@ -3412,7 +3437,8 @@ class SonarPage(QWidget):
         self._output_widget._target_override = device_id
         try:
             from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
-            DbusWrapper.change_setting("external_output_device", device_id)
+            DbusWrapper.change_setting(
+                "external_output_device", self._canonical_device_id(device_id))
         except Exception:
             log.exception("could not persist the output device")
 
