@@ -244,8 +244,14 @@ class QMainApp(QBaseDesktopApp):
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(150)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(15, 16, 15, 16)
-        sidebar_layout.setSpacing(8)
+        # Seven pages plus the bottom block do not fit a 990px window at the
+        # original 16px margins and 8px spacing: the column came out 26px
+        # too tall and the ASM logo was clipped. A smaller Help icon gave
+        # back 14 of those; the remaining 12 come from here rather than from
+        # shrinking a second icon, because 2px between buttons and 4px at
+        # the ends is not something anyone can see, and a mismatched icon is.
+        sidebar_layout.setContentsMargins(15, 12, 15, 12)
+        sidebar_layout.setSpacing(6)
 
         # Resolve current theme accent color for icon
         current_theme = THEMES.get(self._general_settings.theme, THEMES["steelseries"])

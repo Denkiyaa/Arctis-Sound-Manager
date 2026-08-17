@@ -69,3 +69,44 @@ def test_help_is_the_only_one_shrunk():
     assert len(shrunk) == 1
     assert "HELP_ICON" in shrunk[0]
     assert main_app._SIDEBAR_HELP_ICON_SIZE < main_app._SIDEBAR_ICON_SIZE
+
+
+def test_the_sidebar_still_fits_the_default_window():
+    """The invariant Clips broke, stated as a budget.
+
+    The column is not scrollable and the bottom block (logo, Ko-fi, version)
+    does not compress, so anything the buttons take is taken from the logo —
+    which is how a seventh page silently clipped it. Only the deterministic
+    part is measured here: button heights, spacing and margins. The rest of
+    the window's 990px is the bottom block's budget, and it needs about 115.
+    """
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+
+    import re
+    from pathlib import Path
+
+    import arctis_sound_manager.gui.main_app as main_app
+    from arctis_sound_manager.gui.components import HOME_ICON, SidebarButton
+
+    source = Path(main_app.__file__).read_text()
+    spacing = int(re.search(r"sidebar_layout\.setSpacing\((\d+)\)", source).group(1))
+    margins = re.search(r"sidebar_layout\.setContentsMargins\(\d+, (\d+), \d+, (\d+)\)", source)
+    vertical_margins = int(margins.group(1)) + int(margins.group(2))
+
+    block = re.search(r"top_pages_def = \[(.*?)\n        \]", source, re.S).group(1)
+    rows = [ln for ln in block.splitlines() if ln.strip().startswith("(")]
+    sizes = [main_app._SIDEBAR_HELP_ICON_SIZE if "HELP_ICON" in ln
+             else main_app._SIDEBAR_ICON_SIZE for ln in rows]
+    total = sum(SidebarButton(svg_path=HOME_ICON, label="x", icon_size=s).height()
+                for s in sizes)
+
+    # pages + the stretch + the bottom block are the laid-out items
+    total += spacing * (len(rows) + 1) + vertical_margins
+
+    WINDOW = 990          # main_app: window.resize(min(1400, …), min(990, …))
+    BOTTOM_BLOCK = 115    # logo 55 + support + Ko-fi + version + spacings
+    assert total <= WINDOW - BOTTOM_BLOCK, (
+        f"the sidebar needs {total}px, leaving {WINDOW - total}px for a bottom "
+        f"block that wants {BOTTOM_BLOCK}px — the ASM logo will be clipped")
