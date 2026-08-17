@@ -137,13 +137,6 @@ class QMainApp(QBaseDesktopApp):
         # Start on home page
         self._switch_page(PAGE_HOME)
 
-        # Offer to put Sonar in the audio path, once, if it is not already.
-        # Deferred: the loopback sinks are created by the daemon and are not
-        # in the graph the instant the window builds, so asking immediately
-        # would classify a healthy setup as "no Sonar channels" and stay quiet
-        # exactly when the offer is needed.
-        QTimer.singleShot(6000, self._maybe_offer_sonar_default)
-
         # Check for updates (non-blocking background thread)
         from arctis_sound_manager.update_checker import UpdateCheckWorker
         from arctis_sound_manager.utils import project_version
@@ -491,18 +484,6 @@ class QMainApp(QBaseDesktopApp):
         # the only thing that matters until the user acts on it.
         self._staleness_timer.stop()
         self._home_page.on_restart_required(new_version)
-
-    # ── Theme editor ──────────────────────────────────────────────────────────
-
-    def _maybe_offer_sonar_default(self) -> None:
-        """Ask once whether the system default should go through Sonar."""
-        try:
-            from arctis_sound_manager.gui.sonar_default_dialog import maybe_offer
-            if maybe_offer(self.main_window):
-                self.logger.info("system default output routed through Sonar")
-        except Exception:
-            # A failed offer must never keep the window from being usable.
-            self.logger.exception("Sonar default offer failed")
 
     # ── Theme editor ──────────────────────────────────────────────────────────
 
