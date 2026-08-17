@@ -1,5 +1,5 @@
 Name:           arctis-sound-manager
-Version:        1.2.34
+Version:        1.3.0
 Release:        1%{?dist}
 Summary:        Linux GUI for SteelSeries Arctis headsets
 
