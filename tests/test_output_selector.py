@@ -32,10 +32,17 @@ def qt_app():
 
 
 def _selector(qt_app, devices, order=None):
-    """Build a selector over a fixed device list, with no real PulseAudio."""
-    OutputSelector._available = lambda self: list(self._fake)   # type: ignore[assignment]
+    """Build a selector over a fixed device list, with no real PulseAudio.
+
+    The stub is bound to this instance, not written onto the class. Assigning
+    ``OutputSelector._available`` here left every selector built later in the
+    session — in any other test file — reaching for a ``_fake`` attribute only
+    these fixtures set, so an unrelated test failed with AttributeError
+    depending on collection order.
+    """
     widget = OutputSelector.__new__(OutputSelector)
     widget._fake = devices                                       # type: ignore[attr-defined]
+    widget._available = lambda: list(widget._fake)               # type: ignore[assignment]
     OutputSelector.__init__(widget)
     widget._timer.stop()
     if order:

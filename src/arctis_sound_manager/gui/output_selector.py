@@ -50,6 +50,10 @@ class OutputSelector(QWidget):
         # longer present to be asked for its name.
         self._labels: dict[str, str] = {}
         self._current: str | None = None
+        #: True while the combo shows the device the settings ask for, as
+        #: opposed to a fallback the memory picked. Keeps the "waiting
+        #: for …" note off a device that is not a stand-in at all.
+        self._on_configured = False
         self._synced = False
         self._suppress = False
 
@@ -123,6 +127,54 @@ class OutputSelector(QWidget):
                 return device_id
         return None
 
+    def _configured_target(self) -> str | None:
+        """The device the rest of ASM is set to, when it is present.
+
+        ``external_output_device`` is the setting the Settings page and the
+        Channels tab's Output card both write, and the one the daemon reads to
+        aim the Output chain. This widget used to resolve purely from
+        :class:`OutputMemory`, which nothing else writes — so a device picked
+        anywhere else never reached this combo, and the two disagreed silently.
+
+        The stored value may be a ``node.nick`` (that is what the Channels card
+        saves) or a ``node.name`` (what this combo uses as its item data), so
+        both are matched and the ``node.name`` is returned — the id the combo
+        is keyed on.
+
+        ``None`` when nothing is configured, or when the configured device is
+        not in the graph right now; the memory's fallback then takes over,
+        which is exactly what it is for.
+        """
+        try:
+            import pulsectl
+        except ImportError:
+            return None
+
+        from pathlib import Path
+
+        from arctis_sound_manager.constants import SETTINGS_FOLDER
+
+        settings_file = Path(SETTINGS_FOLDER) / "general_settings.yaml"
+        if not settings_file.exists():
+            return None
+        try:
+            from ruamel.yaml import YAML
+            nick = (YAML(typ="safe").load(settings_file) or {}).get(
+                "external_output_device")
+        except Exception:
+            return None
+        if not nick:
+            return None
+
+        try:
+            with pulsectl.Pulse("asm-output-configured") as pulse:
+                for sink in pulse.sink_list():
+                    if nick in (sink.name, sink.proplist.get("node.nick", "")):
+                        return sink.name
+        except Exception as exc:
+            logger.debug("could not resolve the configured output: %s", exc)
+        return None
+
     def refresh(self) -> None:
         devices = self._available()
         if devices != self._devices:
@@ -130,12 +182,26 @@ class OutputSelector(QWidget):
             self._labels.update(dict(devices))
             self._rebuild_combo()
 
-        resolved = self._memory.resolve(
+        # What the rest of ASM is configured for wins over this widget's own
+        # memory. The memory is the fallback ladder for a device that has gone
+        # away, not a second place to keep the user's choice.
+        configured = self._configured_target()
+        self._on_configured = configured is not None
+        resolved = configured or self._memory.resolve(
             [d for d, _ in self._devices], fallback=self._headset_id())
         if resolved != self._current:
             first = self._current is None and not self._synced
             self._current = resolved
             self._select(resolved)
+            # A change that came *from* the settings is already applied: the
+            # daemon aims the Output chain from the same value, and whoever
+            # wrote it has done the work. Emitting here would send it straight
+            # back out and restart the filter-chain for nothing, every time the
+            # device is changed from the Channels tab or from Settings.
+            if configured is not None and resolved == configured:
+                self._synced = True
+                self._update_note()
+                return
             # Every emission ends in a filter-chain restart, and this runs on a
             # timer — so emitting for the initial resolve would rebuild the
             # chain (and interrupt audio) simply because the page was opened,
@@ -189,6 +255,10 @@ class OutputSelector(QWidget):
         shows the headset, the user remembers picking the earbuds, and nothing
         explains the difference.
         """
+        if self._on_configured:
+            # Showing exactly what the user configured — nothing temporary.
+            self._note.setText("")
+            return
         if self._current and self._memory.is_fallback(self._current):
             preferred = self._memory.preferred or ""
             label = self._labels.get(preferred, preferred)
