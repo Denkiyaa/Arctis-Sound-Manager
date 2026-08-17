@@ -51,3 +51,49 @@ def test_every_systemd_unit_in_the_tree_reaches_both_debian_paths():
     for unit in sorted(units):
         assert unit in rules, f"{unit} is not installed by debian/rules"
         assert unit in script, f"{unit} is not installed by debian/build-deb.sh"
+
+
+def test_every_entry_point_becomes_an_executable_in_both_debian_paths():
+    """The gap the first version of this test could not see.
+
+    debian/rules writes each console script with printf and build-deb.sh
+    generated them from a hand-kept list, so neither shows up as an `install`
+    line — the source-file comparison above walked straight past them. The list
+    in build-deb.sh had five of the eight entry points: the .deb on the
+    releases page shipped a stream-guard unit and a clip keybinding pointing at
+    /usr/bin executables that were not in the package.
+
+    Both paths must account for every name in [project.scripts]; how they
+    produce it is their business.
+    """
+    scripts = _entry_points()
+    assert scripts, "no [project.scripts] found — the parser needs updating"
+
+    rules = (REPO / "debian" / "rules").read_text()
+    script = (REPO / "debian" / "build-deb.sh").read_text()
+
+    # build-deb.sh reads the [project.scripts] table itself, so it accounts
+    # for all of them at once. Matching on the table name rather than on
+    # "pyproject.toml": the script already reads that file for the version,
+    # so the looser marker was true even for the hand-kept list this test
+    # exists to reject.
+    derived = "project.scripts" in script or "project\\.scripts" in script
+
+    # asm-diag-dinit is the odd one out on purpose: it diagnoses a dinit setup,
+    # and debian/rules builds for the PPA, which targets systemd distributions.
+    # build-deb.sh ships it because that .deb also reaches dinit systems.
+    systemd_only_exception = {"asm-diag-dinit"}
+
+    for name in sorted(scripts - systemd_only_exception):
+        assert name in rules, f"{name} is never installed by debian/rules"
+        assert derived or name in script, (
+            f"{name} is in [project.scripts] but debian/build-deb.sh neither "
+            f"names it nor derives its list from pyproject.toml")
+
+
+def _entry_points() -> set[str]:
+    text = (REPO / "pyproject.toml").read_text()
+    block = re.search(r"^\[project\.scripts\]\n(.*?)(?=^\[|\Z)", text, re.S | re.M)
+    if not block:
+        return set()
+    return {m.group(1) for m in re.finditer(r"^([\w-]+)\s*=", block.group(1), re.M)}

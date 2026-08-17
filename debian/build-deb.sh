@@ -53,22 +53,32 @@ find "${PYLIB}" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || tru
 rm -f "${PYLIB}/.lock"
 
 # ── Console scripts ─────────────────────────────────────────
-declare -A ENTRIES=(
-    [asm-daemon]="arctis_sound_manager.scripts.daemon"
-    [asm-cli]="arctis_sound_manager.scripts.cli"
-    [asm-gui]="arctis_sound_manager.scripts.gui"
-    [asm-router]="arctis_sound_manager.scripts.video_router"
-    [asm-setup]="arctis_sound_manager.scripts.setup"
-)
-for cmd in "${!ENTRIES[@]}"; do
+# Read from pyproject.toml rather than kept as a list here. The hand-written
+# list drifted: it carried five of the eight entry points, so the .deb on the
+# releases page shipped without asm-stream-guard and without asm-clipd — a unit
+# file and a keybinding pointing at executables the package did not contain.
+# asm-diag-dinit is installed from scripts/ further down; it is a standalone
+# script rather than a console entry point.
+ENTRY_SPECS=$(awk '/^\[project\.scripts\]/{f=1;next} /^\[/{f=0} f && /=/ {gsub(/"/,""); split($0,a,"="); split(a[2],b,":"); gsub(/[ \t]/,"",a[1]); gsub(/[ \t]/,"",b[1]); if (a[1] != "") print a[1], b[1]}' pyproject.toml)
+
+if [ -z "${ENTRY_SPECS}" ]; then
+    echo "ERROR: no [project.scripts] entry points found in pyproject.toml" >&2
+    exit 1
+fi
+
+while read -r cmd module; do
+    [ -z "${cmd}" ] && continue
+    # Installed separately from scripts/, not generated from an entry point.
+    [ "${cmd}" = "asm-diag-dinit" ] && continue
     cat > "${PKGDIR}/usr/bin/${cmd}" << SCRIPT
 #!/usr/bin/python3
 import sys
-from ${ENTRIES[$cmd]} import main
+from ${module} import main
 sys.exit(main())
 SCRIPT
     chmod 755 "${PKGDIR}/usr/bin/${cmd}"
-done
+    echo "    console script: ${cmd}"
+done <<< "${ENTRY_SPECS}"
 
 # ── udev rules ──────────────────────────────────────────────
 echo "==> Installing system files..."
