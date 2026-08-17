@@ -80,6 +80,12 @@ PAGE_HELP = 6
 PAGE_THEME_EDITOR = 7
 
 
+#: Sidebar icon sizes. Help is deliberately smaller — see the note on
+#: top_pages_def in _build_window.
+_SIDEBAR_ICON_SIZE = 44
+_SIDEBAR_HELP_ICON_SIZE = 30
+
+
 class QMainApp(QBaseDesktopApp):
     app: QApplication
     main_window: QMainAppProtoWidget
@@ -245,25 +251,31 @@ class QMainApp(QBaseDesktopApp):
         current_theme = THEMES.get(self._general_settings.theme, THEMES["steelseries"])
         current_accent = current_theme["ACCENT"]
 
-        # Top navigation buttons: Home, Equalizer, Headset, DAC, Settings, Help
+        # Top navigation buttons: Channels, Equalizer, Headset, DAC, Clips,
+        # Settings, Help. The fourth field is the icon size; only Help asks
+        # for a smaller one. Adding Clips made a seventh full-height button,
+        # and the column then ran past the bottom block — the ASM logo was
+        # clipped. Help is the one that can afford it: it is the least
+        # travelled of the seven and the last in the column.
         top_pages_def = [
-            (HOME_ICON,      I18n.translate('ui', 'channels'),  current_accent),
-            (EQUALIZER_ICON, I18n.translate('ui', 'equalizer'), current_accent),
-            (HEADPHONE_ICON, I18n.translate('ui', 'headset'),   current_accent),
-            (GAMEDAC_ICON,   I18n.translate('ui', 'dac'),       current_accent),
-            (CLIPS_ICON,     I18n.translate('ui', 'clips'),     current_accent),
-            (SETTINGS_ICON,  I18n.translate('ui', 'settings'),  current_accent),
-            (HELP_ICON,      I18n.translate('ui', 'help'),      current_accent),
+            (HOME_ICON,      I18n.translate('ui', 'channels'),  current_accent, _SIDEBAR_ICON_SIZE),
+            (EQUALIZER_ICON, I18n.translate('ui', 'equalizer'), current_accent, _SIDEBAR_ICON_SIZE),
+            (HEADPHONE_ICON, I18n.translate('ui', 'headset'),   current_accent, _SIDEBAR_ICON_SIZE),
+            (GAMEDAC_ICON,   I18n.translate('ui', 'dac'),       current_accent, _SIDEBAR_ICON_SIZE),
+            (CLIPS_ICON,     I18n.translate('ui', 'clips'),     current_accent, _SIDEBAR_ICON_SIZE),
+            (SETTINGS_ICON,  I18n.translate('ui', 'settings'),  current_accent, _SIDEBAR_ICON_SIZE),
+            (HELP_ICON,      I18n.translate('ui', 'help'),      current_accent, _SIDEBAR_HELP_ICON_SIZE),
         ]
 
         self._sidebar_buttons: list[SidebarButton] = []
-        for svg_path, label, color_active in top_pages_def:
+        for svg_path, label, color_active, icon_size in top_pages_def:
             btn = SidebarButton(
                 svg_path=svg_path,
                 label=label,
                 icon_color_inactive=current_theme["TEXT_SECONDARY"],
                 icon_color_active=color_active,
                 parent=sidebar,
+                icon_size=icon_size,
             )
             idx = len(self._sidebar_buttons)
             btn.clicked.connect(lambda checked=False, i=idx: self._switch_page(i))
