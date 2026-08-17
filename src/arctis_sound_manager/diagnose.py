@@ -305,7 +305,12 @@ def _section_pipewire_runtime() -> str:
 
 def _section_settings() -> str:
     out = io.StringIO()
-    settings_yaml = SETTINGS_FOLDER.parent / 'general_settings.yaml'
+    # SETTINGS_FOLDER *is* .../arctis_manager/settings, which is where
+    # GeneralSettings.read_from_file() reads and writes. Going up a level looked
+    # for a file that has never existed there, so every diagnostic report ever
+    # filed announced "no settings file" — and no issue has ever shown us what
+    # the reporter had actually configured.
+    settings_yaml = SETTINGS_FOLDER / 'general_settings.yaml'
     if not settings_yaml.exists():
         out.write(f'(no settings file at {settings_yaml})')
         return out.getvalue()
