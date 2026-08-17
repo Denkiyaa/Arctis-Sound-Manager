@@ -213,6 +213,12 @@ def test_the_page_names_every_package_before_anything_is_elevated(install_page,
     """Turning on a screen recorder should not be how someone finds GStreamer
     on their system. The names and the exact command are on the page, in front
     of the button, rather than behind it."""
+    # _blocking_check only carries an "arch" entry, so install_command_for()
+    # returns nothing on any other distro and the field comes up empty. Pinning
+    # the distro is what makes this assertion mean the same thing everywhere:
+    # unpinned, it passed on the two Arch machines it was written on and failed
+    # on all seven CI images.
+    monkeypatch.setattr(sdc, "detect_distro", lambda: "arch")
     monkeypatch.setattr(sdc, "clip_dep_checks", lambda: [_blocking_check(False)])
 
     install_page._refresh()
