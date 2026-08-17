@@ -81,6 +81,8 @@ install -Dm644 systemd/arctis-manager.service \
     "${PKGDIR}/usr/lib/systemd/user/arctis-manager.service"
 install -Dm644 systemd/arctis-video-router.service \
     "${PKGDIR}/usr/lib/systemd/user/arctis-video-router.service"
+install -Dm644 systemd/arctis-stream-guard.service \
+    "${PKGDIR}/usr/lib/systemd/user/arctis-stream-guard.service"
 # Renamed from arctis-gui.service in 784093a so the unit matches the
 # desktop entry and the tray shortcut can bind to it. The .spec and the
 # PKGBUILD were updated then; this script was not, and `install` would
@@ -88,11 +90,17 @@ install -Dm644 systemd/arctis-video-router.service \
 install -Dm644 systemd/app-ArctisManager.service \
     "${PKGDIR}/usr/lib/systemd/user/app-ArctisManager.service"
 
+# Used by the GUI to restart ASM's own units after an upgrade.
+install -Dm755 scripts/restart-user-services.sh \
+    "${PKGDIR}/usr/lib/arctis-sound-manager/restart-user-services.sh"
+
 # ── dinit user service templates ────────────────────────────
 install -Dm644 dinit/arctis-manager \
     "${PKGDIR}/usr/share/arctis-sound-manager/dinit/arctis-manager"
 install -Dm644 dinit/arctis-video-router \
     "${PKGDIR}/usr/share/arctis-sound-manager/dinit/arctis-video-router"
+install -Dm644 dinit/arctis-stream-guard \
+    "${PKGDIR}/usr/share/arctis-sound-manager/dinit/arctis-stream-guard"
 install -Dm644 dinit/arctis-gui \
     "${PKGDIR}/usr/share/arctis-sound-manager/dinit/arctis-gui"
 install -Dm644 dinit/pipewire-filter-chain \
