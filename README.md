@@ -1086,6 +1086,9 @@ Thanks to everyone who has contributed code, fixes, or community support:
 | [Michsior14](https://github.com/Michsior14) | Fix Arctis 7+ power status recognition ([#67](https://github.com/loteran/Arctis-Sound-Manager/pull/67)) |
 | [H0DG3](https://github.com/H0DG3) | Identified the fontconfig cache fix for font rendering on Bazzite/Distrobox |
 | [cookiekiller](https://github.com/cookiekiller) | Diagnosed the loopback watchdog orphan-recreation bug ([#84](https://github.com/loteran/Arctis-Sound-Manager/issues/84)); detailed analysis and fix suggestions for per-channel EQ coupling, Discord routing override, and weather log spam ([#85](https://github.com/loteran/Arctis-Sound-Manager/issues/85)) |
+| [emoeckel](https://github.com/emoeckel) | Located the missing `sudo` on the SteamOS read-only toggle, which stopped the Distrobox installer half way through while looking as though it had worked, and supplied the fix ([#188](https://github.com/loteran/Arctis-Sound-Manager/issues/188)); SteamOS testing on [#181](https://github.com/loteran/Arctis-Sound-Manager/issues/181) |
+| [baccatuesday](https://github.com/baccatuesday) | Reported and tested the SteamOS Game/Media channels having no sound ([#181](https://github.com/loteran/Arctis-Sound-Manager/issues/181)) |
+| autune | Reported two bugs that hid behind a working-looking UI: applications stranded on the headset itself, outside every channel and absent from the mixer (fixed in v1.2.34), and the microphone EQ node missing entirely on an install that had never opened the Sonar tab (fixed in v1.3.0) |
 
 ---
 
