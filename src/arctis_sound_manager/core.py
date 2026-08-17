@@ -2036,6 +2036,20 @@ class CoreEngine:
             self.logger.warning(f'Failed to update EQ band file: {e}')
     
     def redirect_to_media_sink(self):
+        """Make the Media channel the system default when the headset comes up.
+
+        Media, because the default output is what everything ASM does not route
+        by name follows: a browser, a music player, system sounds, any app the
+        router has never heard of. Sending that to Game — which is what this did
+        for as long as PULSE_MEDIA_NODE_NAME held ``Arctis_Game`` — files all of
+        it as game audio, so the ChatMix dial then balances a podcast against
+        Discord.
+
+        Only when the headset is actually on: the channels point at it, so
+        adopting the default while it is off would move audio to a device that
+        is not there. That is why redirect_audio_on_disconnect exists to hand
+        the default back when it goes away.
+        """
         if not self.general_settings.redirect_audio_on_connect or not self.is_device_online():
             return
 
