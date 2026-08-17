@@ -1085,7 +1085,8 @@ def test_ensure_filter_chain_healthy_enters_safe_mode_on_high_nrestarts(tmp_path
     with patch("arctis_sound_manager.service_control.is_active", return_value=True), \
          patch("arctis_sound_manager.service_control.restart", return_value=True), \
          patch("subprocess.run", return_value=mock_result), \
-         patch("arctis_sound_manager.init_system.detect_init", return_value="systemd"):
+         patch("arctis_sound_manager.service_control.detect_init",
+               return_value="systemd"):
         result = stp.ensure_filter_chain_healthy()
 
     assert result is False
@@ -1794,6 +1795,13 @@ def test_spatial_toggle_produces_identical_conf():
 def test_ensure_spatial_eq_links_targets_hesuvi_when_enabled(monkeypatch):
     """Spatial ON → EQ output is linked to the HeSuVi virtual-surround sink."""
     monkeypatch.setattr(_s2p_p3, "_spatial_enabled", lambda ch: True)
+    # HeSuVi present in the graph. Stubbed, or pw_node_exists() answers from a
+    # live pw-dump and the assertion below turns into a reading of whichever
+    # machine ran the suite.
+    monkeypatch.setattr(
+        "arctis_sound_manager.pw_utils.pw_node_exists",
+        lambda name, data=None: True,
+    )
     calls = []
     monkeypatch.setattr(
         "arctis_sound_manager.pw_utils.ensure_loopback_link",
@@ -1889,8 +1897,12 @@ def test_ensure_spatial_eq_links_ignores_non_toggle_channels(monkeypatch):
 # gap by composing with ensure_loopback_link, exactly like the other two.
 
 def test_ensure_physical_output_links_links_both_channels(monkeypatch):
-    """Device attached: both the chat EQ output and the HeSuVi output are
-    linked to their respective physical targets."""
+    """Device attached: the chat EQ output and each channel's HeSuVi output
+    are linked to their respective targets.
+
+    Game and Media have separate HeSuVi stages so their device menus are
+    independent — one shared stage had a single output, which made Media's
+    choice inert and dragged it along whenever Game's changed."""
     monkeypatch.setattr(_s2p_p3, "_get_physical_out_chat", lambda: "alsa_output.test-chat")
     monkeypatch.setattr(_s2p_p3, "_get_physical_out_game", lambda: "alsa_output.test-game")
     calls = []

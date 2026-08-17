@@ -147,6 +147,25 @@ class GeneralSettings(JsonSerializable):
     # reports mute makes mode 3 behave like mode 1. Manual switching via
     # micro_input_source still works everywhere.
     micro_autoswitch: int = 0
+    # Clips is the one feature whose dependencies are not already on a desktop:
+    # PyGObject, four GStreamer plugin sets and ffmpeg, none of which the mixer
+    # or the EQ need. Making them hard requirements would charge every user who
+    # only wants a headset mixer for a screen recorder they never open, so the
+    # feature ships off and its packages are installed from the toggle that
+    # turns it on (see _CLIP_DEP_NAMES in system_deps_checker).
+    #
+    # False rather than "on if the packages happen to be present": a capture
+    # that starts recording because a dependency arrived with something else is
+    # a surprise, and this one holds a rolling buffer of the screen.
+    clips_enabled: bool = False
+
+    # Arm the rolling buffer while a game is running, and let it go when the
+    # game does. On, because a buffer that has to be armed by hand is armed
+    # after the moment worth keeping — which is the one thing this feature
+    # exists to catch. It only ever applies once Clips itself has been switched
+    # on above, so nothing here records a screen the user did not ask it to;
+    # the switch is for people who would rather decide each time.
+    clips_autostart: bool = True
 
     # Stability mode: force PipeWire's quantum (buffer size) while ASM runs.
     # 0 = leave PipeWire alone (default).

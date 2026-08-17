@@ -354,6 +354,20 @@ class PulseAudioManager:
                     and s.proplist.get('device.class', '') != 'monitor']
         return physical[0] if physical else None
 
+    def has_source(self, node_name: str) -> bool:
+        """Whether a source with ``node.name`` *node_name* is in the graph.
+
+        Used before claiming a source as the system default: pointing the
+        default input at a node that isn't there leaves the machine with a
+        microphone nobody can hear.
+        """
+        try:
+            return any(s.proplist.get('node.name', '') == node_name
+                       for s in self.pulse.source_list())
+        except Exception as e:
+            self.logger.warning("has_source(%s) failed: %r", node_name, e)
+            return False
+
     def set_default_source(self, name: str) -> None:
         """Set the default PipeWire/PulseAudio source by node name."""
         try:
@@ -406,8 +420,26 @@ class PulseAudioManager:
         game = next((s for s in sinks if s.proplist.get('node.name', '') == PULSE_GAME_NODE_NAME), None)
         chat = next((s for s in sinks if s.proplist.get('node.name', '') == PULSE_CHAT_NODE_NAME), None)
 
-        if game:
+        # Only the channel that actually moved is written. Writing a sink the
+        # level it already has is not free: the server still announces a volume
+        # change, and the desktop still shows its volume OSD for it — so
+        # nudging one end of the dial used to flash the other channel's sink
+        # too. See CoreEngine._mix_is_jitter for the other half of this.
+        if game and not self._sink_is_at(game, media_mix):
             self.pulse.volume_set_all_chans(game, media_mix / 100)
-        if chat:
+        if chat and not self._sink_is_at(chat, chat_mix):
             self.pulse.volume_set_all_chans(chat, chat_mix / 100)
+
+    @staticmethod
+    def _sink_is_at(sink, pct: int) -> bool:
+        """Whether *sink* already sits at *pct*, as the server would report it.
+
+        Compared in whole percent because that is the resolution the caller
+        works in: a level set from a percentage and read back is a float that
+        need not come home to the same digits.
+        """
+        try:
+            return round(sink.volume.value_flat * 100) == pct
+        except Exception:
+            return False
 

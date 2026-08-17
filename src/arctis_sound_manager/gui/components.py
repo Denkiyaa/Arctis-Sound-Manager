@@ -43,6 +43,7 @@ CHAT_ICON = os.path.join(IMAGES_DIR, "chat_icon.svg")
 MEDIA_ICON = os.path.join(IMAGES_DIR, "media_icon.svg")
 HDMI_ICON = os.path.join(IMAGES_DIR, "hdmi_icon.svg")
 GAMEDAC_ICON = os.path.join(IMAGES_DIR, "gamedac_icon.svg")
+CLIPS_ICON = os.path.join(IMAGES_DIR, "clips_icon.svg")
 
 
 # ── SvgIconWidget ──────────────────────────────────────────────────────────────
@@ -86,9 +87,16 @@ class SvgIconWidget(QLabel):
 
 # ── SidebarButton ──────────────────────────────────────────────────────────────
 
+#: The sidebar's standard icon and button height. A button may ask for a
+#: smaller icon; its height shrinks by the same amount, so the column gets
+#: the space back instead of just drawing a smaller glyph in the same box.
+_DEFAULT_ICON_SIZE = 44
+_DEFAULT_BUTTON_HEIGHT = 115
+
+
 class SidebarButton(QPushButton):
     """
-    120x130 px sidebar button: SVG icon on top + text label below.
+    120x115 px sidebar button: SVG icon on top + text label below.
     Active state shows a lighter background and colored icon.
     """
 
@@ -99,10 +107,14 @@ class SidebarButton(QPushButton):
         icon_color_inactive: str = TEXT_SECONDARY,
         icon_color_active: str = ACCENT,
         parent: QWidget | None = None,
+        icon_size: int = _DEFAULT_ICON_SIZE,
     ):
         super().__init__(parent)
         self.setObjectName("sidebarBtn")
-        self.setFixedSize(120, 115)
+        # The height follows the icon. Shrinking the icon alone would change
+        # nothing: the button keeps its fixed height, and the sidebar goes on
+        # taking the same room — which is the whole point of shrinking one.
+        self.setFixedSize(120, _DEFAULT_BUTTON_HEIGHT - (_DEFAULT_ICON_SIZE - icon_size))
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setCheckable(False)
 
@@ -123,7 +135,7 @@ class SidebarButton(QPushButton):
         layout.setSpacing(6)
         layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        self._icon_size = 44
+        self._icon_size = icon_size
         self._icon_widget = SvgIconWidget(svg_path, icon_color_inactive, size=self._icon_size)
         layout.addWidget(self._icon_widget, alignment=Qt.AlignmentFlag.AlignHCenter)
 

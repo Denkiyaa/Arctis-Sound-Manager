@@ -19,6 +19,7 @@ import subprocess
 from pathlib import Path
 
 from arctis_sound_manager import service_control as sc
+from arctis_sound_manager.gui.output_selector import OutputSelector
 from arctis_sound_manager.i18n import I18n
 
 from PySide6.QtCore import QThread, Qt, QTimer, Signal, Slot
@@ -3277,6 +3278,15 @@ class SonarPage(QWidget):
         self._micro_widget  = SonarMicroWidget()
         self._output_widget = SonarChannelWidget("output")
 
+        # Live device picker for the Output channel. It was previously only
+        # settable in Settings and invisible here, which left a user on
+        # Bluetooth earbuds with no way to see where the channel was pointing.
+        self._output_selector = OutputSelector()
+        self._output_selector.target_changed.connect(self._on_output_device_changed)
+        _out_layout = self._output_widget.layout()
+        if _out_layout is not None:
+            _out_layout.insertWidget(0, self._output_selector)
+
         self._tabs.addTab(self._game_widget,   _t("game"))
         self._tabs.addTab(self._media_widget,  _t("media"))
         self._tabs.addTab(self._chat_widget,   _t("chat"))
@@ -3385,6 +3395,70 @@ class SonarPage(QWidget):
         if worker is not None:
             worker.deleteLater()
         self._refresh_safe_mode_banner()
+
+    @staticmethod
+    def _canonical_device_id(node_name: str) -> str:
+        """The id the rest of ASM stores for an output device.
+
+        ``dbus_service._device_list`` builds every option as ``nick or
+        node_name``, and both the Channels tab and the Settings page key their
+        combo items on that. OutputSelector works in ``node.name`` — it has to,
+        the graph does — so persisting its value verbatim wrote an id those
+        combos could not find: picking a device in the Equalizer changed the
+        setting, the daemon re-aimed the chain, and the other two views simply
+        did not move, because ``findData()`` matched nothing.
+
+        The routing side is unaffected: resolvers match either spelling, which
+        is why this only ever showed up as a display bug.
+        """
+        try:
+            import pulsectl
+            with pulsectl.Pulse("asm-output-canonical") as pulse:
+                for sink in pulse.sink_list():
+                    if sink.name == node_name:
+                        return sink.proplist.get("node.nick", "") or node_name
+        except Exception:
+            pass
+        return node_name
+
+    def _on_output_device_changed(self, device_id: str) -> None:
+        """Point the Output channel at *device_id* and persist the choice.
+
+        The selector resolves fallbacks on its own, so this fires both when the
+        user picks a device and when one disappears — either way the channel and
+        the saved setting must follow, or the filter chain keeps feeding a sink
+        that is no longer there.
+        """
+        import logging
+        log = logging.getLogger(__name__)
+
+        if self._output_widget._target_override == device_id:
+            return
+        self._output_widget._target_override = device_id
+        try:
+            from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
+            DbusWrapper.change_setting(
+                "external_output_device", self._canonical_device_id(device_id))
+        except Exception:
+            log.exception("could not persist the output device")
+
+        # Move one link, do not rebuild anything. Every Sonar channel feeds the
+        # master output, so the destination is a single link below it: switching
+        # touches no channel and no application, which is what stops the routing
+        # overrides from dragging streams back and undoing the choice.
+        #
+        # Rebuilding was the old route and it cannot be used here: it restarts
+        # the loopbacks, and a loopback process *is* its virtual sink — killing
+        # one orphans every stream playing to it, which is why swapping between
+        # Bluetooth and the headset lost audio and scattered channels.
+        try:
+            from arctis_sound_manager.pw_utils import retarget_output
+            if not retarget_output(device_id):
+                log.info("retarget failed for %s — rebuilding the chain", device_id)
+                self._output_widget._schedule_apply()
+        except Exception:
+            log.exception("could not retarget the output — rebuilding instead")
+            self._output_widget._schedule_apply()
 
     def _load_output_target(self):
         """Read external_output_device from settings and set it on the output widget.

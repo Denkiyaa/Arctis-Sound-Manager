@@ -1,0 +1,18 @@
+[Unit]
+# Named after ArctisManager.desktop rather than after the project: a
+# non-sandboxed process gets its portal app id from the unit its cgroup names
+# (app-<AppID>[-<random>].service|.scope). Under the old arctis-gui.service the
+# id resolved empty and the GlobalShortcuts portal refused the session, so the
+# clip shortcut could never bind. See service_control._SERVICE_MAP.
+Description=Arctis Sound Manager — System Tray
+After=graphical-session.target arctis-manager.service
+Wants=arctis-manager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/asm-gui --systray
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

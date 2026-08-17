@@ -199,3 +199,38 @@ def test_set_autostart_false_purges_all(monkeypatch, tmp_path):
     assert not autostart_enabled()
     assert not xdg_backend.is_enabled()
     assert not hypr_backend.is_enabled()
+
+
+# ── the tray unit's name, and getting off the old one ──────────────────────────
+
+def test_gui_unit_is_written_under_the_portal_compatible_name(monkeypatch, tmp_path):
+    # The name is what gives the process an app id (see service_control's map);
+    # written under any other one, the clip shortcut cannot bind.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(autostart_mod.shutil, "which", lambda _: "/usr/bin/asm-gui")
+    monkeypatch.setattr(autostart_mod.sc, "daemon_reload", lambda: True)
+
+    written = SystemdBackend()._ensure_gui_service()
+
+    assert written == tmp_path / ".config" / "systemd" / "user" / "app-ArctisManager.service"
+    assert "ExecStart=/usr/bin/asm-gui --systray" in written.read_text()
+
+
+def test_legacy_gui_unit_is_disabled_and_removed(monkeypatch, tmp_path):
+    # A left-behind arctis-gui.service starts a second tray at login — the one
+    # with the empty app id — and shadows the packaged unit even when disabled.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(autostart_mod.shutil, "which", lambda _: "/usr/bin/asm-gui")
+    monkeypatch.setattr(autostart_mod.sc, "daemon_reload", lambda: True)
+
+    legacy = tmp_path / ".config" / "systemd" / "user" / "arctis-gui.service"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("[Service]\nExecStart=/usr/bin/asm-gui --systray\n")
+
+    disabled: list[str] = []
+    monkeypatch.setattr(autostart_mod.sc, "disable", lambda name: disabled.append(name))
+
+    SystemdBackend()._ensure_gui_service()
+
+    assert disabled == ["arctis-gui.service"]
+    assert not legacy.exists()

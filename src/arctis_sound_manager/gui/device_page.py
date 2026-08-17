@@ -5,6 +5,7 @@
 Device / Settings page — ArctisSonar GUI visual style.
 Matches the ref_settingsPage.png design.
 """
+import logging
 import shutil
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -33,6 +35,8 @@ from arctis_sound_manager.gui.components import (
 )
 from arctis_sound_manager.gui.settings_widget import QSettingsWidget
 from arctis_sound_manager.autostart import active_backend_name, autostart_enabled, set_autostart
+log = logging.getLogger(__name__)
+
 import arctis_sound_manager.gui.theme as _theme
 from arctis_sound_manager.gui.theme import (
     ACCENT,
@@ -421,6 +425,8 @@ class DevicePage(QWidget):
         telemetry_row.addStretch(1)
         content_layout.addWidget(telemetry_roww)
 
+        content_layout.addSpacing(16)
+
         content_layout.addStretch(1)
 
         scroll.setWidget(content)
@@ -615,6 +621,19 @@ class DevicePage(QWidget):
 
     def _on_autostart_toggled(self, state: Qt.CheckState) -> None:
         set_autostart(state == Qt.CheckState.Checked)
+
+    # ── Clips: install / uninstall ────────────────────────────────────────────
+    #
+    # This was a switch that opened the general dependency dialog when anything
+    # was missing. That dialog lists *every* failing check in ASM, and one of
+    # them — "pipewire-pulse running" — is remediated by restarting PipeWire and
+    # pipewire-pulse. Pressing its Install-all button therefore tore down the
+    # audio graph: the headset's card came back with its profile off, and
+    # WirePlumber persisted that, so switching Clips on took the user's sound
+    # away and kept it away. Reported as "the Clips button breaks it".
+    #
+    # Nothing here reaches that dialog any more. Clips owns its own packages,
+    # installs and removes only those, and cannot touch a service.
 
     def _on_lang_combo(self, index: int):
         if index < 0 or index >= len(self._lang_codes):

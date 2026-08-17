@@ -25,7 +25,6 @@ from arctis_sound_manager.scripts.video_router import (
     _pa_placed,
     _native_placed,
     _process_tick,
-    _resolve_channel_output,
 )
 
 
@@ -338,9 +337,11 @@ def _reset_router_globals():
     _move_times.clear()
     _pending_moves.clear()
     video_router._power_cache = (0.0, HeadsetPower.UNKNOWN)
+    # No channel-output stub any more: the router does not enforce a channel's
+    # device at all. Sending a channel somewhere moves that channel's own last
+    # link, which sonar_to_pipewire owns — see the note in _process_tick.
     with patch.object(video_router, "_last_native_check", 0.0), \
-         patch("arctis_sound_manager.scripts.video_router.get_native_streams", return_value=[]), \
-         patch("arctis_sound_manager.scripts.video_router._load_channel_outputs", return_value={}):
+         patch("arctis_sound_manager.scripts.video_router.get_native_streams", return_value=[]):
         yield
     _pa_placed.clear()
     _native_placed.clear()
@@ -534,266 +535,136 @@ def test_get_headset_power_unreachable_daemon_is_unknown():
     assert result == HeadsetPower.UNKNOWN
 
 
-# ── _resolve_channel_output / channel-output-device tug-of-war ───────────────
-#
-# channel_output_devices.json (Channels tab -> per-channel "output device"
-# combo) redirects a whole Arctis virtual channel to an external physical
-# sink. Before this fix, only the dedicated "Channel output" enforcement
-# pass at the end of _process_tick knew about that redirect — the earlier
-# per-app override enforcement pass resolved straight to the bare virtual
-# sink name. For any app that ALSO had a saved routing override pointing at
-# that channel (e.g. "Brave": "Arctis_Media"), the two passes fought every
-# tick: the channel-output pass moved the stream out to the physical sink,
-# then the very next tick the override pass moved it straight back to
-# Arctis_Media, forever — the channel-output setting could never actually
-# stick for that app.
+def test_a_channels_device_never_drags_its_apps_off_the_channel():
+    """The bug that made the Output menu look inert.
 
-def test_resolve_channel_output_redirects_configured_channel():
-    speakers = _FakeSink(5, "alsa_output.usb-Generic_USB_Audio-00.HiFi__hw_Audio__sink")
-    sink_map = {"Arctis_Media": 1, speakers.name: speakers.index}
-    channel_outputs = {"media": speakers.name}
+    The router used to walk the streams on a channel's virtual sink and move
+    them onto that channel's chosen device. In the same tick, the override
+    block above put them back — the log showed the pair one second apart, over
+    and over, and picking a device appeared to do nothing at all.
 
-    assert _resolve_channel_output("Arctis_Media", channel_outputs, sink_map) == speakers.name
+    Winning was no better than losing: a stream dragged off Arctis_Media leaves
+    the channel entirely, past the Sonar EQ and the HeSuVi stage, which is the
+    reason the channel exists. Sending a channel somewhere moves that channel's
+    own last link, and `sonar_to_pipewire.ensure_physical_output_links` owns it.
 
-
-def test_resolve_channel_output_passthrough_when_not_configured():
-    sink_map = {"Arctis_Media": 1}
-    assert _resolve_channel_output("Arctis_Media", {}, sink_map) == "Arctis_Media"
-
-
-def test_resolve_channel_output_passthrough_for_non_virtual_sink():
-    sink_map = {"Arctis_Media": 1, "alsa_output.hdmi-stereo": 0}
-    channel_outputs = {"media": "alsa_output.hdmi-stereo"}
-    # Not one of the three Arctis virtual channels — never redirected.
-    assert _resolve_channel_output("alsa_output.hdmi-stereo", channel_outputs, sink_map) == \
-        "alsa_output.hdmi-stereo"
-
-
-def test_resolve_channel_output_falls_back_when_target_sink_absent():
-    """The configured external output isn't in the current graph (unplugged,
-    not yet enumerated) — fall back to the virtual channel rather than
-    resolving to a sink that doesn't exist."""
-    sink_map = {"Arctis_Media": 1}
-    channel_outputs = {"media": "alsa_output.usb-Generic_USB_Audio-00.HiFi__hw_Audio__sink"}
-    assert _resolve_channel_output("Arctis_Media", channel_outputs, sink_map) == "Arctis_Media"
-
-
-def test_tick_override_and_channel_output_agree_no_oscillation():
-    """The regression this fix targets: an app with BOTH a saved override
-    pointing at 'Arctis_Media' AND a channel_output_devices.json redirect of
-    'media' to a physical sink must land on the physical sink in a single
-    tick — and a second tick must be a no-op (no further moves), never an
-    infinite back-and-forth."""
-    media = _FakeSink(1, "Arctis_Media")
-    speakers = _FakeSink(2, "alsa_output.usb-Generic_USB_Audio-00.HiFi__hw_Audio__sink")
-    si = _FakeSinkInput(10, sink=media.index, proplist={"application.name": "Brave"})
-    pulse = _FakePulse([media, speakers], [si], default_sink_name=media.name)
-
-    with patch("arctis_sound_manager.scripts.video_router.get_headset_power",
-               return_value=HeadsetPower.ON), \
-         patch("arctis_sound_manager.scripts.video_router.load_overrides",
-               return_value={"Brave": "Arctis_Media"}), \
-         patch("arctis_sound_manager.scripts.video_router.save_overrides"), \
-         patch("arctis_sound_manager.scripts.video_router._load_channel_outputs",
-               return_value={"media": speakers.name}):
-        _process_tick(pulse)
-        assert pulse.moves == [(si.index, speakers.index)]
-        assert si.sink == speakers.index
-
-        # Second tick: already on the resolved target — must be a no-op.
-        _process_tick(pulse)
-        assert pulse.moves == [(si.index, speakers.index)]
-        assert si.sink == speakers.index
-
-
-# ── Foreign-virtual-sink pins (SoundDeck-style virtual-mic feeds) ─────────────
-# A stream that explicitly targets a virtual sink belonging to another app
-# (target.object → e.g. a soundboard's virtual-microphone sink) is part of
-# that app's routing graph. Adopting or overriding it breaks the feature
-# (the mic feed gets played out loud instead of injected into the virtual
-# mic), so the router must leave such streams alone — and restore them.
-
-from arctis_sound_manager.scripts.video_router import _explicit_pin_target
-
-
-def test_explicit_pin_target_foreign_virtual_sink():
-    sink_map = {"SoundDeck": 5, "Arctis_Media": 1}
-    props = {"target.object": "SoundDeck"}
-    assert _explicit_pin_target(props, sink_map) == "SoundDeck"
-
-
-def test_explicit_pin_target_ignores_asm_and_hardware_sinks():
-    sink_map = {"Arctis_Media": 1, "effect_input.sonar-game-eq": 2,
-                "alsa_output.hdmi-stereo": 3, "bluez_output.aa_bb.1": 4,
-                "alsa_output.usb-SteelSeries_Arctis_Nova_Pro_Wireless-00.analog-stereo": 6}
-    for target in sink_map:
-        assert _explicit_pin_target({"target.object": target}, sink_map) is None
-
-
-def test_explicit_pin_target_absent_or_unknown_target():
-    sink_map = {"SoundDeck": 5}
-    assert _explicit_pin_target({}, sink_map) is None
-    assert _explicit_pin_target({"target.object": "GoneSink"}, sink_map) is None
-
-
-def test_tick_pinned_stream_not_adopted_and_restored():
-    """A stream pinned to a foreign virtual sink must never be adopted onto
-    Arctis_Media (no override written), and if it was already dragged onto
-    an Arctis sink it must be moved back to its pinned target."""
-    game = _FakeSink(0, "Arctis_Game")
-    media = _FakeSink(1, "Arctis_Media")
-    sounddeck = _FakeSink(2, "SoundDeck")
-    # Stolen earlier: currently sits on Arctis_Media despite its pin.
-    si = _FakeSinkInput(10, sink=media.index, proplist={
-        "application.name": "SoundDeck",
-        "target.object": "SoundDeck",
-    })
-    pulse = _FakePulse([game, media, sounddeck], [si], default_sink_name=game.name)
-
-    saved = MagicMock()
-    with patch("arctis_sound_manager.scripts.video_router.get_headset_power",
-               return_value=HeadsetPower.ON), \
-         patch("arctis_sound_manager.scripts.video_router.load_overrides",
-               return_value={}), \
-         patch("arctis_sound_manager.scripts.video_router.save_overrides", saved):
-        _process_tick(pulse)
-
-    assert si.sink == sounddeck.index
-    saved.assert_not_called()
-
-    # Second tick: already home — no further moves.
-    with patch("arctis_sound_manager.scripts.video_router.get_headset_power",
-               return_value=HeadsetPower.ON), \
-         patch("arctis_sound_manager.scripts.video_router.load_overrides",
-               return_value={}), \
-         patch("arctis_sound_manager.scripts.video_router.save_overrides", saved):
-        _process_tick(pulse)
-    assert pulse.moves == [(si.index, sounddeck.index)]
-
-
-def test_tick_pinned_stream_moved_by_user_is_left_alone():
-    """Restoring a pinned stream must only undo *our* displacement.
-
-    Sitting on an ASM sink is the evidence the router put it there. A pinned
-    stream the user moved to some other output from a mixer is not ours to
-    drag back: doing so would hold these streams tighter than any other
-    stream in the graph, undoing a deliberate manual move every tick with no
-    way to override it.
+    So with a device chosen for Media and Chrome sitting on Arctis_Media, the
+    router must leave the stream exactly where it is.
     """
-    game = _FakeSink(0, "Arctis_Game")
-    sounddeck = _FakeSink(2, "SoundDeck")
-    speakers = _FakeSink(3, "alsa_output.usb-Generic_Speakers-00.analog-stereo")
-    # Pinned to SoundDeck, but the user parked it on their speakers.
-    si = _FakeSinkInput(10, sink=speakers.index, proplist={
-        "application.name": "SoundDeck",
-        "target.object": "SoundDeck",
-    })
-    pulse = _FakePulse([game, sounddeck, speakers], [si], default_sink_name=game.name)
+    media = _FakeSink(0, "Arctis_Media")
+    earbuds = _FakeSink(1, "bluez_output.30_96_10_49_54_E2.1")
+    si = _FakeSinkInput(10, sink=media.index,
+                        proplist={"application.name": "Google Chrome"})
+    pulse = _FakePulse([media, earbuds], [si], default_sink_name=media.name)
 
     with patch("arctis_sound_manager.scripts.video_router.get_headset_power",
                return_value=HeadsetPower.ON), \
          patch("arctis_sound_manager.scripts.video_router.load_overrides",
-               return_value={}), \
-         patch("arctis_sound_manager.scripts.video_router.save_overrides"):
-        _process_tick(pulse)
-
-    assert pulse.moves == [], "a user-placed pinned stream must not be moved"
-    assert si.sink == speakers.index
-
-
-def test_tick_pinned_stream_ignores_app_override_while_sibling_follows_it():
-    """Two streams from the same app (soundboard monitor + mic feed): the
-    unpinned monitor stream follows the app's saved override to Arctis_Media,
-    the pinned mic-feed stream stays on the foreign virtual sink."""
-    game = _FakeSink(0, "Arctis_Game")
-    media = _FakeSink(1, "Arctis_Media")
-    sounddeck = _FakeSink(2, "SoundDeck")
-    monitor = _FakeSinkInput(10, sink=game.index, proplist={
-        "application.name": "SoundDeck",
-    })
-    mic_feed = _FakeSinkInput(11, sink=sounddeck.index, proplist={
-        "application.name": "SoundDeck",
-        "target.object": "SoundDeck",
-    })
-    pulse = _FakePulse([game, media, sounddeck], [monitor, mic_feed],
-                       default_sink_name=game.name)
-
-    with patch("arctis_sound_manager.scripts.video_router.get_headset_power",
-               return_value=HeadsetPower.ON), \
-         patch("arctis_sound_manager.scripts.video_router.load_overrides",
-               return_value={"SoundDeck": "Arctis_Media"}), \
-         patch("arctis_sound_manager.scripts.video_router.save_overrides"):
-        _process_tick(pulse)
-
-    assert monitor.sink == media.index
-    assert mic_feed.sink == sounddeck.index
-    assert pulse.moves == [(monitor.index, media.index)]
-
-
-def test_tick_offline_pinned_stream_not_repatriated():
-    """Headset off: a pinned virtual-mic feed is unaffected (the virtual mic
-    works without the headset) — it must not be pulled to the default sink."""
-    hdmi = _FakeSink(0, "alsa_output.hdmi-stereo")
-    media = _FakeSink(1, "Arctis_Media")
-    sounddeck = _FakeSink(2, "SoundDeck")
-    si = _FakeSinkInput(10, sink=sounddeck.index, proplist={
-        "application.name": "SoundDeck",
-        "target.object": "SoundDeck",
-    })
-    pulse = _FakePulse([hdmi, media, sounddeck], [si], default_sink_name=hdmi.name)
-
-    with patch("arctis_sound_manager.scripts.video_router.get_headset_power",
-               return_value=HeadsetPower.OFF), \
+               return_value={"Google Chrome": "Arctis_Media"}), \
          patch("arctis_sound_manager.scripts.video_router.save_overrides"):
         _process_tick(pulse)
 
     assert pulse.moves == []
-    assert si.sink == sounddeck.index
+    assert si.sink == media.index
 
 
-# ── the headset's own sink is not a channel ──────────────────────────────────
-#
-# Reported on Discord by autune: the mixer showed almost nothing, because
-# every application that the name heuristics do not cover was sitting on the
-# physical headset sink and was never adopted onto a channel. The adoption
-# guard tested for "Arctis" as a fragment, and
-# alsa_output.usb-SteelSeries_Arctis_Nova_Pro_Wireless-00.analog-stereo
-# contains it, so the hardware counted as a channel that the stream was
-# already on.
+# ── a channel with its own device outlives the headset ────────────────────────
 
-from arctis_sound_manager.scripts.video_router import (
-    _is_asm_channel,
-    _is_physical_arctis,
-)
+def _channel_prefs(tmp_path, prefs):
+    import json as _json
+    path = tmp_path / "channel_output_devices.json"
+    path.write_text(_json.dumps(prefs))
+    return path
 
 
-def test_physical_headset_is_not_a_channel():
-    """A stream there gets no EQ, no channel volume, no mixer entry."""
-    for name in ("alsa_output.usb-SteelSeries_Arctis_Nova_Pro_Wireless-00.analog-stereo",
-                 "alsa_output.usb-SteelSeries_Arctis_7_-00.analog-stereo"):
-        assert not _is_asm_channel(name), name
+def test_a_game_launched_with_the_headset_off_still_reaches_its_channel(tmp_path):
+    """Reported as "Genshin does not show under Game".
 
-
-def test_asm_channels_are_channels():
-    for name in ("Arctis_Game", "Arctis_Chat", "Arctis_Media",
-                 "effect_input.sonar-game-eq", "effect_input.sonar-media-eq"):
-        assert _is_asm_channel(name), name
-
-
-def test_other_hardware_is_not_a_channel():
-    for name in ("alsa_output.pci-0000_00_1f.3.analog-stereo",
-                 "bluez_output.AA_BB_CC_DD_EE_FF.a2dp-sink",
-                 "alsa_output.usb-Logitech_G560-00.analog-stereo", ""):
-        assert not _is_asm_channel(name), name
-
-
-def test_adoption_guard_and_pin_guard_agree_on_the_hardware():
-    """Both must classify the headset sink the same way.
-
-    _explicit_pin_target already documents that pins to hardware outputs are
-    not exempt from adoption, on purpose (issue #20). The adoption guard used
-    to disagree with it for this one sink, which is the whole bug.
+    The headset was off and the Game channel was pointed at a pair of earbuds.
+    "Headset off means every Arctis channel is dead" predates channels having
+    their own output devices, and it made the tick return before enforcing
+    anything — so a game launched in that state was left on the default sink,
+    out of its channel and out of the mixer, while an app placed *before* the
+    headset went off simply stayed where it was. Hence one app visible in the
+    channels and the other not.
     """
-    headset = "alsa_output.usb-SteelSeries_Arctis_Nova_Pro_Wireless-00.analog-stereo"
-    assert _is_physical_arctis(headset)
-    assert not _is_asm_channel(headset)
+    earbuds = _FakeSink(0, "bluez_output.30_96_10_49_54_E2.1")
+    game = _FakeSink(1, "Arctis_Game")
+    physical = _FakeSink(2, "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo")
+    si = _FakeSinkInput(10, sink=physical.index,
+                        proplist={"application.name": "GenshinImpact.exe",
+                                  "application.process.binary": "wine64-preloader"})
+    pulse = _FakePulse([earbuds, game, physical], [si],
+                       default_sink_name=physical.name)
+
+    with patch("arctis_sound_manager.scripts.video_router.CHANNEL_OUTPUTS_FILE",
+               _channel_prefs(tmp_path, {"game": earbuds.name})), \
+         patch("arctis_sound_manager.scripts.video_router.get_headset_power",
+               return_value=HeadsetPower.OFF), \
+         patch("arctis_sound_manager.scripts.video_router.load_overrides",
+               return_value={"GenshinImpact.exe": "Arctis_Game"}), \
+         patch("arctis_sound_manager.scripts.video_router.save_overrides"):
+        _process_tick(pulse)
+
+    assert si.sink == game.index, "the game never reached its channel"
+
+
+def test_a_channel_that_leads_to_the_silent_headset_is_still_left_alone(tmp_path):
+    """The other half of the same rule: with no device of its own, a channel
+    with the headset off leads nowhere, and moving audio onto it would be
+    moving it into silence."""
+    hdmi = _FakeSink(0, "alsa_output.hdmi-stereo")
+    game = _FakeSink(1, "Arctis_Game")
+    si = _FakeSinkInput(10, sink=hdmi.index,
+                        proplist={"application.name": "GenshinImpact.exe"})
+    pulse = _FakePulse([hdmi, game], [si], default_sink_name=hdmi.name)
+
+    with patch("arctis_sound_manager.scripts.video_router.CHANNEL_OUTPUTS_FILE",
+               _channel_prefs(tmp_path, {})), \
+         patch("arctis_sound_manager.scripts.video_router.get_headset_power",
+               return_value=HeadsetPower.OFF), \
+         patch("arctis_sound_manager.scripts.video_router.load_overrides",
+               return_value={"GenshinImpact.exe": "Arctis_Game"}), \
+         patch("arctis_sound_manager.scripts.video_router.save_overrides"):
+        _process_tick(pulse)
+
+    assert si.sink == hdmi.index
+
+
+def test_only_the_channels_that_lead_nowhere_are_cleared(tmp_path):
+    """Media points at the earbuds and Chat does not. With the headset off,
+    clearing both would take the user's Media placement away for no reason."""
+    earbuds = _FakeSink(0, "bluez_output.30_96_10_49_54_E2.1")
+    media = _FakeSink(1, "Arctis_Media")
+    chat = _FakeSink(2, "Arctis_Chat")
+    hdmi = _FakeSink(3, "alsa_output.hdmi-stereo")
+    on_media = _FakeSinkInput(10, sink=media.index,
+                              proplist={"application.name": "Google Chrome"})
+    on_chat = _FakeSinkInput(11, sink=chat.index,
+                             proplist={"application.name": "Discord"})
+    pulse = _FakePulse([earbuds, media, chat, hdmi], [on_media, on_chat],
+                       default_sink_name=hdmi.name)
+
+    with patch("arctis_sound_manager.scripts.video_router.CHANNEL_OUTPUTS_FILE",
+               _channel_prefs(tmp_path, {"media": earbuds.name})), \
+         patch("arctis_sound_manager.scripts.video_router.get_headset_power",
+               return_value=HeadsetPower.OFF), \
+         patch("arctis_sound_manager.scripts.video_router.load_overrides",
+               return_value={}), \
+         patch("arctis_sound_manager.scripts.video_router.save_overrides"):
+        _process_tick(pulse)
+
+    assert on_media.sink == media.index, "a live channel was cleared"
+    assert on_chat.sink == hdmi.index, "a dead channel was not cleared"
+
+
+def test_earbuds_that_are_switched_off_do_not_keep_a_channel_alive(tmp_path):
+    """The saved device has to actually be in the graph. A channel pointed at
+    earbuds that are not connected is as dead as one pointed at the headset."""
+    from arctis_sound_manager.scripts import video_router as vr
+
+    with patch("arctis_sound_manager.scripts.video_router.CHANNEL_OUTPUTS_FILE",
+               _channel_prefs(tmp_path, {"game": "bluez_output.gone"})):
+        assert vr.live_channel_sinks({"Arctis_Game"}) == set()
+        assert vr.live_channel_sinks({"Arctis_Game", "bluez_output.gone"}) == \
+            {"Arctis_Game"}

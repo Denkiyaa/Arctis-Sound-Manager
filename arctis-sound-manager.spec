@@ -67,6 +67,29 @@ Requires:       curl
 # initial install, so existing users would otherwise stay broken until
 # they ran `dnf reinstall arctis-sound-manager` manually.
 Requires:       ladspa-swh-plugins
+# ── Clips (opt-in) ───────────────────────────────────────────────────────
+# Unlike the LADSPA packs above, none of this is needed to run ASM: Clips is
+# off by default and its packages are installed from the toggle that turns it
+# on (Settings → Clips, which runs these same commands through pkexec). A
+# mixer-and-EQ install should not drag in a screen recorder's encoders, so
+# these are weak dependencies — dnf installs them by default, and anyone who
+# does not want them can --setopt=install_weak_deps=False and still have a
+# working ASM.
+#   python3-gobject      — the Gst/Gio bindings the capture is written against
+#   pipewire-gstreamer   — pipewiresrc, the portal's screen stream
+#   gstreamer1-plugins-base — appsrc, audioconvert/audioresample, opusenc
+#   gstreamer1-plugins-good — pulsesrc (channel audio), matroskamux (the .mkv)
+#   gstreamer1-plugins-ugly-free — x264enc, the software encoder fallback
+#   ffmpeg-free          — poster frames, track levels, export
+Recommends:     python3-gobject
+Recommends:     pipewire-gstreamer
+Recommends:     gstreamer1-plugins-base
+Recommends:     gstreamer1-plugins-good
+Recommends:     gstreamer1-plugins-ugly-free
+Recommends:     ffmpeg-free
+# Hardware H.264 encoders are a performance choice on top of that — the
+# capture probes for them and falls back to x264enc.
+Suggests:       gstreamer1-plugins-bad-free
 %if ! %{bundle_dbus_next}
 Requires:       python3-dbus-next
 %endif
@@ -104,7 +127,7 @@ python3 scripts/generate_udev_rules.py src/arctis_sound_manager/devices/ \
 install -Dm644 systemd/arctis-manager.service       %{buildroot}%{_userunitdir}/arctis-manager.service
 install -Dm644 systemd/arctis-video-router.service  %{buildroot}%{_userunitdir}/arctis-video-router.service
 install -Dm644 systemd/arctis-stream-guard.service  %{buildroot}%{_userunitdir}/arctis-stream-guard.service
-install -Dm644 systemd/arctis-gui.service           %{buildroot}%{_userunitdir}/arctis-gui.service
+install -Dm644 systemd/app-ArctisManager.service    %{buildroot}%{_userunitdir}/app-ArctisManager.service
 
 # dinit service templates
 install -Dm644 dinit/arctis-manager %{buildroot}%{_datadir}/%{name}/dinit/arctis-manager
@@ -158,7 +181,7 @@ install -Dm644 debian/asm-first-run.desktop \
     %{buildroot}/etc/xdg/autostart/asm-first-run.desktop
 
 %post
-%systemd_user_post arctis-manager.service arctis-video-router.service arctis-stream-guard.service arctis-gui.service
+%systemd_user_post arctis-manager.service arctis-video-router.service arctis-stream-guard.service app-ArctisManager.service
 udevadm control --reload-rules || :
 udevadm trigger --action=add --subsystem-match=usb || :
 
@@ -215,10 +238,10 @@ fi
 if [ $1 -eq 0 ]; then
     rm -f /etc/yum.repos.d/_asm-noise-suppression-for-voice.repo || :
 fi
-%systemd_user_preun arctis-manager.service arctis-video-router.service arctis-stream-guard.service arctis-gui.service
+%systemd_user_preun arctis-manager.service arctis-video-router.service arctis-stream-guard.service app-ArctisManager.service
 
 %postun
-%systemd_user_postun arctis-manager.service arctis-video-router.service arctis-stream-guard.service arctis-gui.service
+%systemd_user_postun arctis-manager.service arctis-video-router.service arctis-stream-guard.service app-ArctisManager.service
 # Clean up user-level PipeWire configs on real removal (not upgrade).
 # RPM passes the post-transaction package count as $1 — 0 means uninstall,
 # >=1 means an upgrade is in progress and we must keep configs in place.
@@ -237,7 +260,7 @@ if [ "$1" = "0" ]; then
             su -l "$REAL_USER" -c "
                 XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS=unix:path=$DBUS_SOCKET
                 export XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
-                for unit in arctis-manager.service arctis-video-router.service arctis-stream-guard.service arctis-gui.service filter-chain.service; do
+                for unit in arctis-manager.service arctis-video-router.service arctis-stream-guard.service app-ArctisManager.service arctis-gui.service filter-chain.service; do
                     systemctl --user disable --now \"\$unit\" >/dev/null 2>&1 || true
                 done
                 rm -f \"\$HOME/.config/pipewire/pipewire.conf.d/10-arctis-virtual-sinks.conf\"
@@ -246,6 +269,7 @@ if [ "$1" = "0" ]; then
                 rm -f \"\$HOME/.config/systemd/user/arctis-manager.service\"
                 rm -f \"\$HOME/.config/systemd/user/arctis-video-router.service\"
                 rm -f \"\$HOME/.config/systemd/user/arctis-stream-guard.service\"
+                rm -f \"\$HOME/.config/systemd/user/app-ArctisManager.service\"
                 rm -f \"\$HOME/.config/systemd/user/arctis-gui.service\"
                 rm -f \"\$HOME/.local/share/applications/ArctisManager.desktop\"
                 rm -f \"\$HOME/.local/share/applications/ArctisManagerSystray.desktop\"
@@ -277,12 +301,13 @@ fi
 %{_bindir}/asm-cli
 %{_bindir}/asm-router
 %{_bindir}/asm-stream-guard
+%{_bindir}/asm-clipd
 %{_bindir}/asm-setup
 %{_udevrulesdir}/91-steelseries-arctis.rules
 %{_userunitdir}/arctis-manager.service
 %{_userunitdir}/arctis-video-router.service
 %{_userunitdir}/arctis-stream-guard.service
-%{_userunitdir}/arctis-gui.service
+%{_userunitdir}/app-ArctisManager.service
 %{_datadir}/%{name}/dinit/
 %{_bindir}/asm-diag-dinit
 %{_prefix}/lib/%{name}/restart-user-services.sh

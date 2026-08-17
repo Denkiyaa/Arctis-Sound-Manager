@@ -12,7 +12,12 @@ from arctis_sound_manager import service_control as sc
 logger = logging.getLogger(__name__)
 
 _SERVICE = "arctis-manager.service"
-_GUI_SERVICE = "arctis-gui.service"
+# Named for the desktop entry so xdg-desktop-portal can read an app id off the
+# cgroup — see the note on "arctis-gui" in service_control._SERVICE_MAP. The old
+# name is still written by every install before this one, so it is disabled and
+# removed when the new unit is put in place.
+_GUI_SERVICE = "app-ArctisManager.service"
+_LEGACY_GUI_SERVICE = "arctis-gui.service"
 _GUI_SERVICE_TEMPLATE = """\
 [Unit]
 Description=Arctis Sound Manager — System Tray
@@ -83,12 +88,33 @@ class SystemdBackend:
         gui_path = Path.home() / ".config" / "systemd" / "user" / _GUI_SERVICE
         if gui_path.exists():
             sc.disable("arctis-gui")
+        self._retire_legacy_gui_service()
 
     def display_name(self) -> str:
         return "systemd user service"
 
+    def _retire_legacy_gui_service(self) -> None:
+        """Take the old arctis-gui.service out of the way, if one is left.
+
+        Leaving it enabled is not harmless: it starts a second tray at login,
+        and the one it starts is the one with the empty portal app id — so
+        whichever wins the single-instance race decides whether the clip
+        shortcut works. Disabled *and* removed, because a disabled unit file
+        still shadows the packaged one for anybody who starts it by name.
+        """
+        legacy = Path.home() / ".config" / "systemd" / "user" / _LEGACY_GUI_SERVICE
+        if not legacy.exists():
+            return
+        try:
+            sc.disable("arctis-gui.service")
+            legacy.unlink()
+            sc.daemon_reload()
+        except OSError as e:
+            logger.warning("autostart: could not remove %s: %s", _LEGACY_GUI_SERVICE, e)
+
     def _ensure_gui_service(self) -> Path | None:
         gui_path = Path.home() / ".config" / "systemd" / "user" / _GUI_SERVICE
+        self._retire_legacy_gui_service()
         if gui_path.exists():
             return gui_path
         asm_gui = shutil.which("asm-gui")
@@ -99,7 +125,7 @@ class SystemdBackend:
             gui_path.write_text(_GUI_SERVICE_TEMPLATE.format(asm_gui=asm_gui))
             sc.daemon_reload()
         except OSError as e:
-            logger.warning("autostart: could not write arctis-gui.service: %s", e)
+            logger.warning("autostart: could not write %s: %s", _GUI_SERVICE, e)
             return None
         return gui_path
 

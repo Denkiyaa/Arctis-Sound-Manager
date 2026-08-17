@@ -81,8 +81,12 @@ install -Dm644 systemd/arctis-manager.service \
     "${PKGDIR}/usr/lib/systemd/user/arctis-manager.service"
 install -Dm644 systemd/arctis-video-router.service \
     "${PKGDIR}/usr/lib/systemd/user/arctis-video-router.service"
-install -Dm644 systemd/arctis-gui.service \
-    "${PKGDIR}/usr/lib/systemd/user/arctis-gui.service"
+# Renamed from arctis-gui.service in 784093a so the unit matches the
+# desktop entry and the tray shortcut can bind to it. The .spec and the
+# PKGBUILD were updated then; this script was not, and `install` would
+# have failed the .deb build on a file that no longer exists.
+install -Dm644 systemd/app-ArctisManager.service \
+    "${PKGDIR}/usr/lib/systemd/user/app-ArctisManager.service"
 
 # ── dinit user service templates ────────────────────────────
 install -Dm644 dinit/arctis-manager \

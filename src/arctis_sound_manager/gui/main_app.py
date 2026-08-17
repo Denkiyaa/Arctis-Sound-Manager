@@ -7,7 +7,7 @@ Main application window — ArctisSonar GUI visual style.
 """
 import logging
 
-from PySide6.QtCore import Qt, QUrl, Slot
+from PySide6.QtCore import Qt, QTimer, QUrl, Slot
 from pathlib import Path
 
 from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPixmap
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from arctis_sound_manager.gui.base_app import QBaseDesktopApp
 from arctis_sound_manager.gui.components import (
+    CLIPS_ICON,
     EQUALIZER_ICON,
     GAMEDAC_ICON,
     HDMI_ICON,
@@ -39,6 +40,7 @@ from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
 from arctis_sound_manager.gui.dac_page import DacPage
 from arctis_sound_manager.gui.device_page import DevicePage
 from arctis_sound_manager.gui.headset_page import HeadsetPage
+from arctis_sound_manager.gui.clips_page import ClipsPage
 from arctis_sound_manager.gui.help_page import HelpPage
 from arctis_sound_manager.gui.equalizer_page import EqualizerPage
 from arctis_sound_manager.gui.home_page import HomePage
@@ -64,6 +66,25 @@ from arctis_sound_manager.settings import GeneralSettings
 
 
 # ── Main application window ───────────────────────────────────────────────────
+
+# Page indices, shared by the sidebar buttons and the stack — the two must stay
+# in step. They were bare numbers scattered across the file, so inserting a page
+# silently sent the theme editor and its "back" action to the wrong widgets.
+PAGE_HOME = 0
+PAGE_EQUALIZER = 1
+PAGE_HEADSET = 2
+PAGE_DAC = 3
+PAGE_CLIPS = 4
+PAGE_SETTINGS = 5
+PAGE_HELP = 6
+PAGE_THEME_EDITOR = 7
+
+
+#: Sidebar icon sizes. Help is deliberately smaller — see the note on
+#: top_pages_def in _build_window.
+_SIDEBAR_ICON_SIZE = 44
+_SIDEBAR_HELP_ICON_SIZE = 30
+
 
 class QMainApp(QBaseDesktopApp):
     app: QApplication
@@ -117,10 +138,10 @@ class QMainApp(QBaseDesktopApp):
         self.dbus_wrapper.sig_settings.connect(self._device_page.update_settings)
 
         # DAC tab hidden by default until device confirms it has a DAC
-        self._sidebar_buttons[3].setVisible(False)
+        self._sidebar_buttons[PAGE_DAC].setVisible(False)
 
         # Start on home page
-        self._switch_page(0)
+        self._switch_page(PAGE_HOME)
 
         # Check for updates (non-blocking background thread)
         from arctis_sound_manager.update_checker import UpdateCheckWorker
@@ -134,7 +155,6 @@ class QMainApp(QBaseDesktopApp):
         # disk change during a `pacman -Syu`; this process keeps running the
         # code it loaded at startup, and would otherwise go on doing so until
         # the next reboot — reporting a version it is not executing.
-        from PySide6.QtCore import QTimer
         self._staleness_timer = QTimer(self)
         self._staleness_timer.setInterval(5 * 60 * 1000)
         self._staleness_timer.timeout.connect(self._check_upgraded_under_us)
@@ -198,6 +218,12 @@ class QMainApp(QBaseDesktopApp):
 
     def _build_window(self) -> QMainAppProtoWidget:
         window = QMainAppProtoWidget()
+        # The pages are children of this widget, while the controller is a
+        # QObject beside it — so a page that needs to ask the controller for
+        # something (the Settings toggle asking the sidebar to show Clips) has
+        # no parent chain to walk. One link from the window closes that gap;
+        # a page reaches it with `self.window().main_app`.
+        window.main_app = self
         window.setWindowFlags(Qt.WindowType.Window)
         window.setWindowTitle("Arctis Sound Manager")
         window.setWindowIcon(QIcon(get_icon_pixmap()))
@@ -218,31 +244,44 @@ class QMainApp(QBaseDesktopApp):
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(150)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(15, 16, 15, 16)
-        sidebar_layout.setSpacing(8)
+        # Seven pages plus the bottom block do not fit a 990px window at the
+        # original 16px margins and 8px spacing: the column came out 26px
+        # too tall and the ASM logo was clipped. A smaller Help icon gave
+        # back 14 of those; the remaining 12 come from here rather than from
+        # shrinking a second icon, because 2px between buttons and 4px at
+        # the ends is not something anyone can see, and a mismatched icon is.
+        sidebar_layout.setContentsMargins(15, 12, 15, 12)
+        sidebar_layout.setSpacing(6)
 
         # Resolve current theme accent color for icon
         current_theme = THEMES.get(self._general_settings.theme, THEMES["steelseries"])
         current_accent = current_theme["ACCENT"]
 
-        # Top navigation buttons: Home, Equalizer, Headset, DAC, Settings, Help
+        # Top navigation buttons: Channels, Equalizer, Headset, DAC, Clips,
+        # Settings, Help. The fourth field is the icon size; only Help asks
+        # for a smaller one. Adding Clips made a seventh full-height button,
+        # and the column then ran past the bottom block — the ASM logo was
+        # clipped. Help is the one that can afford it: it is the least
+        # travelled of the seven and the last in the column.
         top_pages_def = [
-            (HOME_ICON,      I18n.translate('ui', 'channels'),  current_accent),
-            (EQUALIZER_ICON, I18n.translate('ui', 'equalizer'), current_accent),
-            (HEADPHONE_ICON, I18n.translate('ui', 'headset'),   current_accent),
-            (GAMEDAC_ICON,   I18n.translate('ui', 'dac'),       current_accent),
-            (SETTINGS_ICON,  I18n.translate('ui', 'settings'),  current_accent),
-            (HELP_ICON,      I18n.translate('ui', 'help'),      current_accent),
+            (HOME_ICON,      I18n.translate('ui', 'channels'),  current_accent, _SIDEBAR_ICON_SIZE),
+            (EQUALIZER_ICON, I18n.translate('ui', 'equalizer'), current_accent, _SIDEBAR_ICON_SIZE),
+            (HEADPHONE_ICON, I18n.translate('ui', 'headset'),   current_accent, _SIDEBAR_ICON_SIZE),
+            (GAMEDAC_ICON,   I18n.translate('ui', 'dac'),       current_accent, _SIDEBAR_ICON_SIZE),
+            (CLIPS_ICON,     I18n.translate('ui', 'clips'),     current_accent, _SIDEBAR_ICON_SIZE),
+            (SETTINGS_ICON,  I18n.translate('ui', 'settings'),  current_accent, _SIDEBAR_ICON_SIZE),
+            (HELP_ICON,      I18n.translate('ui', 'help'),      current_accent, _SIDEBAR_HELP_ICON_SIZE),
         ]
 
         self._sidebar_buttons: list[SidebarButton] = []
-        for svg_path, label, color_active in top_pages_def:
+        for svg_path, label, color_active, icon_size in top_pages_def:
             btn = SidebarButton(
                 svg_path=svg_path,
                 label=label,
                 icon_color_inactive=current_theme["TEXT_SECONDARY"],
                 icon_color_active=color_active,
                 parent=sidebar,
+                icon_size=icon_size,
             )
             idx = len(self._sidebar_buttons)
             btn.clicked.connect(lambda checked=False, i=idx: self._switch_page(i))
@@ -323,6 +362,10 @@ class QMainApp(QBaseDesktopApp):
         self._headset_page   = HeadsetPage()
         self._dac_page       = DacPage()
         self._device_page    = DevicePage()
+        # The Video tab is always present. When Clips is not on, it shows the
+        # install screen (what it does, which packages it needs, and a one-click
+        # install) instead of the recorder.
+        self._clips_page = self._build_clips_page()
         self._help_page      = HelpPage()
 
         self._theme_editor_page = ThemeEditorPage()
@@ -331,12 +374,18 @@ class QMainApp(QBaseDesktopApp):
         self._stack.addWidget(self._equalizer_page)   # index 1 → Equalizer
         self._stack.addWidget(self._headset_page)     # index 2 → Headset
         self._stack.addWidget(self._dac_page)         # index 3 → DAC
-        self._stack.addWidget(self._device_page)      # index 4 → Settings
-        self._stack.addWidget(self._help_page)        # index 5 → Help
-        self._stack.addWidget(self._theme_editor_page) # index 6 → Theme Editor
+        self._stack.addWidget(self._clips_page)       # index 4 → Clips
+        self._stack.addWidget(self._device_page)      # index 5 → Settings
+        self._stack.addWidget(self._help_page)        # index 6 → Help
+        self._stack.addWidget(self._theme_editor_page) # index 7 → Theme Editor
 
         content_layout.addWidget(self._stack)
         root_layout.addWidget(content_wrapper, stretch=1)
+
+        # After the stack exists, not with the sidebar buttons: this reads the
+        # current page to move off Clips when the feature is off, and the
+        # sidebar is built long before there is a stack to ask.
+        self.apply_clips_visibility()
 
         return window
 
@@ -344,9 +393,104 @@ class QMainApp(QBaseDesktopApp):
 
     def _switch_page(self, index: int):
         self._stack.setCurrentIndex(index)
-        active_idx = 4 if index == 6 else index
+        # The theme editor has no button of its own; it lights up Settings.
+        active_idx = PAGE_SETTINGS if index == PAGE_THEME_EDITOR else index
         for i, btn in enumerate(self._sidebar_buttons):
             btn.set_active(i == active_idx)
+
+    def apply_clips_visibility(self) -> None:
+        """Make sure the Video tab is present, and showing the right face.
+
+        The entry is never hidden. When Clips is off the tab *is* the
+        explanation and the way to turn it on, so there is no state in which
+        hiding it would be right — and hiding it was how the feature stayed
+        invisible to everyone who did not already know it existed.
+
+        The button is kept in place rather than removed for the same reason it
+        always was: every sidebar index is also its stack index, so dropping an
+        entry would silently renumber Settings and Help. Keeping the page costs
+        nothing — ClipsPage builds no capture in its constructor and no clip
+        module imports GStreamer at module level, which is what lets a machine
+        without any of it still build this window.
+        """
+        buttons = getattr(self, "_sidebar_buttons", None) or []
+        if PAGE_CLIPS < len(buttons):
+            buttons[PAGE_CLIPS].setVisible(True)
+
+        # Clips can be switched on or off from the tab itself while the window
+        # is open, and the tab has to follow without a restart.
+        self._sync_clips_page()
+
+    def _build_clips_page(self):
+        """The recorder when Clips is on and usable, the install screen when it
+        is not, wired so either can hand over to the other."""
+        from arctis_sound_manager.gui import clips_setup
+        from arctis_sound_manager.gui.clips_install_page import ClipsInstallPage
+
+        if clips_setup.clips_active():
+            page = ClipsPage()
+            disabled = getattr(page, "clips_disabled", None)
+            if disabled is not None:
+                disabled.connect(self._sync_clips_page)
+            return page
+
+        page = ClipsInstallPage()
+        page.clips_installed.connect(self._sync_clips_page)
+        return page
+
+    def _sync_clips_page(self) -> None:
+        """Put the face the tab is showing back in step with the feature.
+
+        Called after an install, an uninstall, or the Settings toggle. Swapping
+        in place is what keeps this from needing a restart; if the recorder
+        cannot be built in this process — a fresh `gi` import failing mid-run
+        after the packages landed — the install screen stays up and asks for a
+        restart rather than taking the window down with it.
+        """
+        stack = getattr(self, "_stack", None)
+        old = getattr(self, "_clips_page", None)
+        if stack is None or old is None:
+            return
+
+        from arctis_sound_manager.gui import clips_setup
+        from arctis_sound_manager.gui.clips_install_page import ClipsInstallPage
+
+        wants_recorder = clips_setup.clips_active()
+        showing_recorder = not isinstance(old, ClipsInstallPage)
+        if wants_recorder == showing_recorder:
+            return
+
+        # Read before the swap: removing the old page renumbers the stack, so
+        # asking afterwards cannot tell "the user was looking at Clips" from
+        # "the indices moved under them".
+        was_on_clips = stack.currentWidget() is old
+
+        try:
+            new_page = self._build_clips_page()
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(
+                "clips is on but the recorder could not be built in-process: %s", exc)
+            status = getattr(old, "_status", None)
+            if status is not None:
+                status.setText(I18n.translate("ui", "clips_install_restart"))
+            return
+
+        idx = stack.indexOf(old)
+        if idx < 0:
+            idx = PAGE_CLIPS
+        stack.insertWidget(idx, new_page)
+        stack.removeWidget(old)
+        old.deleteLater()
+        self._clips_page = new_page
+        if hasattr(new_page, "apply_theme"):
+            try:
+                new_page.apply_theme()
+            except Exception:  # noqa: BLE001
+                pass
+        # Turning it on from the tab lands on the recorder; turning it off
+        # leaves whoever did it from Settings where they were.
+        if was_on_clips or wants_recorder:
+            self._switch_page(PAGE_CLIPS)
 
     def _check_upgraded_under_us(self) -> None:
         """Surface an upgrade that landed while this window was open."""
@@ -364,12 +508,12 @@ class QMainApp(QBaseDesktopApp):
     def _open_theme_editor_new(self) -> None:
         self._theme_before_edit = self._general_settings.theme
         self._theme_editor_page.open_for_new(base_theme_id=self._general_settings.theme)
-        self._switch_page(6)
+        self._switch_page(PAGE_THEME_EDITOR)
 
     def _open_theme_editor_edit(self, theme_id: str) -> None:
         self._theme_before_edit = self._general_settings.theme
         self._theme_editor_page.open_for_edit(theme_id)
-        self._switch_page(6)
+        self._switch_page(PAGE_THEME_EDITOR)
 
     def _on_theme_preview(self, colors: dict) -> None:
         set_preview_colors(colors)
@@ -379,12 +523,12 @@ class QMainApp(QBaseDesktopApp):
         set_preview_colors(None)
         self._device_page.refresh_theme_combo(theme_id)
         self._apply_theme(theme_id)   # save=True → persiste
-        self._switch_page(4)
+        self._switch_page(PAGE_SETTINGS)
 
     def _on_theme_editor_cancelled(self) -> None:
         set_preview_colors(None)
         self._apply_theme(self._theme_before_edit, save=False)
-        self._switch_page(4)
+        self._switch_page(PAGE_SETTINGS)
 
     # ── Public API (called by systray_app) ────────────────────────────────────
 
@@ -403,9 +547,9 @@ class QMainApp(QBaseDesktopApp):
             return
         self.settings = settings
         has_dac = settings.get('has_dac', False)
-        self._sidebar_buttons[3].setVisible(has_dac)
-        if not has_dac and self._stack.currentIndex() == 3:
-            self._switch_page(0)
+        self._sidebar_buttons[PAGE_DAC].setVisible(has_dac)
+        if not has_dac and self._stack.currentIndex() == PAGE_DAC:
+            self._switch_page(PAGE_HOME)
 
         # Headsets with no on-device equaliser can't do anything with the
         # custom band sliders; only offer the switch to those that can (#146).

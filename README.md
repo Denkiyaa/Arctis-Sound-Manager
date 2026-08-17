@@ -1065,12 +1065,24 @@ Your feedback helps improve compatibility for everyone — especially for headse
 
 ---
 
+## Maintainers
+
+| Area | Maintainer |
+|---|---|
+| Arctis Sound Manager | [loteran](https://github.com/loteran) |
+| **Clips** — capture, library, editor, sharing, and the `asm-clipd` daemon | [**Denkiyaa**](https://github.com/Denkiyaa) |
+
+Clips was designed and written by [Denkiyaa](https://github.com/Denkiyaa) ([#156](https://github.com/loteran/Arctis-Sound-Manager/issues/156), [#159](https://github.com/loteran/Arctis-Sound-Manager/pull/159)), who maintains it: questions, bug reports and pull requests touching the clip capture pipeline, the editor or the opt-in installer go to them. `.github/CODEOWNERS` requests their review automatically.
+
+---
+
 ## Contributors
 
 Thanks to everyone who has contributed code, fixes, or community support:
 
 | Contributor | Contribution |
 |---|---|
+| [Denkiyaa](https://github.com/Denkiyaa) | Designed and built the Clips feature — rolling screen capture with one audio track per Sonar channel, poster-frame library, trim/mix editor and sharing, the opt-in package installer, and the `asm-clipd` daemon ([#159](https://github.com/loteran/Arctis-Sound-Manager/pull/159)); the Channels output-device picker; stopped the Home page rebuilding its application lists twice a second ([#187](https://github.com/loteran/Arctis-Sound-Manager/pull/187)) |
 | [Michsior14](https://github.com/Michsior14) | Fix Arctis 7+ power status recognition ([#67](https://github.com/loteran/Arctis-Sound-Manager/pull/67)) |
 | [H0DG3](https://github.com/H0DG3) | Identified the fontconfig cache fix for font rendering on Bazzite/Distrobox |
 | [cookiekiller](https://github.com/cookiekiller) | Diagnosed the loopback watchdog orphan-recreation bug ([#84](https://github.com/loteran/Arctis-Sound-Manager/issues/84)); detailed analysis and fix suggestions for per-channel EQ coupling, Discord routing override, and weather log spam ([#85](https://github.com/loteran/Arctis-Sound-Manager/issues/85)) |

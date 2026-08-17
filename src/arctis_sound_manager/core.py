@@ -371,6 +371,52 @@ class CoreEngine:
                 "watchdog: %s", len(pending), list(pending),
             )
 
+    _MICRO_CAPTURE_OUT = "effect_output.sonar-micro-eq"
+
+    def _claim_default_source(self) -> None:
+        """Make the Sonar Micro EQ the system's default input — if it carries a mic.
+
+        This used to fire unconditionally at every device init, and that is how
+        a machine ends up with a microphone that records nothing: the micro EQ
+        chain is only a microphone once ASM has linked one into it, and there
+        are two ordinary cases where it hasn't.
+
+        - ``micro_input_source`` is ``"__manual__"``: the user routes the chain
+          themselves, so ASM has no business deciding what the default input is
+          either — taking it over contradicts the very setting that told us to
+          keep our hands off.
+        - The configured source is not in the graph (unplugged, or a name that
+          no longer resolves): the chain is fed by nothing, and pointing the
+          default input at it makes every app pick a silent mic.
+
+        In both cases the default input is left exactly where the user (or
+        WirePlumber) put it, and a later device init retries — by then the
+        chain usually has its source and the takeover is correct.
+        """
+        from arctis_sound_manager.sonar_to_pipewire import resolve_micro_input_source
+
+        try:
+            source = resolve_micro_input_source()
+        except Exception as exc:
+            self.logger.warning("Could not resolve the micro EQ input source: %r", exc)
+            return
+
+        if not source:
+            self.logger.info(
+                "Leaving the default input alone: nothing is feeding %s "
+                "(manual routing, or no microphone attached)",
+                self._MICRO_CAPTURE_OUT,
+            )
+            return
+        if not self.pa_audio_manager.has_source(source):
+            self.logger.info(
+                "Leaving the default input alone: '%s' feeds %s but is not in "
+                "the graph", source, self._MICRO_CAPTURE_OUT,
+            )
+            return
+
+        self.pa_audio_manager.set_default_source(self._MICRO_CAPTURE_OUT)
+
     _RECREATE_DEBOUNCE_S = 5.0
 
     def recreate_loopbacks(self) -> None:
@@ -1174,6 +1220,34 @@ class CoreEngine:
             except Exception as exc:
                 self.logger.warning("stop(): could not release forced quantum: %r", exc)
 
+    # The ChatMix dial is an analogue control, and an analogue control that
+    # nobody is touching still reports a position wobbling by a point: a
+    # headset left alone on the desk sends 100, 99, 100, 99 … for as long as it
+    # is on. Every one of those used to be written to the virtual sinks, which
+    # on a desktop whose default output *is* one of them — and ASM makes
+    # Arctis_Media the default — means the system volume OSD popping up over
+    # whatever the user is doing, every few seconds, on its own. A move this
+    # small is noise, not an intent: a hand on the dial moves it further.
+    _MIX_JITTER_TOLERANCE = 1
+
+    def _mix_is_jitter(self, new_media_mix: int, new_chat_mix: int) -> bool:
+        """Whether a new dial reading is too small a move to be a real one.
+
+        Both channels have to be within tolerance — a genuine turn moves at
+        least one of them further. The travel ends (0 and 100) are always taken
+        as real even when they are one point away: those are the positions the
+        user can feel, and stopping a point short of silence (or of full
+        volume) is exactly the kind of "not quite right" the dial is used to
+        fix.
+        """
+        for new, current in ((new_media_mix, self.media_mix),
+                             (new_chat_mix, self.chat_mix)):
+            if new != current and new in (0, 100):
+                return False
+            if abs(new - current) > self._MIX_JITTER_TOLERANCE:
+                return False
+        return True
+
     def manage_mix_change(self):
         if not self.device_status or not self.device_config:
             return
@@ -1183,14 +1257,25 @@ class CoreEngine:
 
         if new_media_mix is None or new_chat_mix is None:
             return
-        
+
         new_media_mix = parsed_status({'media_mix': new_media_mix}, self.device_config).get('media_mix', self.media_mix)
         new_chat_mix = parsed_status({'chat_mix': new_chat_mix}, self.device_config).get('chat_mix', self.chat_mix)
 
-        if new_media_mix != self.media_mix or new_chat_mix != self.chat_mix:
-            self.media_mix = new_media_mix
-            self.chat_mix = new_chat_mix
-            self.pa_audio_manager.set_mix(self.media_mix, self.chat_mix)
+        if new_media_mix == self.media_mix and new_chat_mix == self.chat_mix:
+            return
+        if self._mix_is_jitter(new_media_mix, new_chat_mix):
+            # Deliberately not stored: keeping the settled values as the
+            # reference is what lets a slow, real turn accumulate past the
+            # tolerance instead of drifting one ignored point at a time.
+            self.logger.debug(
+                "Ignoring ChatMix jitter: media %d→%d, chat %d→%d",
+                self.media_mix, new_media_mix, self.chat_mix, new_chat_mix,
+            )
+            return
+
+        self.media_mix = new_media_mix
+        self.chat_mix = new_chat_mix
+        self.pa_audio_manager.set_mix(self.media_mix, self.chat_mix)
     
     async def listen_endpoint_loop(self, interface_id: int):
         with self._device_lock:
@@ -1620,7 +1705,7 @@ class CoreEngine:
             # filter-chain; node.target by name binds when the node appears, so
             # the ordering here is tolerant of filter-chain not being up yet.
             self.setup_loopbacks()
-            self.pa_audio_manager.set_default_source("effect_output.sonar-micro-eq")
+            self._claim_default_source()
 
             # Configure the device
             self.init_device()
