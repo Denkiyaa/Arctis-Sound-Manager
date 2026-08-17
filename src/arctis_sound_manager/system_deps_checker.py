@@ -783,6 +783,22 @@ def _build_checks() -> list[DepCheck]:
                 "arch":   ["pacman", "-S", "--noconfirm", "pipewire"],
             },
         ),
+        DepCheck(
+            # Only feeds the xrun self-diagnostics (#183): without it ASM cannot
+            # notice the surround chain dropping frames and stays quiet, which
+            # is the same as before the feature existed. Everything else keeps
+            # working, hence OPTIONAL rather than DEGRADED — nothing the user
+            # asked for stops functioning.
+            name="pw-top (pipewire CLI)",
+            severity=Severity.OPTIONAL,
+            feature="audio glitch (xrun) detection on the surround chain",
+            detect=lambda: _which("pw-top"),
+            install_commands={
+                "fedora": ["dnf", "install", "-y", "pipewire"],
+                "debian": ["apt-get", "install", "-y", "pipewire"],
+                "arch":   ["pacman", "-S", "--noconfirm", "pipewire"],
+            },
+        ),
 
         # USB stack
         DepCheck(

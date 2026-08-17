@@ -198,6 +198,19 @@ class OledManager:
         logger.info("OledManager started (interval=%.1fs)", _REFRESH_INTERVAL_S)
 
     def _show_splash(self) -> None:
+        """Draw the ASM splash — unless the user asked for the DAC's own UI.
+
+        Custom Display off means "keep the screen the DAC's". The splash is our
+        content, and it does more than flash a logo: it sets `_splash_until`,
+        and the refresh loop sleeps until that expires, so for
+        `_SPLASH_DURATION_S` nothing sends the return-to-UI packet that hands
+        the panel back to the firmware. The DAC sits frozen on our logo every
+        time the daemon starts, the GUI opens, or the tray icon is clicked —
+        which is what "it seems to hang" means when Custom Display is off.
+        Reported on Discord by Messiah Complex on a Nova Pro Wired DAC.
+        """
+        if not self._core.general_settings.oled_custom_display:
+            return
         self._splash_until = datetime.now().timestamp() + _SPLASH_DURATION_S
         frame = self._renderer.render_splash_image()
         packets = self._protocol.build_frame_packets(

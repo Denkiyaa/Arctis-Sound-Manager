@@ -167,6 +167,22 @@ class GeneralSettings(JsonSerializable):
     # the switch is for people who would rather decide each time.
     clips_autostart: bool = True
 
+    # Stability mode: force PipeWire's quantum (buffer size) while ASM runs.
+    # 0 = leave PipeWire alone (default).
+    #
+    # The HeSuVi surround chain runs 14 convolvers per sink, and with a large
+    # HRIR that DSP can miss PipeWire's deadline under normal desktop load —
+    # heard as random crackling, with nothing in the UI to explain it. A larger
+    # quantum buys the convolver more time per cycle and makes the xruns stop
+    # (measured on the reporter's machine: bursts every ~10-15 s at 1024, none
+    # at 2048), at the cost of proportionally more latency (#183).
+    #
+    # Off by default, and deliberately so: clock.force-quantum is a *global*
+    # PipeWire setting, so it applies to every application on the system, not
+    # just ASM's chain. That is fine for media and unwelcome for competitive
+    # play, which is exactly the trade-off the user has to be the one to make.
+    pipewire_quantum: int = 0
+
     # OLED display brightness (0–10)
     oled_brightness: int = 8
 
@@ -230,6 +246,7 @@ class GeneralSettings(JsonSerializable):
         ConfigSetting('micro_input_source', SettingType.SELECT, "__auto__", options_source='pulse_audio_sources', options_mapping={ 'value': 'id', 'label': 'name' }),
         ConfigSetting('micro_alt_source', SettingType.SELECT, "", options_source='pulse_audio_sources', options_mapping={ 'value': 'id', 'label': 'name' }),
         ConfigSetting('micro_autoswitch', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'micro_autoswitch_off', 1: 'micro_autoswitch_connection', 2: 'micro_autoswitch_mute', 3: 'micro_autoswitch_both'}),
+        ConfigSetting('pipewire_quantum', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'pipewire_quantum_auto', 1024: 'pipewire_quantum_1024', 2048: 'pipewire_quantum_2048'}),
         ConfigSetting('systray_show_battery', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
         ConfigSetting('systray_icon_color', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'systray_icon_color_auto', 1: 'systray_icon_color_white', 2: 'systray_icon_color_black'}),
     ]

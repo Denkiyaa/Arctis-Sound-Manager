@@ -1172,6 +1172,16 @@ class CoreEngine:
         self._stopping = False
         self.usb_devices_monitor.start()
 
+        # Apply the configured quantum (#183) — including 0, which is what
+        # makes this self-healing: if a previous run was killed before stop()
+        # could release it, the forced value would otherwise stay set for the
+        # whole session with nothing left to undo it.
+        try:
+            from arctis_sound_manager.pw_utils import apply_force_quantum
+            apply_force_quantum(int(getattr(self.general_settings, 'pipewire_quantum', 0)))
+        except Exception as exc:
+            self.logger.warning("start(): could not apply quantum setting: %r", exc)
+
         return self.loop()
     
     def stop(self):
@@ -1200,14 +1210,24 @@ class CoreEngine:
         except Exception as exc:
             self.logger.warning("stop(): error stopping loopbacks: %r", exc)
 
+        # Release the forced quantum (#183). It is a system-wide PipeWire
+        # setting, so leaving it set would keep every other application on a
+        # larger buffer for the rest of the session, long after ASM is gone.
+        if getattr(self.general_settings, 'pipewire_quantum', 0):
+            try:
+                from arctis_sound_manager.pw_utils import apply_force_quantum
+                apply_force_quantum(0)
+            except Exception as exc:
+                self.logger.warning("stop(): could not release forced quantum: %r", exc)
+
     # The ChatMix dial is an analogue control, and an analogue control that
     # nobody is touching still reports a position wobbling by a point: a
     # headset left alone on the desk sends 100, 99, 100, 99 … for as long as it
     # is on. Every one of those used to be written to the virtual sinks, which
-    # on a desktop whose default output *is* one of them (Arctis_Game, the
-    # usual setup) means the system volume OSD popping up over whatever the
-    # user is doing, every few seconds, on its own. A move this small is noise,
-    # not an intent: a hand on the dial moves it further than this.
+    # on a desktop whose default output *is* one of them — and ASM makes
+    # Arctis_Media the default — means the system volume OSD popping up over
+    # whatever the user is doing, every few seconds, on its own. A move this
+    # small is noise, not an intent: a hand on the dial moves it further.
     _MIX_JITTER_TOLERANCE = 1
 
     def _mix_is_jitter(self, new_media_mix: int, new_chat_mix: int) -> bool:
@@ -1368,6 +1388,10 @@ class CoreEngine:
     async def loop(self):
         listen_coroutines: list[asyncio.Task] = []
         poll_task: asyncio.Task | None = None
+        # Unlike poll_task this is not tied to a connected headset: it watches
+        # the audio graph, which outlives any single connection, and it must
+        # not restart (and reset its once-per-session notice) on every replug.
+        xrun_task: asyncio.Task = asyncio.create_task(self._xrun_watch_loop())
         last_rescan: float = 0.0
         while not self._stopping:
             if not self._device_ready:
@@ -1407,6 +1431,7 @@ class CoreEngine:
             task.cancel()
         if poll_task is not None:
             poll_task.cancel()
+        xrun_task.cancel()
 
     def _rescan_for_device(self) -> None:
         """Re-attempt detection for a device present at boot but not yet ready.
@@ -2096,6 +2121,20 @@ class CoreEngine:
             self.logger.warning(f'Failed to update EQ band file: {e}')
     
     def redirect_to_media_sink(self):
+        """Make the Media channel the system default when the headset comes up.
+
+        Media, because the default output is what everything ASM does not route
+        by name follows: a browser, a music player, system sounds, any app the
+        router has never heard of. Sending that to Game — which is what this did
+        for as long as PULSE_MEDIA_NODE_NAME held ``Arctis_Game`` — files all of
+        it as game audio, so the ChatMix dial then balances a podcast against
+        Discord.
+
+        Only when the headset is actually on: the channels point at it, so
+        adopting the default while it is off would move audio to a device that
+        is not there. That is why redirect_audio_on_disconnect exists to hand
+        the default back when it goes away.
+        """
         if not self.general_settings.redirect_audio_on_connect or not self.is_device_online():
             return
 
@@ -2754,6 +2793,87 @@ class CoreEngine:
         
         endpoint = self.get_command_endpoint_address()
         self.send_command([self.device_config.status.request], endpoint)
+
+    # Xrun self-diagnostics (#183) ──────────────────────────────────────────
+    #
+    # The surround chain missing its deadline is audible as crackling, and
+    # nothing in the UI explains it — users are left to guess, or to blame the
+    # headset. The counters are cheap to read; the hard part is deciding when
+    # to speak, because xruns also spike for reasons that have nothing to do
+    # with ASM (a compile finishing, a game loading a level, the machine coming
+    # out of suspend). A notification that fires on those teaches people to
+    # dismiss it, and then it is worth less than nothing.
+    #
+    # So: only speak when the problem is *sustained* — several consecutive
+    # samples, each with real activity — and only once per session. A single
+    # burst, however large, stays silent.
+    _XRUN_SAMPLE_PERIOD_S = 60.0
+    _XRUN_MIN_PER_SAMPLE = 3      # a sample below this is noise, not a pattern
+    _XRUN_CONSECUTIVE = 3         # ~3 minutes of steady xruns before speaking
+    _XRUN_NODE_FRAGMENTS = ("virtual-surround-7.1-hesuvi", "sonar-")
+
+    async def _xrun_watch_loop(self, period: float | None = None):
+        period = period or self._XRUN_SAMPLE_PERIOD_S
+        previous: dict[str, int] = {}
+        streak = 0
+        notified = False
+        try:
+            while not self._stopping:
+                await asyncio.sleep(period)
+                if notified:
+                    continue
+                # Nothing to suggest if the user already chose a larger buffer,
+                # and nothing to blame the chain for if Spatial Audio is off.
+                if getattr(self.general_settings, 'pipewire_quantum', 0):
+                    continue
+                try:
+                    from arctis_sound_manager.pw_utils import get_xrun_counts
+                    current = await asyncio.get_running_loop().run_in_executor(
+                        None, get_xrun_counts, self._XRUN_NODE_FRAGMENTS)
+                except Exception as exc:
+                    self.logger.debug("xrun sample failed: %r", exc)
+                    continue
+                if not current:
+                    # pw-top missing or nothing of ours in the graph: no
+                    # information, which is not the same as no xruns.
+                    continue
+
+                # Counters are monotonic per node, and a node that was recreated
+                # (filter-chain restart) restarts at 0 — a negative delta is a
+                # new node, not negative xruns.
+                delta = sum(max(0, n - previous.get(name, n)) for name, n in current.items())
+                previous = current
+
+                streak = streak + 1 if delta >= self._XRUN_MIN_PER_SAMPLE else 0
+                if streak < self._XRUN_CONSECUTIVE:
+                    continue
+
+                self.logger.warning(
+                    "Audio glitches: %d xruns/min sustained over %d samples on the "
+                    "surround chain — suggesting stability mode (#183)",
+                    delta, self._XRUN_CONSECUTIVE,
+                )
+                self._notify_xruns()
+                notified = True
+        except asyncio.CancelledError:
+            raise
+
+    def _notify_xruns(self) -> None:
+        """Tell the user once, and say what to do about it."""
+        import subprocess
+        try:
+            subprocess.run(
+                ["notify-send", "-a", "Arctis Sound Manager",
+                 "Audio glitches detected",
+                 "The Spatial Audio processing is struggling to keep up, which "
+                 "sounds like crackling. Settings → Audio stability (buffer "
+                 "size) can fix it, at the cost of slightly more latency."],
+                check=False, timeout=5,
+            )
+        except Exception as exc:
+            # notify-send is optional — a headless or minimal session simply
+            # gets the log line instead.
+            self.logger.debug("notify-send unavailable: %r", exc)
 
     async def _status_poll_loop(self, period: float = 2.0):
         # Nova 5 and 7 firmwares only emit a status frame when the radio link

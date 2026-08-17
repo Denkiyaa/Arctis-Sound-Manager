@@ -57,7 +57,22 @@ HOME_SYSTEMD_SERVICE_FOLDER = _XDG_CONFIG / 'systemd' / 'user'
 HOME_DINIT_SERVICE_FOLDER = _XDG_CONFIG / 'dinit.d'
 # ./Systemd
 
-PULSE_MEDIA_NODE_NAME = 'Arctis_Game'
+# Two different things used to share one name here, and the name fitted the
+# wrong one. The headset's ChatMix dial reports its two halves as "media mix"
+# and "chat mix" — the firmware's vocabulary — and its "media" half is the
+# GAME channel. So PULSE_MEDIA_NODE_NAME meant Arctis_Game, and every other
+# caller that reached for "the media sink" silently got Game instead.
+#
+# That mattered in one place: the sink ASM makes the system default on connect.
+# Everything that follows the default — a browser, a music player, system
+# sounds, anything ASM does not route by name — landed on Game, which files it
+# all as game audio and unbalances the very ChatMix dial above.
+PULSE_GAME_NODE_NAME = 'Arctis_Game'
+"""The sink the ChatMix dial's "media" half drives. Firmware vocabulary."""
+
+PULSE_MEDIA_NODE_NAME = 'Arctis_Media'
+"""The Media channel — where audio that follows the system default belongs."""
+
 PULSE_CHAT_NODE_NAME = 'Arctis_Chat'
 
 STEELSERIES_VENDOR_ID = 0x1038

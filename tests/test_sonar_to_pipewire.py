@@ -315,6 +315,43 @@ def test_a_conf_that_already_lost_its_target_gets_it_back_with_its_eq(tmp_path, 
     assert "Gain = 2.0" in repaired
 
 
+def test_regenerated_output_conf_stays_a_selectable_sink(tmp_path, monkeypatch):
+    """ensure_sonar_eq_configs() must write Output as Audio/Sink priority 1.
+
+    _bypass_conf derives media.class and priority.session from its `channel`
+    argument, which this call site used to omit: the Output conf came out as
+    Audio/Sink/Internal priority 1000 and the channel vanished from the
+    selectable outputs — while check_and_fix_stale_configs()'s regen of the
+    very same file passed `channel` and wrote it correctly.
+    """
+    import arctis_sound_manager.sonar_to_pipewire as _s2p_mod
+    from arctis_sound_manager import device_state
+
+    monkeypatch.setattr(_s2p_mod, "_CONF_DIR", tmp_path)
+    monkeypatch.setattr(_s2p_mod, "_filter_chain_safe_mode", False)
+    monkeypatch.setattr(_s2p_mod, "_SAFE_MODE_MARKER", tmp_path / "no-such-marker.json")
+    monkeypatch.setattr(_s2p_mod, "_resolve_external_output",
+                        lambda *a, **kw: ("alsa_output.hdmi-stereo", 2, "FL FR"))
+
+    device_state.set_current_device(
+        physical_out_game="alsa_output.test-headset",
+        physical_out_chat="alsa_output.test-headset",
+        physical_in="", spatial_engine="hesuvi", device_name="Test",
+    )
+    try:
+        assert _s2p_mod.ensure_sonar_eq_configs() is True
+    finally:
+        device_state.clear()
+
+    output_conf = (tmp_path / "sonar-output-eq.conf").read_text()
+    assert "media.class       = Audio/Sink\n" in output_conf
+    assert "priority.session  = 1\n" in output_conf
+    # The internal channels keep the shape that hides them from the picker.
+    chat_conf = (tmp_path / "sonar-chat-eq.conf").read_text()
+    assert "media.class       = Audio/Sink/Internal\n" in chat_conf
+    assert "priority.session  = 1000\n" in chat_conf
+
+
 def test_chat_target_has_target_object():
     """Chat EQ playback.props must include both node.target and target.object (WP 0.5)."""
     from arctis_sound_manager import device_state
@@ -568,10 +605,80 @@ def test_check_and_fix_stale_configs_noop_when_clean(tmp_path, monkeypatch):
         lambda *a, **kw: ("", 2, "FL FR"),
     )
     (tmp_path / "sonar-output-eq.conf").write_text(chat_clean)
+    # The micro conf is part of the contract too, and an absent one is now
+    # created rather than ignored — see
+    # test_missing_micro_conf_is_created_whatever_the_eq_mode.
+    (tmp_path / "sonar-micro-eq.conf").write_text(_MICRO_CLEAN)
 
     with patch("arctis_sound_manager.sonar_to_pipewire._CONF_DIR", tmp_path):
         fixed, _needs_pw_restart = check_and_fix_stale_configs()
         assert fixed is False
+
+
+# A micro conf none of the staleness checks object to: right media.class, no
+# `label = gain`, and a target already filled in so the empty-target repair
+# does not fire either.
+_MICRO_CLEAN = (
+    'context.modules = [\n'
+    '  { name = libpipewire-module-filter-chain\n'
+    '    args = {\n'
+    '      capture.props  = { target.object  = "alsa_input.test-headset" }\n'
+    '      playback.props = { media.class           = Audio/Source }\n'
+    '    } }\n'
+    ']\n'
+)
+
+
+def test_missing_micro_conf_is_created_whatever_the_eq_mode(tmp_path, monkeypatch):
+    """An absent sonar-micro-eq.conf is generated, in Custom EQ mode as in Sonar.
+
+    Nothing used to guarantee this file: ensure_sonar_eq_configs() covers
+    game/media/chat/output and skips micro, and it is itself only reached in
+    Sonar mode. On an install where the user never pressed Apply in the micro
+    EQ tab, ``effect_output.sonar-micro-eq`` therefore never existed — while
+    the daemon makes it the default source at startup, leaving the headset mic
+    out of the selectable inputs entirely.
+    """
+    monkeypatch.setattr(_s2p, "_SINKS_CONF_DIR", tmp_path / "pipewire.conf.d")
+    # Custom EQ mode: the `if sonar and ensure_sonar_eq_configs()` branch is
+    # not the one that must save us here.
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+    micro_path = tmp_path / "sonar-micro-eq.conf"
+
+    with patch("arctis_sound_manager.sonar_to_pipewire._CONF_DIR", tmp_path):
+        fixed, _needs_pw_restart = check_and_fix_stale_configs()
+
+    assert fixed is True
+    assert micro_path.exists(), "the micro conf has no other guarantor"
+    content = micro_path.read_text()
+    assert 'node.name             = "effect_output.sonar-micro-eq"' in content
+    assert "media.class           = Audio/Source" in content
+
+
+def test_existing_micro_conf_is_never_flattened(tmp_path, monkeypatch):
+    """The creation above only fires on absence — a real mic EQ survives.
+
+    Writing the bypass over a configured conf would silently drop the user's
+    bands, macros and noise processing, the same reason an outdated
+    ASM-CONF-VERSION is not a regeneration trigger for this file.
+    """
+    monkeypatch.setattr(_s2p, "_SINKS_CONF_DIR", tmp_path / "pipewire.conf.d")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(_s2p, "_get_physical_in", lambda: "alsa_input.test-headset")
+    micro_path = tmp_path / "sonar-micro-eq.conf"
+    generate_sonar_micro_conf(
+        [EqBand(freq=250, gain=-4.0, q=0.7, type="peakingEQ", enabled=True)],
+        0.0, 3.0, 0.0, output_path=micro_path,
+    )
+    assert "Gain = -4.0" in micro_path.read_text()
+
+    with patch("arctis_sound_manager.sonar_to_pipewire._CONF_DIR", tmp_path):
+        check_and_fix_stale_configs()
+
+    after = micro_path.read_text()
+    assert "Gain = -4.0" in after, "the band survived"
+    assert "Gain = 3.0" in after, "the voice macro survived"
+    assert "micro passthrough" not in after, "the bypass must not have been written"
 
 
 def test_check_and_fix_stale_configs_fixes_micro_source_virtual(tmp_path):
@@ -708,6 +815,9 @@ def test_check_and_fix_noop_when_no_static_sinks_file(tmp_path, monkeypatch):
         lambda *a, **kw: ("", 2, "FL FR"),
     )
     (tmp_path / "sonar-output-eq.conf").write_text(eq_chat)
+    # An absent micro conf is now created, not ignored — see
+    # test_missing_micro_conf_is_created_whatever_the_eq_mode.
+    (tmp_path / "sonar-micro-eq.conf").write_text(_MICRO_CLEAN)
 
     with (
         patch("arctis_sound_manager.sonar_to_pipewire._CONF_DIR", tmp_path),
@@ -1801,6 +1911,8 @@ def test_ensure_physical_output_links_links_both_channels(monkeypatch):
         lambda playback, target, data=None: calls.append((playback, target)) or True,
     )
     result = _s2p_p3.ensure_physical_output_links()
+    # Media carries its own HeSuVi chain since #169, onto the same physical
+    # game output: three last hops, not two.
     assert result == {"chat": True, "hesuvi": True, "hesuvi_media": True}
     assert calls == [
         ("effect_output.sonar-chat-eq", "alsa_output.test-chat"),
@@ -1853,6 +1965,7 @@ def test_ensure_physical_output_links_reuses_shared_pw_dump(monkeypatch):
     )
     sentinel = ["sentinel-pw-dump"]
     _s2p_p3.ensure_physical_output_links(data=sentinel)
+    # chat, game HeSuVi, and media's own HeSuVi chain (#169).
     assert seen_data == [sentinel, sentinel, sentinel]
 
 
@@ -1992,7 +2105,10 @@ def _po_graph(extra=None):
         _po_node(40, _PO_GAME_TARGET),
         _po_port(31, 30, "out", "FL"), _po_port(32, 30, "out", "FR"),
         _po_port(41, 40, "in", "FL"), _po_port(42, 40, "in", "FR"),
-        # Media runs its own HeSuVi stage so its device is independent of Game's.
+        # Media's parallel HeSuVi chain (#169) shares the physical game
+        # output. Two sources into one sink is fine: the stray-link cleanup
+        # is indexed on the source node, so neither chain tears down the
+        # other's link.
         _po_node(50, "effect_output.virtual-surround-7.1-hesuvi-media"),
         _po_port(51, 50, "out", "FL"), _po_port(52, 50, "out", "FR"),
     ]

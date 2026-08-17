@@ -133,7 +133,13 @@ jobs:
     needs: [release]
     if: "!contains(github.event.inputs.tag || github.ref_name, 'b')"
     permissions:
-      contents: read
+      # write, not read: the last step of this job pushes the regenerated
+      # aur/ template back to main. Declaring a permissions block at all
+      # replaces the workflow defaults, so `contents: read` silently removed
+      # that right and the push failed with a 403 in v1.2.32 — after the AUR
+      # itself had been updated, so the job went red while the package was
+      # perfectly delivered.
+      contents: write
       actions: write   # to arm aur-retry when AUR git is down
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

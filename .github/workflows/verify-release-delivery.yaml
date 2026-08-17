@@ -52,6 +52,7 @@ jobs:
         # the exact class of bug this workflow is here to stop.
         shell: bash
         run: |
+          set +e
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
             # Fresh release: tolerate still-building channels, poll up to 45 min.
             python3 scripts/verify_release_delivery.py "${{ steps.ver.outputs.version }}" \
@@ -62,6 +63,20 @@ jobs:
             python3 scripts/verify_release_delivery.py "${{ steps.ver.outputs.version }}" \
               --strict --timeout 1800 --interval 120 | tee report.txt
           fi
+          rc=${PIPESTATUS[0]}
+          set -e
+
+          # Exit 2 means the check could not reach a verdict — an API timed out
+          # or 5xx'd after retries — not that a channel is missing. Filing "the
+          # release did not reach every channel" on that would be false, and a
+          # check that cries wolf is one people stop reading: that is exactly how
+          # the AUR noise hid a real regression in #176/#178. The daily audit
+          # re-runs on its own, so a warning is the right weight here.
+          if [ "$rc" = "2" ]; then
+            echo "::warning::Delivery check could not verify every channel (network/API error). No channel is known to be missing; the daily audit will re-check."
+            exit 0
+          fi
+          exit "$rc"
 
       # This check caught 1.2.15, 1.2.16 and 1.2.17 going out with no Fedora
       # package — it went red each time and nobody noticed, because a red run in

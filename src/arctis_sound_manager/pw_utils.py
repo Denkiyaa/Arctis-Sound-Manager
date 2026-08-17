@@ -51,6 +51,203 @@ def _pw_run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     kwargs.setdefault("close_fds", False)
     return subprocess.run(resolved, **kwargs)
 
+_LINK_DENIED = "not permitted"
+# Cleared on every daemon start; one repair attempt per (out, in) pair is
+# enough, and retrying forever would hammer pw-cli on a system where this
+# genuinely cannot be fixed.
+_perm_repair_attempted: set[tuple[int, int]] = set()
+
+
+# Node names ASM creates itself. Only the clients behind these are ever
+# granted anything: raising permissions is not something to do on a client we
+# do not own, even within the user's own session.
+_ASM_OWNED_NODES = ("Arctis_", "effect_input.sonar-", "effect_output.sonar-",
+                    "effect_input.virtual-surround", "effect_output.virtual-surround")
+
+
+def _node_owner(node_id: int, dump: list | None = None) -> tuple[str | None, str]:
+    """(owning client id, node name) for *node_id*.
+
+    The client is None when the daemon owns the node, which also means the
+    permission check does not apply to it.
+    """
+    data = dump if dump is not None else _pw_dump()
+    for obj in data:
+        if obj.get("type") != "PipeWire:Interface:Node" or obj.get("id") != node_id:
+            continue
+        props = (obj.get("info") or {}).get("props") or {}
+        owner = props.get("client.id")
+        return (str(owner) if owner is not None else None,
+                props.get("node.name", ""))
+    return None, ""
+
+
+def _port_owner(port_id: int, dump: list | None = None) -> tuple[str | None, str]:
+    """(owning client id, node name) for the node a port belongs to."""
+    data = dump if dump is not None else _pw_dump()
+    for obj in data:
+        if obj.get("type") != "PipeWire:Interface:Port" or obj.get("id") != port_id:
+            continue
+        node_id = ((obj.get("info") or {}).get("props") or {}).get("node.id")
+        if node_id is None:
+            return None, ""
+        try:
+            return _node_owner(int(node_id), data)
+        except (TypeError, ValueError):
+            return None, ""
+    return None, ""
+
+
+def grant_link_permissions(out_port: int, in_port: int) -> bool:
+    """Give the clients owning these two ports permission to link (#181).
+
+    PipeWire refuses a link when the client owning one end cannot *see* the
+    node at the other end. On most systems the session manager grants that and
+    nobody notices, but where clients come up as ``access=restricted`` — seen
+    on SteamOS — every link ASM needs is denied, the channels reach nothing,
+    and there is no audio. The user hits the same wall running ``pw-link`` by
+    hand, so it is not something they can work around either.
+
+    ``pw-cli`` connects to the manager socket, which is unrestricted, so it can
+    raise permissions for the clients we own. The ``l`` in ``rwxml`` is the
+    flag that specifically allows linking and is *not* part of ``rwxm``:
+    omitting it is why such a fix appears to do nothing.
+
+    Deliberately narrow. Only the two clients at the ends of a link ASM was
+    already trying to make are touched, once per port pair per daemon run, and
+    only after a refusal — never pre-emptively. Returns True when something was
+    granted and the caller should retry the link.
+    """
+    key = (out_port, in_port)
+    if key in _perm_repair_attempted:
+        return False
+    _perm_repair_attempted.add(key)
+
+    if shutil.which("pw-cli") is None:
+        return False
+    dump = _pw_dump()
+
+    # Only ever raise permissions for clients behind nodes ASM created. The
+    # other end of a link is often the physical sink, owned by WirePlumber:
+    # granting it anything would be an elevation on a client we do not own,
+    # which is not ours to do even inside the user's own session.
+    owners: set[str] = set()
+    for port in (out_port, in_port):
+        owner, node_name = _port_owner(port, dump)
+        if owner is None:
+            # Daemon-owned: exempt from the check, nothing to grant.
+            continue
+        if not node_name.startswith(_ASM_OWNED_NODES):
+            logger.debug("not raising permissions for client %s (owns %r, not ours)",
+                         owner, node_name)
+            continue
+        owners.add(owner)
+    if not owners:
+        return False
+
+    granted = False
+    for owner in sorted(owners):
+        try:
+            r = _pw_run(["pw-cli", "permissions", owner, "-1", "rwxml"],
+                        check=False, timeout=5, capture_output=True)
+        except Exception as exc:
+            logger.debug("could not grant link permissions to client %s: %r", owner, exc)
+            continue
+        if r.returncode == 0:
+            granted = True
+        else:
+            logger.debug("pw-cli permissions %s failed: %s", owner,
+                         (r.stderr or b"").decode(errors="replace").strip())
+    if granted:
+        logger.warning(
+            "Link was refused by PipeWire; granted link permission to client(s) %s "
+            "and retrying. This system starts our clients restricted (#181).",
+            ", ".join(sorted(owners)),
+        )
+    return granted
+
+
+def apply_force_quantum(quantum: int) -> bool:
+    """Set PipeWire's forced quantum (buffer size); 0 releases it.
+
+    The HeSuVi surround chain runs 14 convolvers per sink, and with a large
+    HRIR it can miss PipeWire's deadline under ordinary desktop load — audible
+    as random crackling with nothing in the UI to explain it. A larger quantum
+    gives each cycle more time and makes those xruns stop, at the cost of
+    proportionally more latency (#183).
+
+    This is a **global** PipeWire setting: it applies to every application on
+    the system, not just ASM's chain. That is why the setting behind it
+    defaults to off and is the user's call, and why 0 must be written back on
+    the way out rather than left behind for the rest of the session.
+
+    Returns True when the value was written (or when there was nothing to do).
+    """
+    if shutil.which("pw-metadata") is None:
+        logger.debug("pw-metadata not found — cannot set clock.force-quantum")
+        return False
+    try:
+        result = _pw_run(
+            ["pw-metadata", "-n", "settings", "0", "clock.force-quantum", str(int(quantum))],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception as e:
+        logger.warning("Could not set clock.force-quantum=%s: %r", quantum, e)
+        return False
+    if result.returncode != 0:
+        logger.warning("pw-metadata clock.force-quantum=%s failed: %s",
+                       quantum, (result.stderr or "").strip())
+        return False
+    if quantum:
+        logger.info("Stability mode: forcing PipeWire quantum to %d (system-wide)", quantum)
+    else:
+        logger.info("Stability mode off: released PipeWire's forced quantum")
+    return True
+
+
+def get_xrun_counts(name_fragments: tuple[str, ...]) -> dict[str, int]:
+    """Cumulative xrun counters for our own nodes, from ``pw-top -b -n 1``.
+
+    An xrun is the graph missing its deadline: the convolvers did not finish in
+    time and the user hears a click. The counter is monotonic for the lifetime
+    of the node, so callers compare successive samples rather than absolute
+    values.
+
+    Only nodes whose name contains one of *name_fragments* are returned — we
+    diagnose our own chain, and someone else's DAW dropping frames is not ours
+    to report on. Returns {} when pw-top is unavailable or its output cannot be
+    parsed; callers treat that as "no information", never as "no xruns".
+    """
+    if shutil.which("pw-top") is None:
+        return {}
+    try:
+        # -b batch mode, one iteration. The first pass prints counters as they
+        # stand, which is all we need since we diff across calls.
+        result = _pw_run(["pw-top", "-b", "-n", "1"],
+                         capture_output=True, text=True, timeout=10)
+    except Exception as e:
+        logger.debug("pw-top failed: %r", e)
+        return {}
+    if result.returncode != 0:
+        return {}
+
+    counts: dict[str, int] = {}
+    for line in (result.stdout or "").splitlines():
+        fields = line.split()
+        # Layout: S ID QUANT RATE WAIT BUSY W/Q B/Q ERR FORMAT NAME…
+        # ERR is the xrun counter, NAME is everything past the format column.
+        if len(fields) < 10:
+            continue
+        name = fields[-1]
+        if not any(frag in name for frag in name_fragments):
+            continue
+        try:
+            counts[name] = int(fields[8])
+        except (ValueError, IndexError):
+            continue
+    return counts
+
+
 # effect_input sinks are internal filter-chain nodes — apps should never
 # target them directly. Remap to the corresponding Arctis virtual sink so a
 # stale override still lands the app on a real, user-facing destination.
@@ -884,6 +1081,21 @@ def ensure_loopback_link(
                 ["pw-link", str(out_port), str(in_port)],
                 check=False, timeout=3, capture_output=True,
             )
+            err = (r.stderr or b"").decode(errors="replace").strip()
+
+            # A refused link is not a broken graph: on systems that start our
+            # clients restricted, PipeWire denies it on permissions alone and
+            # every channel ends up reaching nothing (#181). Raise the
+            # permission for the two clients involved and try once more, rather
+            # than reporting a failure the user cannot act on.
+            if r.returncode != 0 and _LINK_DENIED in err.lower():
+                if grant_link_permissions(out_port, in_port):
+                    r = _pw_run(
+                        ["pw-link", str(out_port), str(in_port)],
+                        check=False, timeout=3, capture_output=True,
+                    )
+                    err = (r.stderr or b"").decode(errors="replace").strip()
+
             if r.returncode == 0:
                 linked_any = True
                 created += 1
@@ -891,8 +1103,7 @@ def ensure_loopback_link(
                 ok = False
                 logger.warning(
                     "ensure_loopback_link: pw-link %s→%s (%s) failed: %s",
-                    out_port, in_port, channel,
-                    (r.stderr or b"").decode(errors="replace").strip(),
+                    out_port, in_port, channel, err,
                 )
 
         if created:

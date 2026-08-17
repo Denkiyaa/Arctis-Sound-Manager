@@ -2103,6 +2103,12 @@ def check_and_fix_stale_configs() -> tuple[bool, bool]:
        matched that file and it was silently never regenerated across the
        upgrade. Deliberately limited to the HeSuVi conf — see the "Scope" note
        on ``_CONF_VERSION`` for why the EQ/micro confs are excluded.
+    9. Micro config missing entirely. ``ensure_sonar_eq_configs()`` guarantees
+       game/media/chat/output but not micro, and no package or install script
+       ships it, so on an install where the user never pressed "Apply" in the
+       micro EQ tab ``effect_output.sonar-micro-eq`` simply never existed —
+       yet the daemon makes it the default source at startup. This is the
+       only guarantor that file has, and it runs whatever ``.eq_mode`` says.
 
     Returns ``(fixed, needs_pipewire_restart)``.  *fixed* is True if any config
     was regenerated or cleaned.  *needs_pipewire_restart* is True when the static
@@ -2203,7 +2209,27 @@ def check_and_fix_stale_configs() -> tuple[bool, bool]:
 
     # Fix micro configs using old Audio/Source/Virtual or Audio/Sink pattern
     micro_path = _CONF_DIR / "sonar-micro-eq.conf"
-    if micro_path.exists():
+    if not micro_path.exists():
+        # Nobody else guarantees this file. ensure_sonar_eq_configs() covers
+        # game/media/chat/output but never micro, the packages and install
+        # scripts do not ship it, and the only writer is the GUI's micro EQ
+        # "Apply" — which a user in Custom EQ mode has no reason to ever press.
+        # Meanwhile the daemon unconditionally makes
+        # ``effect_output.sonar-micro-eq`` the default source at startup, so
+        # without the conf that node does not exist: the mic vanishes from the
+        # selectable inputs and micro_input_source / micro_autoswitch /
+        # ensure_micro_capture_link() all become inert.
+        #
+        # A bypass is only written when the file is ABSENT — writing it over an
+        # existing conf would flatten the user's mic processing, the same
+        # reasoning that keeps _conf_is_outdated() out of the repair below.
+        log.warning(
+            "sonar-micro-eq.conf missing — generating bypass so "
+            "effect_output.sonar-micro-eq exists"
+        )
+        _write_conf(micro_path, _bypass_micro_conf())
+        fixed = True
+    else:
         content = micro_path.read_text()
         # As with the EQ confs above, an outdated ASM-CONF-VERSION is NOT a
         # trigger here: the regen writes a bypass (flat) micro conf, which
@@ -2514,8 +2540,15 @@ def ensure_sonar_eq_configs() -> bool:
         if needs_regen:
             _write_conf(
                 conf_path,
+                # channel= is not optional: _bypass_conf derives media.class
+                # and priority.session from it. Omitting it wrote the Output
+                # conf as Audio/Sink/Internal priority 1000 instead of
+                # Audio/Sink priority 1, so the Output channel disappeared
+                # from the selectable outputs — while
+                # check_and_fix_stale_configs()'s regen of the same file wrote
+                # it correctly. Two writers, one file, one of them wrong.
                 _bypass_conf(sink_name, exp["target"], exp["channels"], exp["position"],
-                             owns_link=channel in ("game", "media")),
+                             channel=channel, owns_link=channel in ("game", "media")),
             )
             generated = True
 

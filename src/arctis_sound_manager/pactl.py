@@ -11,7 +11,7 @@ import time
 import pulsectl
 
 from arctis_sound_manager.constants import (PULSE_CHAT_NODE_NAME,
-                                            PULSE_MEDIA_NODE_NAME,
+                                            PULSE_GAME_NODE_NAME,
                                             STEELSERIES_VENDOR_ID)
 
 ONLY_PHYSICAL = 1
@@ -170,7 +170,7 @@ class PulseAudioManager:
                 return False
 
         physical = [s for s in sinks if vendor_matches(s) and _pid_matches(s.proplist.get('device.product.id', ''), product_id)]
-        virtual = [s for s in sinks if s.proplist.get('node.name', '') in (PULSE_MEDIA_NODE_NAME, PULSE_CHAT_NODE_NAME)]
+        virtual = [s for s in sinks if s.proplist.get('node.name', '') in (PULSE_GAME_NODE_NAME, PULSE_CHAT_NODE_NAME)]
 
         if mode == ONLY_PHYSICAL:
             sinks = physical
@@ -415,7 +415,9 @@ class PulseAudioManager:
 
         sinks = self.get_arctis_sinks(ONLY_VIRTUAL)
 
-        media = next((s for s in sinks if s.proplist.get('node.name', '') == PULSE_MEDIA_NODE_NAME), None)
+        # `media_mix` is the firmware's name for the dial's non-chat half, and
+        # the sink it drives is Game — not the Media channel. See constants.py.
+        game = next((s for s in sinks if s.proplist.get('node.name', '') == PULSE_GAME_NODE_NAME), None)
         chat = next((s for s in sinks if s.proplist.get('node.name', '') == PULSE_CHAT_NODE_NAME), None)
 
         # Only the channel that actually moved is written. Writing a sink the
@@ -423,8 +425,8 @@ class PulseAudioManager:
         # change, and the desktop still shows its volume OSD for it — so
         # nudging one end of the dial used to flash the other channel's sink
         # too. See CoreEngine._mix_is_jitter for the other half of this.
-        if media and not self._sink_is_at(media, media_mix):
-            self.pulse.volume_set_all_chans(media, media_mix / 100)
+        if game and not self._sink_is_at(game, media_mix):
+            self.pulse.volume_set_all_chans(game, media_mix / 100)
         if chat and not self._sink_is_at(chat, chat_mix):
             self.pulse.volume_set_all_chans(chat, chat_mix / 100)
 

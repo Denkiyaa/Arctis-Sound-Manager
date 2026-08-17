@@ -39,6 +39,30 @@ OVERRIDES_FILE = Path.home() / ".config" / "arctis_manager" / "routing_overrides
 # which made repatriation asymmetric between channels.
 ARCTIS_VIRTUAL_SINKS = {"Arctis_Game", "Arctis_Chat", "Arctis_Media", "effect_input.sonar"}
 
+def _is_asm_channel(sink_name: str) -> bool:
+    """True when *sink_name* is one of ASM's channels, not the hardware.
+
+    Sitting on the headset's own sink is not the same as sitting on a
+    channel. A stream there gets no EQ, no per-channel volume, no ChatMix
+    and never appears in the mixer, because it never enters ASM's graph at
+    all. It is also where a stream lands by default whenever the system
+    default sink is the headset itself, so it carries no intent: it is
+    where audio goes when nobody has decided anything.
+
+    The two are easy to conflate because the hardware sink is named
+    ``alsa_output.usb-SteelSeries_Arctis_Nova_Pro_Wireless-00.analog-stereo``
+    — it contains ``Arctis_``, so a fragment test written to mean "is this
+    app on one of our channels?" answers yes for the bare device. That is
+    what left applications stranded on the hardware, outside every channel
+    and absent from the mixer (reported on Discord by autune). The
+    distinction already existed as :func:`_is_physical_arctis`; this is the
+    same rule, stated from the other side.
+    """
+    if not sink_name or _is_physical_arctis(sink_name):
+        return False
+    return (any(k in sink_name for k in ARCTIS_VIRTUAL_SINKS)
+            or sink_name.startswith("effect_input."))
+
 # D-Bus query for the daemon's headset power status (fix for the sovereignty
 # bug: routing decisions must key off online/offline, not off the current
 # default sink). Cached briefly so the router doesn't hit D-Bus every tick;
@@ -297,6 +321,40 @@ def _is_physical_arctis(sink_name: str) -> bool:
     return "SteelSeries_Arctis" in sink_name and not sink_name.startswith("Arctis_")
 
 
+def _explicit_pin_target(props: dict, sink_map: dict) -> str | None:
+    """Return the foreign virtual sink a stream is explicitly pinned to, or None.
+
+    A stream that sets ``target.object`` / ``node.target`` to a *virtual*
+    sink that is not one of ASM's own nodes is part of another app's routing
+    graph — e.g. a soundboard feeding its mic-injection stream into a
+    virtual-microphone sink (SoundDeck). Adopting or overriding such a
+    stream doesn't just change where it is heard, it breaks the other app's
+    feature entirely, so the router must leave it alone (and put it back if
+    it was moved before this guard existed).
+
+    Deliberately narrow: pins to hardware outputs (``alsa_output.*`` /
+    ``bluez_output.*``) are NOT exempt — pulling audible streams from other
+    physical outputs onto the headset is the router's advertised adoption
+    behavior (issue #20). Pins to ASM's own sinks follow normal routing.
+    A target that names no currently-present sink is ignored.
+
+    Not exhaustive: ``target.object`` also accepts an ``object.serial``, and
+    this only matches ``node.name``, so a stream pinned by serial is not
+    recognised and is adopted as before. Resolving those would mean mapping
+    PipeWire serials to nodes (the PulseAudio sink index is a different
+    number), which is more machinery than the case seen in the wild warrants.
+    Do not read this guard as covering every possible pin.
+    """
+    target = props.get("target.object") or props.get("node.target") or ""
+    if not isinstance(target, str) or target not in sink_map:
+        return None
+    if target.startswith(("Arctis_", "effect_input.", "alsa_output.", "bluez_output.")):
+        return None
+    if _is_physical_arctis(target):
+        return None
+    return target
+
+
 def _subscribe(pulse: pulsectl.Pulse) -> None:
     """Subscribe to sink and sink-input events; stop the loop on any event."""
     pulse.event_mask_set('sink', 'sink_input')
@@ -399,9 +457,14 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
         )
         if default_sink and not default_is_arctis:
             idx_to_name = {s.index: s.name for s in sinks}
+            name_to_idx = {s.name: s.index for s in sinks}
             for si in pulse.sink_input_list():
                 app = si.proplist.get("application.name", "")
                 if not app:
+                    continue
+                if _explicit_pin_target(si.proplist, name_to_idx) is not None:
+                    # Pinned to a foreign virtual sink (e.g. a virtual-mic
+                    # feed) — unaffected by the headset being off.
                     continue
                 on_arctis = any(
                     k in idx_to_name.get(si.sink, "") for k in ARCTIS_VIRTUAL_SINKS
@@ -463,6 +526,29 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
         # generic application.name such as "Chromium".
         key = app_override_key(app, si.proplist.get("application.process.binary", ""))
 
+        # A stream explicitly pinned to a foreign virtual sink is off-limits
+        # to every pass below — restore it if something already moved it.
+        # Skipped before any _pa_placed bookkeeping so a same-named sibling
+        # stream (e.g. SoundDeck's monitor stream) keeps its own tracking.
+        pinned = _explicit_pin_target(si.proplist, sink_map)
+        if pinned is not None:
+            pinned_index = sink_map[pinned]
+            # Undo only *our* displacement. Sitting on an ASM sink is the
+            # evidence that the router put it there (before this guard
+            # existed); anywhere else and the user moved it themselves from a
+            # mixer, which is not ours to drag back. Without this test the
+            # router would hold these streams tighter than any other, undoing
+            # a deliberate manual move within a tick and offering no way out.
+            current_name = sink_idx_to_name.get(si.sink, "")
+            displaced_by_us = (
+                any(k in current_name for k in ARCTIS_VIRTUAL_SINKS)
+                or current_name.startswith("effect_input.")
+            )
+            if si.sink != pinned_index and displaced_by_us:
+                log.info("Pinned stream: '%s' back -> %s", app, pinned)
+                pulse.sink_input_move(si.index, pinned_index)
+            continue
+
         # Detect manual move: app was placed by router but is now elsewhere
         if key in _pa_placed and si.sink != _pa_placed[key]:
             current_name = _sink_name(sinks, si.sink)
@@ -499,15 +585,17 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
                 # but a stream still plays through another physical
                 # output (Logitech, internal speakers, etc.), pull it
                 # onto Arctis_Media so the user actually hears it in
-                # the headset. Skipped if the stream is already on any
-                # Arctis sink (virtual or filter-chain) so manual moves
-                # are preserved.
+                # the headset. Skipped if the stream is already on one of
+                # ASM's channels (virtual or filter-chain) so manual moves
+                # are preserved — the headset's own sink is NOT one of
+                # them (see _is_asm_channel), which is what used to leave
+                # everything the heuristics don't name stranded on the
+                # hardware, outside every channel and absent from the mixer.
+                # A deliberate placement there is still safe: it is saved as
+                # an override by _confirm_manual_move, and this branch only
+                # runs for streams that have none.
                 current_name = sink_idx_to_name.get(si.sink, "")
-                on_arctis = any(
-                    k in current_name
-                    for k in ("Arctis_", "SteelSeries_Arctis", "effect_input.sonar")
-                )
-                if not on_arctis:
+                if current_name and not _is_asm_channel(current_name):
                     auto = "Arctis_Media"
                     log.info(
                         "Adopt: '%s' was on '%s' while Arctis is default — moving to %s",
@@ -554,6 +642,20 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
         binary = s.get("props", {}).get("application.process.binary", "")
         key = app_override_key(app, binary)
 
+        # Same foreign-virtual-sink pin guard as the PA pass above, including
+        # the "only undo our own displacement" rule.
+        pinned = _explicit_pin_target(s.get("props", {}), sink_map)
+        if pinned is not None:
+            current_name = s["sink_name"] or ""
+            displaced_by_us = (
+                any(k in current_name for k in ARCTIS_VIRTUAL_SINKS)
+                or current_name.startswith("effect_input.")
+            )
+            if current_name != pinned and displaced_by_us:
+                log.info("Pinned native stream: '%s' back -> %s", app, pinned)
+                move_native_stream(s["id"], pinned)
+            continue
+
         # Detect manual move for native streams
         if key in _native_placed:
             placed = _native_placed[key]
@@ -583,16 +685,13 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
             auto = _auto_route(app, s.get("props", {}))
             if not auto:
                 # Same adoption fallback as for PA streams (issue #20):
-                # native PW stream playing on a non-Arctis sink while
-                # Arctis is default → move to Arctis_Media. Skip when
-                # the stream is already on an Arctis target (manual
-                # placement preserved).
+                # native PW stream playing outside ASM's channels while
+                # Arctis is default → move to Arctis_Media. Skip when the
+                # stream is already on one of our channels (manual
+                # placement preserved). Same correction as above: the
+                # headset's own sink is a device, not a channel.
                 current = s.get("sink_name") or ""
-                on_arctis = any(
-                    k in current
-                    for k in ("Arctis_", "SteelSeries_Arctis", "effect_input.sonar")
-                )
-                if current and not on_arctis:
+                if current and not _is_asm_channel(current):
                     auto = "Arctis_Media"
                     log.info(
                         "Adopt (native): '%s' was on '%s' while Arctis is default — moving to %s",

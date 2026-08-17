@@ -27,6 +27,37 @@ _GROUPS: list[tuple[str, list[str]]] = [
 ]
 
 
+# Convolution cost scales with the length of the impulse response, and this
+# catalog spans roughly 1 KB to 918 KB — a wide enough range that the choice
+# materially changes CPU load on the surround chain (14 convolvers per sink).
+# The reporter in #183 hit xruns with a ~288 KB profile, just above the 262 KB
+# median, so "large" here is not a theoretical concern: about half the catalog
+# sits in the range that can glitch on a busy machine.
+#
+# Thresholds are deliberately coarse. The point is to make an invisible
+# trade-off visible when picking, not to imply precision we don't have — actual
+# cost depends on the machine, the quantum and what else is running.
+_HRIR_COST_MEDIUM_BYTES = 128 * 1024
+_HRIR_COST_HIGH_BYTES = 512 * 1024
+
+
+def hrir_cpu_cost(hrir_id: str) -> str | None:
+    """Rough CPU cost of convolving with this HRIR: 'low' | 'medium' | 'high'.
+
+    Returns None when the file is missing or unreadable — callers show nothing
+    rather than guessing, since a wrong hint is worse than no hint.
+    """
+    try:
+        size = (_HRIR_DIR / f"{hrir_id}.wav").stat().st_size
+    except OSError:
+        return None
+    if size >= _HRIR_COST_HIGH_BYTES:
+        return "high"
+    if size >= _HRIR_COST_MEDIUM_BYTES:
+        return "medium"
+    return "low"
+
+
 @functools.lru_cache(maxsize=None)
 def _parse_csv() -> dict[str, str]:
     result: dict[str, str] = {}
@@ -53,17 +84,20 @@ def list_hrir_options_grouped() -> list[dict]:
     for group_name, ids in _GROUPS:
         for hrir_id in ids:
             if hrir_id in catalog:
-                result.append({"id": hrir_id, "name": catalog[hrir_id], "group": group_name})
+                result.append({"id": hrir_id, "name": catalog[hrir_id], "group": group_name,
+                               "cpu_cost": hrir_cpu_cost(hrir_id)})
                 seen.add(hrir_id)
     for hrir_id, desc in catalog.items():
         if hrir_id not in seen:
-            result.append({"id": hrir_id, "name": desc, "group": "Other"})
+            result.append({"id": hrir_id, "name": desc, "group": "Other",
+                           "cpu_cost": hrir_cpu_cost(hrir_id)})
     return result
 
 
 def list_hrir_options() -> list[dict]:
     """Flat list for D-Bus GetListOptions."""
-    return [{"id": o["id"], "name": o["name"]} for o in list_hrir_options_grouped()]
+    return [{"id": o["id"], "name": o["name"], "cpu_cost": o.get("cpu_cost")}
+            for o in list_hrir_options_grouped()]
 
 
 def package_hrir_path(hrir_id: str) -> Path | None:

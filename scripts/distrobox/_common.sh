@@ -179,17 +179,23 @@ asm_install_arch_in_container() {
 
         # P1-C: init keyring only if not already initialised
         echo "[arch-install] Checking pacman keyring..."
-        if [[ ! -d /etc/pacman.d/gnupg ]] || ! sudo test -s /etc/pacman.d/gnupg/pubring.gpg; then
-            echo "[arch-install] Initialising pacman keyring (first time)..."
-            sudo pacman-key --init
+        # --init unconditionally: it is idempotent, cheap, and it is what
+        # creates the LOCAL SIGNING KEY that `pacman-key --lsign-key` needs
+        # below. Testing pubring.gpg only proves the *public* keyring is
+        # populated, which is exactly how an Arch distrobox image ships: --init
+        # was skipped, and registering the repository then failed with
+        # "There is no secret key available to sign with", leaving the
+        # container with no ASM in it. Reported on Discord by binx9612.
+        sudo pacman-key --init
+        if ! sudo test -s /etc/pacman.d/gnupg/pubring.gpg; then
+            # Populating is the expensive half, so it stays conditional.
+            echo "[arch-install] Populating pacman keyring (first time)..."
             sudo pacman-key --populate archlinux
-        else
-            echo "[arch-install] Keyring already initialised — skipping"
         fi
 
         echo "[arch-install] Updating system..."
         sudo pacman -Syu --noconfirm
-        sudo pacman -S --needed --noconfirm curl
+        sudo pacman -S --needed --noconfirm curl || true
 
         # The signed binary repository is the primary Arch channel, and the
         # only one that keeps working while aur.archlinux.org git is in
@@ -197,39 +203,48 @@ asm_install_arch_in_container() {
         # users stranded on an old version with no way to update (issue #175).
         # Adding it here also means later updates are a plain `pacman -Syu`
         # inside the container, with no PKGBUILD editing.
+        # Registering the repository must never be fatal. This whole block runs
+        # under `set -e`, so a failure in here (no network for the key, a
+        # keyring pacman-key cannot sign into, gpg missing) would abort the
+        # install *before* the AUR fallback below ever runs: the container gets
+        # created, nothing is installed into it, and the user is left with a
+        # distrobox terminal wondering why `asm-gui` is not found. Guarded so a
+        # failure costs us the repository, never the installation.
         if ! grep -q "^\[arctis-sound-manager\]" /etc/pacman.conf; then
             echo "[arch-install] Adding the signed ASM repository..."
-            curl -fsSL https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo/arctis-sound-manager.key -o /tmp/asm.key
-            sudo pacman-key --add /tmp/asm.key
-            sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/asm.key | awk -F: "/^fpr/ {print \$10; exit}")"
-            printf "\n[arctis-sound-manager]\nServer = https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo\n" \
-                | sudo tee -a /etc/pacman.conf >/dev/null
+            if curl -fsSL https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo/arctis-sound-manager.key -o /tmp/asm.key \
+               && sudo pacman-key --add /tmp/asm.key \
+               && sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/asm.key | awk -F: "/^fpr/ {print \$10; exit}")"; then
+                printf "\n[arctis-sound-manager]\nServer = https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo\n" \
+                    | sudo tee -a /etc/pacman.conf >/dev/null
+            else
+                echo "[arch-install] Could not register the signed repository (see the error above)." >&2
+                echo "[arch-install] The install below will fail; its output says what to check." >&2
+            fi
             rm -f /tmp/asm.key
         fi
 
+        # No AUR fallback here, deliberately. It reads like a safety net and is
+        # not one: the AUR PKGBUILD fetches its tarball from GitHub Releases,
+        # the same host as this repository, so it removes no dependency and
+        # adds one (aur.archlinux.org, unreachable for weeks during the
+        # maintenance window that motivated moving to this repo in #175). It
+        # cannot help when GitHub is down, cannot help when the AUR is down,
+        # and for a local keyring problem it spends several minutes building
+        # base-devel and paru to work around something an error message
+        # resolves. Failing here with the reason is more useful than a long
+        # detour that hides it.
         echo "[arch-install] Installing arctis-sound-manager from the signed repository..."
-        if sudo pacman -Sy --noconfirm arctis-sound-manager; then
-            echo "[arch-install] Done."
-            exit 0
+        if ! sudo pacman -Sy --noconfirm arctis-sound-manager; then
+            echo "[arch-install] FAILED to install arctis-sound-manager." >&2
+            echo "[arch-install] The container exists but is empty, which is why asm-gui" >&2
+            echo "[arch-install] would not be found. To see why, run inside the container:" >&2
+            echo "[arch-install]   distrobox enter arctis-sound-manager" >&2
+            echo "[arch-install]   grep -A2 arctis-sound-manager /etc/pacman.conf" >&2
+            echo "[arch-install]   sudo pacman -Sy arctis-sound-manager" >&2
+            echo "[arch-install] and report the output at https://github.com/loteran/Arctis-Sound-Manager/issues" >&2
+            exit 1
         fi
-
-        echo "[arch-install] Signed repository unavailable — falling back to the AUR..."
-        if ! command -v paru &>/dev/null; then
-            echo "[arch-install] Installing paru (AUR helper)..."
-            # P0-A: include libusb and hidapi so PyUSB can open the headset
-            sudo pacman -S --needed --noconfirm base-devel git libusb hidapi
-            # P3-A: trap ensures tmpdir is cleaned even if makepkg fails
-            tmpdir=$(mktemp -d)
-            trap "rm -rf \"$tmpdir\"" EXIT
-            git clone https://aur.archlinux.org/paru-bin.git "$tmpdir/paru"
-            (cd "$tmpdir/paru" && makepkg -si --noconfirm)
-            trap - EXIT
-            rm -rf "$tmpdir"
-        fi
-
-        echo "[arch-install] Installing arctis-sound-manager from AUR..."
-        paru -S --noconfirm arctis-sound-manager
-
         echo "[arch-install] Done."
     '
 }

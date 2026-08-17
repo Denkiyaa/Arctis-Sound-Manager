@@ -325,12 +325,20 @@ def test_the_main_window_builds_with_clips_off():
     pytest.importorskip("PySide6")
     import logging
 
+    from unittest.mock import patch
+
     from PySide6.QtWidgets import QApplication
 
     from arctis_sound_manager.gui.main_app import PAGE_CLIPS, QMainApp
 
+    # SonarPage's constructor repairs stale filter-chain configs and restarts
+    # the service when it changed anything. On the throwaway HOME this suite
+    # runs with, sonar-micro-eq.conf is always missing, so building the window
+    # would reach for a real `systemctl restart filter-chain` — which the
+    # conftest guard rightly refuses. The window is what is under test here.
     app = QApplication.instance() or QApplication([])
-    main = QMainApp(app, logging.WARNING)
+    with patch("arctis_sound_manager.service_control.restart", return_value=True):
+        main = QMainApp(app, logging.WARNING)
     try:
         assert main.main_window is not None
         assert main._stack.count() == 8
