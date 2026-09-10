@@ -29,6 +29,7 @@ import sys
 import time
 from pathlib import Path
 
+from arctis_sound_manager import singleton
 from arctis_sound_manager.log_setup import configure_logging
 from arctis_sound_manager.pw_utils import _abs_exe, _pw_run, _parse_pw_dump_output
 from arctis_sound_manager.stream_guard import (CONFIG_FILE,
@@ -170,58 +171,15 @@ def process_tick() -> tuple[int, bool]:
 
 
 # ── singleton ──────────────────────────────────────────────────────────────
-
-def _is_our_process(pid: int) -> bool:
-    """True when *pid* is another asm-stream-guard, not merely a live PID.
-
-    A PID file that survives a reboot names a number, not a process. The
-    kernel hands low numbers out again within seconds of boot, so the number
-    left behind by yesterday's guard is very likely alive today as something
-    else entirely — and ``os.kill(pid, 0)`` cannot tell the difference. That
-    is how the guard talked itself out of running: the file said 1345, PID
-    1345 existed (some early-boot daemon), and every start exited 0 with
-    "already running" until systemd gave up with start-limit-hit. The screen
-    share it was installed to police then went out unguarded, silently,
-    because nothing about that failure looks like a failure — the unit exits
-    successfully and the user has no reason to look.
-
-    Reading the command line is what makes the check mean what it says.
-    /proc is Linux-only, and this daemon is PipeWire-only, so there is no
-    portability to trade away. An unreadable /proc entry (a PID that belongs
-    to another user, or one that vanished mid-read) is treated as "not ours":
-    a second guard is harmless — it cuts the same links — while refusing to
-    start is precisely the outcome this function exists to prevent.
-    """
-    try:
-        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
-    except OSError:
-        return False
-    return b"asm-stream-guard" in cmdline
-
+# See arctis_sound_manager.singleton for why this is not os.kill(pid, 0).
 
 def _acquire_singleton() -> bool:
     """Return True if we are the sole running instance, False otherwise."""
-    if _PID_FILE.exists():
-        try:
-            old_pid = int(_PID_FILE.read_text().strip())
-        except (OSError, ValueError):
-            old_pid = None      # unreadable or garbage — take over
-        if old_pid is not None and old_pid != os.getpid() and _is_our_process(old_pid):
-            log.warning(
-                "Another asm-stream-guard instance (PID %d) is already running — exiting.",
-                old_pid,
-            )
-            return False
-    _PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _PID_FILE.write_text(str(os.getpid()))
-    return True
+    return singleton.acquire(_PID_FILE, "asm-stream-guard", log)
 
 
 def _release_singleton() -> None:
-    try:
-        _PID_FILE.unlink(missing_ok=True)
-    except OSError:
-        pass
+    singleton.release(_PID_FILE)
 
 
 # ── main loop ──────────────────────────────────────────────────────────────

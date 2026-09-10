@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pulsectl
 
-from arctis_sound_manager import audio_reconfig
+from arctis_sound_manager import audio_reconfig, singleton
 from arctis_sound_manager.constants import (DBUS_BUS_NAME,
                                             DBUS_STATUS_INTERFACE_NAME,
                                             DBUS_STATUS_OBJECT_PATH)
@@ -649,29 +649,18 @@ def _subscribe(pulse: pulsectl.Pulse) -> None:
 _PID_FILE = Path.home() / ".config" / "arctis_manager" / "video_router.pid"
 
 
+# See arctis_sound_manager.singleton for why this is not os.kill(pid, 0).
+# Caught here in the wild: this router spent a whole session restarting every
+# three seconds because its leftover pid file said 1346, and 1346 was a
+# `gmain` thread inside gnome-keyring-daemon.
+
 def _acquire_singleton() -> bool:
     """Return True if we are the sole running instance, False otherwise."""
-    if _PID_FILE.exists():
-        try:
-            old_pid = int(_PID_FILE.read_text().strip())
-            # Check if that PID is still alive
-            os.kill(old_pid, 0)
-            log.warning(
-                "Another asm-router instance (PID %d) is already running — exiting.", old_pid
-            )
-            return False
-        except (ValueError, ProcessLookupError, PermissionError):
-            pass  # stale PID file — take over
-    _PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _PID_FILE.write_text(str(os.getpid()))
-    return True
+    return singleton.acquire(_PID_FILE, "asm-router", log)
 
 
 def _release_singleton() -> None:
-    try:
-        _PID_FILE.unlink(missing_ok=True)
-    except OSError:
-        pass
+    singleton.release(_PID_FILE)
 
 
 def main():
