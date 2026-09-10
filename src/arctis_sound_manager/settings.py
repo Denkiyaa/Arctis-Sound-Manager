@@ -373,6 +373,15 @@ class GeneralSettings(JsonSerializable):
     # whoever wants the buffer armed without thinking about it.
     clips_autostart: bool = False
 
+    # Ask the portal for a single window instead of a whole screen. Off,
+    # because a window token names *that* window: it dies with the game, and
+    # the next game is a different window, so an autostarted buffer would be
+    # pointing at nothing. A screen token survives both. The people who want
+    # this want the desktop kept out of the frame — a panel or an overlay
+    # drawn on top of a game that is not covering the screen ends up in the
+    # clip, and no amount of cropping puts it back.
+    clips_capture_window: bool = False
+
     # Where clips are written. None means "wherever the desktop says videos
     # go" — see clip_library.clip_dir(), which owns the whole resolution
     # order. Stored as a plain string rather than a Path because this file is

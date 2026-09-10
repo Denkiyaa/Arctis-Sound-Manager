@@ -93,6 +93,15 @@ def _autostart_enabled() -> bool:
         return False
 
 
+def _capture_window_enabled() -> bool:
+    try:
+        from arctis_sound_manager.settings import GeneralSettings
+        return bool(GeneralSettings.read_from_file().clips_capture_window)
+    except Exception:  # noqa: BLE001 — a broken settings file is not worth the page
+        logger.debug("could not read clips_capture_window, assuming off", exc_info=True)
+        return False
+
+
 def _tr(key: str, fallback: str) -> str:
     """Translate *key*, falling back to English while the .ini catches up."""
     try:
@@ -454,7 +463,25 @@ class ClipsPage(QWidget):
             "once and the answer is remembered, so this is the way to change "
             "it."))
         self._source_btn.clicked.connect(self._on_change_source)
-        _row("clips_source", "Capture:", self._source_btn)
+
+        # Which *kind* of source the picker is allowed to offer. This is not
+        # the same question as the button beside it: the button reopens the
+        # picker, this decides what the picker will have in it. Asking for a
+        # window narrows the portal to windows only, which is the only way to
+        # keep a panel or an overlay out of a clip when the game is not
+        # covering the screen — the app cannot crop what it was handed.
+        self._source_kind = QComboBox()
+        self._source_kind.addItem(_tr("clips_source_screen", "Whole screen"), False)
+        self._source_kind.addItem(_tr("clips_source_window", "A single window"), True)
+        self._source_kind.setCurrentIndex(1 if _capture_window_enabled() else 0)
+        self._source_kind.setToolTip(_tr(
+            "clips_source_kind_hint",
+            "A window keeps everything else off the recording, but the choice "
+            "is tied to that one window: it ends when the window does, and the "
+            "next game is a different window. A screen keeps working across "
+            "games."))
+        self._source_kind.currentIndexChanged.connect(self._on_source_kind_changed)
+        _row("clips_source", "Capture:", self._source_kind, self._source_btn)
 
         # Where clips land. Shown rather than assumed: the default follows the
         # desktop's own video folder, whatever it is called in the user's
@@ -716,7 +743,8 @@ class ClipsPage(QWidget):
         self._status.setText(_tr("clips_starting", "Starting capture…"))
         try:
             capture = ClipCapture(history_s=max(90.0, self._seconds.value() * 2.0),
-                                  fps=int(self._fps.currentData() or _DEFAULT_FPS))
+                                  fps=int(self._fps.currentData() or _DEFAULT_FPS),
+                                  window=bool(self._source_kind.currentData()))
             capture.start()
         except ClipCaptureUnavailable as exc:
             self._error = str(exc)
@@ -837,6 +865,52 @@ class ClipsPage(QWidget):
             # Most likely the picker was cancelled. The old session is already
             # closed by then, so there is no capture left to go back to — say
             # so plainly rather than leaving a Stop button over a dead pipeline.
+            logger.warning("could not re-open the capture source: %s", exc)
+            self._error = str(exc)
+            self._stop_capture()
+            return
+
+        self._error = None
+        self._update_status()
+
+    def _on_source_kind_changed(self, index: int) -> None:
+        """Switch between capturing a screen and capturing one window.
+
+        The saved token has to go with it. A restore token does not merely
+        remember *which* source was picked, it remembers a source of a
+        particular kind — replaying a screen token while asking the portal for
+        windows only is a contradiction, and what comes back is the screen the
+        token names, silently, which is precisely the bug this setting exists
+        to fix. Forgetting first means the next open() asks, and asks with the
+        kind the user just chose.
+
+        A live capture is restarted for the same reason `_on_change_source`
+        restarts one: the picker belongs to the moment the user asked for it,
+        not to whenever the pipeline next happens to be rebuilt.
+        """
+        from arctis_sound_manager.clip_capture import ScreenCastPortal
+
+        want_window = bool(self._source_kind.itemData(index))
+        try:
+            from arctis_sound_manager.settings import GeneralSettings
+            settings = GeneralSettings.read_from_file()
+            settings.clips_capture_window = want_window
+            settings.write_to_file()
+        except Exception:  # noqa: BLE001
+            logger.warning("could not persist clips_capture_window", exc_info=True)
+
+        ScreenCastPortal.forget()
+
+        if self._capture is None:
+            self._status.setText(_tr(
+                "clips_source_forgotten",
+                "You will be asked what to capture when you start again."))
+            return
+
+        self._capture.window = want_window
+        try:
+            self._capture.restart()
+        except Exception as exc:
             logger.warning("could not re-open the capture source: %s", exc)
             self._error = str(exc)
             self._stop_capture()
