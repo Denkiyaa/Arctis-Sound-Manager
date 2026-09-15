@@ -778,6 +778,20 @@ class QSystrayApp(QBaseDesktopApp):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             QTimer.singleShot(0, self.open_main_window)
 
+    def arm_background_pages(self) -> None:
+        """Build the main window, hidden, when a page has work to do while
+        the window is closed — today that is Clips (global shortcut, rolling
+        capture). Nothing is built when the feature is off."""
+        if hasattr(self, '_main_app'):
+            return
+        try:
+            from arctis_sound_manager.gui import clips_setup
+            if not clips_setup.clips_active():
+                return
+        except Exception:  # noqa: BLE001 — no answer means no Clips
+            return
+        self._main_app = QMainApp(self.app, self.logger.level)
+
     def open_main_window(self):
         if not hasattr(self, '_main_app'):
             self._main_app = QMainApp(self.app, self.logger.level)

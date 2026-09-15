@@ -29,6 +29,7 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShor
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -286,48 +287,19 @@ def slider_position(gain: float) -> int:
     return int(round(100 * (max(0.0, min(1.0, float(gain))) ** 0.5)))
 
 
-def _channel_strip(name: str, position: int, muted: bool):
-    """Build one channel's strip: name, fader, level read-out, mute.
-
-    Returns (widget, slider, mute button, level label, silent label).
-    """
+def _channel_row(name: str, position: int, muted: bool):
+    """Build one channel's row: (widgets in column order, slider, mute
+    button, level label, silent label)."""
     colour = _theme.c(_CHANNEL_COLOURS.get(name, "ACCENT"))
-    strip = QWidget()
-    strip.setObjectName("clipChannelStrip")
-    strip.setStyleSheet(
-        f"QWidget#clipChannelStrip {{ background: {_theme.c('BG_CARD')}; "
-        f"border-radius: 10px; }}")
-    lay = QVBoxLayout(strip)
-    lay.setContentsMargins(12, 8, 12, 8)
-    lay.setSpacing(4)
+    secondary = _theme.c("TEXT_SECONDARY")
 
-    top = QHBoxLayout()
-    top.setSpacing(6)
-    dot = QLabel("●")
-    dot.setStyleSheet(f"color: {colour}; font-size: 9pt; background: transparent;")
-    label = QLabel(name)
+    label = QLabel(f'<span style="color:{colour}">●</span>&nbsp; {name}')
     label.setStyleSheet("font-weight: 600; background: transparent;")
-    silent = QLabel("")
-    silent.setStyleSheet(
-        f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 8pt; background: transparent;")
-    level = QLabel(_tr("clip_muted", "muted") if muted else f"{position}%")
-    level.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-    level.setMinimumWidth(44)
-    level.setStyleSheet(
-        f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 8pt; background: transparent;")
-    top.addWidget(dot)
-    top.addWidget(label)
-    top.addWidget(silent)
-    top.addStretch(1)
-    top.addWidget(level)
-    lay.addLayout(top)
 
-    bottom = QHBoxLayout()
-    bottom.setSpacing(8)
     slider = QSlider(Qt.Orientation.Horizontal)
     slider.setRange(0, 100)
     slider.setValue(position)
-    slider.setMinimumWidth(90)
+    slider.setFixedWidth(300)
     slider.setStyleSheet(f"""
         QSlider::groove:horizontal {{
             height: 4px; background: {_theme.c('BG_BUTTON')}; border-radius: 2px;
@@ -340,25 +312,32 @@ def _channel_strip(name: str, position: int, muted: bool):
             margin: -4px 0; border-radius: 6px;
         }}
     """)
+
+    level = QLabel(_tr("clip_muted", "muted") if muted else f"{position}%")
+    level.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    level.setFixedWidth(48)
+    level.setStyleSheet(f"color: {secondary}; font-size: 9pt; background: transparent;")
+
     mute = QPushButton(_tr("clip_mute", "Mute"))
     mute.setCheckable(True)
     mute.setChecked(muted)
     mute.setCursor(Qt.CursorShape.PointingHandCursor)
-    mute.setFixedHeight(22)
+    mute.setFixedSize(64, 22)
     mute.setStyleSheet(f"""
         QPushButton {{
-            padding: 0 10px; font-size: 8pt; border-radius: 11px;
-            background: {_theme.c('BG_BUTTON')}; color: {_theme.c('TEXT_SECONDARY')};
+            font-size: 8pt; border-radius: 11px;
+            background: {_theme.c('BG_BUTTON')}; color: {secondary};
         }}
         QPushButton:hover {{ background: {_theme.c('BG_BUTTON_HOVER')}; }}
         QPushButton:checked {{
             background: {_theme.c('ACCENT')}; color: {_theme.c('TEXT_PRIMARY')};
         }}
     """)
-    bottom.addWidget(slider, stretch=1)
-    bottom.addWidget(mute)
-    lay.addLayout(bottom)
-    return strip, slider, mute, level, silent
+
+    silent = QLabel("")
+    silent.setStyleSheet(f"color: {secondary}; font-size: 8pt; background: transparent;")
+
+    return (label, slider, level, mute, silent), slider, mute, level, silent
 
 
 class ClipEditor(QDialog):
@@ -661,25 +640,34 @@ class ClipEditor(QDialog):
         header.addWidget(hint)
         col.addLayout(header)
 
-        # One strip per channel, side by side, like the mixer on the Home
-        # page turned on its side: a name in the channel's colour, a short
-        # fader, its level, and a mute toggle. The faders used to run the
-        # full width of the dialog, one under the other — four bars of
-        # accent colour with nothing to say for 900 px each.
-        strips = QHBoxLayout()
-        strips.setSpacing(8)
+        # One row per channel, in aligned columns — name, fader, level,
+        # mute — inside a single card. The fader is a fixed width rather
+        # than the width of the dialog: a 900 px bar says nothing a 300 px
+        # one does not, and the mute column stays where the eye expects it.
+        card = QWidget()
+        card.setObjectName("clipChannelCard")
+        card.setStyleSheet(
+            f"QWidget#clipChannelCard {{ background: {_theme.c('BG_CARD')}; "
+            f"border-radius: 10px; }}")
+        grid = QGridLayout(card)
+        grid.setContentsMargins(14, 10, 14, 10)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+        grid.setColumnMinimumWidth(0, 120)
+        grid.setColumnStretch(4, 1)     # slack goes to the right, not the fader
         remembered = read_mix(self._path)
         for index, name in enumerate(names):
             volume, muted = remembered.get(name, (1.0, False))
-            strip, slider, mute, level, silent = _channel_strip(
+            widgets, slider, mute, level, silent = _channel_row(
                 name, slider_position(volume), muted)
             slider.valueChanged.connect(self._on_levels_changed)
             mute.toggled.connect(self._on_levels_changed)
-            strips.addWidget(strip, stretch=1)
+            for column, widget in enumerate(widgets):
+                grid.addWidget(widget, index, column)
             self._level_labels.append(level)
             self._silent_labels.append(silent)
             self._track_rows.append((name, slider, mute))
-        col.addLayout(strips)
+        col.addWidget(card)
 
         self._start_track_prep(len(names))
         return box

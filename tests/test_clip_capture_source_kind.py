@@ -150,9 +150,11 @@ def test_capture_window_setting_round_trips():
     from arctis_sound_manager import settings as settings_mod
 
     loaded = settings_mod.GeneralSettings.read_from_file()
-    assert loaded.clips_capture_window is False      # default: a screen
+    # Default: a window. A whole-screen clip takes whatever is in front of
+    # the game into a file that is about to be shared.
+    assert loaded.clips_capture_window is True
 
-    loaded.clips_capture_window = True
+    loaded.clips_capture_window = False
     loaded.write_to_file()
 
-    assert settings_mod.GeneralSettings.read_from_file().clips_capture_window is True
+    assert settings_mod.GeneralSettings.read_from_file().clips_capture_window is False

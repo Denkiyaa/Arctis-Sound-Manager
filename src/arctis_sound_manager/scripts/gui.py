@@ -521,6 +521,14 @@ def main():
         QTimer.singleShot(500, lambda: q_object.import_preset_url(_url_to_handle))
     elif not args.systray:
         QTimer.singleShot(0, q_object.open_main_window)
+    else:
+        # Tray-only start (the autostart path). The Clips page is what binds
+        # the global shortcut and arms the rolling capture, and it only
+        # existed once the window had been opened — so after every login
+        # Alt+F did nothing and no clip was buffered until the user happened
+        # to click the tray icon. Build the window without showing it when
+        # Clips is on; a second later so the tray comes up first.
+        QTimer.singleShot(1000, q_object.arm_background_pages)
 
     if not args.no_enforce_systemd:
         ensure_systemd_unit(True)
