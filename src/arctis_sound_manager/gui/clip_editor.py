@@ -172,6 +172,30 @@ class _TrackPrepWorker(QThread):
         self.done.emit(files, flags)
 
 
+def preview_output_device():
+    """The output the preview plays through: ASM's Media channel when it
+    exists, else whatever the system default is.
+
+    The players used to take the default, and the default on an ASM machine
+    is the headset's own device — which is exactly the one that is off when
+    the user has pointed the channels at earbuds or speakers. Every clip
+    then previewed in silence while its tracks were fine. The Media channel
+    goes wherever the user routed it, and it is where a video belongs.
+    """
+    try:
+        from PySide6.QtMultimedia import QMediaDevices
+    except ImportError:                              # pragma: no cover - env dependent
+        return None
+    try:
+        outputs = list(QMediaDevices.audioOutputs())
+    except Exception:  # noqa: BLE001
+        return None
+    for dev in outputs:
+        if bytes(dev.id()).startswith(b"Arctis_Media") or dev.description().endswith(" Media"):
+            return dev
+    return None
+
+
 class _ChannelMixer:
     """Every channel playing at once, one player each, driven together.
 
@@ -203,9 +227,12 @@ class _ChannelMixer:
             return False
 
         self.release()
+        device = preview_output_device()
         for path in files:
             player = QMediaPlayer(self._parent)
             output = QAudioOutput(self._parent)
+            if device is not None:
+                output.setDevice(device)
             player.setAudioOutput(output)
             player.setSource(QUrl.fromLocalFile(str(path)))
             self._players.append(player)
@@ -436,6 +463,8 @@ class ClipEditor(QDialog):
         # played separately and mixing its copy back in would make the first
         # channel unmutable.
         self._video_audio = QAudioOutput(self)
+        if (device := preview_output_device()) is not None:
+            self._video_audio.setDevice(device)
         self._video_audio.setVolume(0.0)
         self._player.setAudioOutput(self._video_audio)
         self._player.setVideoOutput(video)
