@@ -382,6 +382,14 @@ class GeneralSettings(JsonSerializable):
     # clip, and no amount of cropping puts it back.
     clips_capture_window: bool = False
 
+    # The most the capture will record, in frames per second — one of
+    # clip_capture.FPS_CHOICES. It was a combo box with no memory: every
+    # start of the tray, and therefore every autostarted capture, recorded at
+    # the default no matter what had been picked, and the choice could not
+    # be changed while a capture ran. 0 (or anything not offered) means the
+    # default.
+    clips_fps: int = 0
+
     # Where clips are written. None means "wherever the desktop says videos
     # go" — see clip_library.clip_dir(), which owns the whole resolution
     # order. Stored as a plain string rather than a Path because this file is

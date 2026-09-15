@@ -84,6 +84,18 @@ _GAME_POLL_MS = 5_000
 _GAME_GONE_GRACE_S = 45.0
 
 
+def _saved_fps() -> int:
+    """The remembered frame-rate ceiling, or the default when none is saved
+    or the saved one is not on offer any more."""
+    try:
+        from arctis_sound_manager.settings import GeneralSettings
+        value = int(GeneralSettings.read_from_file().clips_fps or 0)
+    except Exception:  # noqa: BLE001 — a broken settings file is not worth the page
+        logger.debug("could not read clips_fps, using the default", exc_info=True)
+        return _DEFAULT_FPS
+    return value if value in _FPS_CHOICES else _DEFAULT_FPS
+
+
 def _autostart_enabled() -> bool:
     try:
         from arctis_sound_manager.settings import GeneralSettings
@@ -440,14 +452,16 @@ class ClipsPage(QWidget):
         _row("clips_length", "Length:", self._seconds)
 
         # A ceiling, not a target — see clip_capture.FPS_CHOICES. It is offered
-        # because it decides the keyframe interval and the encoder's budget, and
-        # locked while capturing because both are fixed when the pipeline is
-        # built: changing it live would mean tearing the capture down, and the
-        # buffer with it.
+        # because it decides the keyframe interval and the encoder's budget.
+        # Both are fixed when the pipeline is built, so changing it during a
+        # capture rebuilds the capture (and empties the buffer) — the same
+        # trade the source picker makes, and better than a control that is
+        # greyed out for as long as autostart keeps the capture running.
         self._fps = QComboBox()
         for value in _FPS_CHOICES:
             self._fps.addItem(f"{value} fps", value)
-        self._fps.setCurrentIndex(max(0, _FPS_CHOICES.index(_DEFAULT_FPS)))
+        self._fps.setCurrentIndex(max(0, _FPS_CHOICES.index(_saved_fps())))
+        self._fps.currentIndexChanged.connect(self._on_fps_changed)
         self._fps.setToolTip(_tr(
             "clips_fps_hint",
             "The most this will record. The screen is only captured when it "
@@ -764,9 +778,6 @@ class ClipsPage(QWidget):
         self._capture = capture
         self._toggle_btn.setText(_tr("clips_stop", "Stop capture"))
         self._save_btn.setEnabled(True)
-        # The rate is baked into the pipeline (keyframe interval, encoder
-        # budget), so it can only change between captures.
-        self._fps.setEnabled(False)
         self._update_status()
 
     # ── where clips are saved ─────────────────────────────────────────────────
@@ -931,10 +942,33 @@ class ClipsPage(QWidget):
             self._capture = None
         self._toggle_btn.setText(_tr("clips_start", "Start capture"))
         self._save_btn.setEnabled(False)
-        self._fps.setEnabled(True)
         self._update_status()
 
     # ── following the game ────────────────────────────────────────────────────
+
+    def _on_fps_changed(self, _index: int) -> None:
+        """Remember the ceiling, and rebuild a running capture on it."""
+        fps = int(self._fps.currentData() or _DEFAULT_FPS)
+        try:
+            from arctis_sound_manager.settings import GeneralSettings
+            settings = GeneralSettings.read_from_file()
+            settings.clips_fps = fps
+            settings.write_to_file()
+        except Exception:  # noqa: BLE001
+            logger.warning("could not persist clips_fps", exc_info=True)
+
+        if self._capture is None:
+            return
+        self._capture.max_fps = fps
+        try:
+            self._capture.restart()
+        except Exception as exc:
+            logger.warning("could not rebuild the capture at %d fps: %s", fps, exc)
+            self._error = str(exc)
+            self._stop_capture()
+            return
+        self._error = None
+        self._update_status()
 
     def _on_autostart_toggled(self, on: bool) -> None:
         try:
