@@ -923,9 +923,15 @@ class QSystrayApp(QBaseDesktopApp):
                 )
             except FileNotFoundError:
                 pass  # pactl gone (pulseaudio-utils) — daemon redirect stands
-        else:
-            # Deferred restart: the app exits first, then pipewire restarts
-            # without ASM configs (filter-chain is already stopped).
-            sc.restart_detached("pipewire", "wireplumber", "pipewire-pulse", delay=1.0)
+        # No PipeWire restart on the way out, whatever the redirect setting.
+        # This used to bounce pipewire, wireplumber and pipewire-pulse "so
+        # the graph comes back without ASM's configs" — but the daemon and
+        # the filter-chain service are already stopped above, so there is
+        # nothing left to drop, and the bounce itself was the damage: every
+        # client's PipeWire fd cut at once (plasmashell crashes in
+        # QSocketNotifier on that, taking the panel and the launcher with
+        # it), a Bluetooth headset dropped and re-paired, and the quantum
+        # and codec the user had settled on reset in the process. Exit must
+        # leave the audio server exactly as it found it.
 
         self.app.quit()

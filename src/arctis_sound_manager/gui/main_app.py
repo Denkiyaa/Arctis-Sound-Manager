@@ -626,4 +626,16 @@ class QMainApp(QBaseDesktopApp):
         self._stopping = True
         self.dbus_wrapper.stop()
         self.logger.debug("Received shutdown signal, shutting down.")
+        # Release the clip capture before the interpreter starts tearing
+        # objects down. Left to finalisation, the GStreamer pipeline and the
+        # portal session died with the process — the GUI itself SEGV'd in
+        # _gi on the way out, and the compositor's end of the screencast was
+        # cut mid-frame, which is what took plasmashell down with it on
+        # every Exit.
+        shutdown = getattr(getattr(self, "_clips_page", None), "shutdown", None)
+        if shutdown is not None:
+            try:
+                shutdown()
+            except Exception:  # noqa: BLE001 — quitting must not depend on it
+                self.logger.debug("clips page shutdown failed", exc_info=True)
         self.app.quit()
