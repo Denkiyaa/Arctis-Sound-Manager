@@ -27,7 +27,6 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -245,6 +244,121 @@ class _ChannelMixer:
             player.setSource(QUrl())
         self._players.clear()
         self._outputs.clear()
+
+
+# ── channel strips ────────────────────────────────────────────────────────────
+
+# Which colour a channel strip takes, by track name. The mic is grey — it is
+# not one of the coloured channels on the Home page — and anything else (an
+# app recorded off its own sink) gets the accent.
+_CHANNEL_COLOURS = {
+    "game": "COLOR_GAME",
+    "chat": "COLOR_CHAT",
+    "media": "COLOR_AUX",
+    "aux": "COLOR_AUX2",
+    "mic": "TEXT_SECONDARY",
+}
+
+
+def slider_gain(position: int) -> float:
+    """Linear gain for a fader position in 0–100.
+
+    Not ``position / 100``. Loudness is logarithmic, so a linear fader spends
+    its whole top half on a change the ear barely notices — 50 was −6 dB,
+    "a little quieter", and the bottom quarter held everything from "half"
+    to silence. The range above 100 that used to be offered went nowhere
+    either: the player clamps at 1.0, so 100 to 150 did nothing at all.
+
+    A squared taper puts the useful range where the hand is: 50 is −12 dB,
+    71 is −6 dB, 25 is −24 dB, 0 is off. The export applies the same gain,
+    so the preview stays the export.
+    """
+    p = max(0, min(100, int(position))) / 100.0
+    return round(p * p, 4)
+
+
+def slider_position(gain: float) -> int:
+    """The fader position for a linear gain — the inverse of slider_gain.
+
+    Sidecars written before the taper existed hold 1.0 for "untouched" and
+    plain fractions below it; those land in the right place too (0.5 → 71,
+    which is the −6 dB that 0.5 always was). Gains above 1.0 clamp to 100."""
+    return int(round(100 * (max(0.0, min(1.0, float(gain))) ** 0.5)))
+
+
+def _channel_strip(name: str, position: int, muted: bool):
+    """Build one channel's strip: name, fader, level read-out, mute.
+
+    Returns (widget, slider, mute button, level label, silent label).
+    """
+    colour = _theme.c(_CHANNEL_COLOURS.get(name, "ACCENT"))
+    strip = QWidget()
+    strip.setObjectName("clipChannelStrip")
+    strip.setStyleSheet(
+        f"QWidget#clipChannelStrip {{ background: {_theme.c('BG_CARD')}; "
+        f"border-radius: 10px; }}")
+    lay = QVBoxLayout(strip)
+    lay.setContentsMargins(12, 8, 12, 8)
+    lay.setSpacing(4)
+
+    top = QHBoxLayout()
+    top.setSpacing(6)
+    dot = QLabel("●")
+    dot.setStyleSheet(f"color: {colour}; font-size: 9pt; background: transparent;")
+    label = QLabel(name)
+    label.setStyleSheet("font-weight: 600; background: transparent;")
+    silent = QLabel("")
+    silent.setStyleSheet(
+        f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 8pt; background: transparent;")
+    level = QLabel(_tr("clip_muted", "muted") if muted else f"{position}%")
+    level.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    level.setMinimumWidth(44)
+    level.setStyleSheet(
+        f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 8pt; background: transparent;")
+    top.addWidget(dot)
+    top.addWidget(label)
+    top.addWidget(silent)
+    top.addStretch(1)
+    top.addWidget(level)
+    lay.addLayout(top)
+
+    bottom = QHBoxLayout()
+    bottom.setSpacing(8)
+    slider = QSlider(Qt.Orientation.Horizontal)
+    slider.setRange(0, 100)
+    slider.setValue(position)
+    slider.setMinimumWidth(90)
+    slider.setStyleSheet(f"""
+        QSlider::groove:horizontal {{
+            height: 4px; background: {_theme.c('BG_BUTTON')}; border-radius: 2px;
+        }}
+        QSlider::sub-page:horizontal {{
+            background: {colour}; border-radius: 2px;
+        }}
+        QSlider::handle:horizontal {{
+            background: white; border: none; width: 12px; height: 12px;
+            margin: -4px 0; border-radius: 6px;
+        }}
+    """)
+    mute = QPushButton(_tr("clip_mute", "Mute"))
+    mute.setCheckable(True)
+    mute.setChecked(muted)
+    mute.setCursor(Qt.CursorShape.PointingHandCursor)
+    mute.setFixedHeight(22)
+    mute.setStyleSheet(f"""
+        QPushButton {{
+            padding: 0 10px; font-size: 8pt; border-radius: 11px;
+            background: {_theme.c('BG_BUTTON')}; color: {_theme.c('TEXT_SECONDARY')};
+        }}
+        QPushButton:hover {{ background: {_theme.c('BG_BUTTON_HOVER')}; }}
+        QPushButton:checked {{
+            background: {_theme.c('ACCENT')}; color: {_theme.c('TEXT_PRIMARY')};
+        }}
+    """)
+    bottom.addWidget(slider, stretch=1)
+    bottom.addWidget(mute)
+    lay.addLayout(bottom)
+    return strip, slider, mute, level, silent
 
 
 class ClipEditor(QDialog):
@@ -525,17 +639,20 @@ class ClipEditor(QDialog):
         box = QWidget()
         col = QVBoxLayout(box)
         col.setContentsMargins(0, 0, 0, 0)
-        col.setSpacing(4)
+        col.setSpacing(6)
 
         names = probe_tracks(self._path)
-        self._track_rows: list[tuple[str, QSlider, QCheckBox]] = []
+        self._track_rows: list[tuple[str, QSlider, QPushButton]] = []
         self._silent_labels: list[QLabel] = []
+        self._level_labels: list[QLabel] = []
         if not names:
             col.addWidget(QLabel(_tr("clip_no_tracks", "No audio tracks found.")))
             return box
 
         header = QHBoxLayout()
-        header.addWidget(QLabel(_tr("clip_tracks", "Audio channels:")))
+        title = QLabel(_tr("clip_tracks", "Audio channels"))
+        title.setStyleSheet("font-weight: 600;")
+        header.addWidget(title)
         header.addStretch(1)
         hint = QLabel(_tr("clip_channels_hint",
                           "All channels play together — mute the ones you do "
@@ -544,43 +661,42 @@ class ClipEditor(QDialog):
         header.addWidget(hint)
         col.addLayout(header)
 
+        # One strip per channel, side by side, like the mixer on the Home
+        # page turned on its side: a name in the channel's colour, a short
+        # fader, its level, and a mute toggle. The faders used to run the
+        # full width of the dialog, one under the other — four bars of
+        # accent colour with nothing to say for 900 px each.
+        strips = QHBoxLayout()
+        strips.setSpacing(8)
         remembered = read_mix(self._path)
         for index, name in enumerate(names):
-            row = QHBoxLayout()
-            label = QLabel(name)
-            label.setMinimumWidth(110)
-
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setRange(0, 150)
-            mute = QCheckBox(_tr("clip_mute", "Mute"))
             volume, muted = remembered.get(name, (1.0, False))
-            slider.setValue(int(round(volume * 100)))
-            mute.setChecked(muted)
+            strip, slider, mute, level, silent = _channel_strip(
+                name, slider_position(volume), muted)
             slider.valueChanged.connect(self._on_levels_changed)
             mute.toggled.connect(self._on_levels_changed)
-
-            silent = QLabel("")
-            silent.setStyleSheet(f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 8pt;")
+            strips.addWidget(strip, stretch=1)
+            self._level_labels.append(level)
             self._silent_labels.append(silent)
-
-            row.addWidget(label)
-            row.addWidget(slider, stretch=1)
-            row.addWidget(silent)
-            row.addWidget(mute)
-            col.addLayout(row)
             self._track_rows.append((name, slider, mute))
+        col.addLayout(strips)
 
         self._start_track_prep(len(names))
         return box
 
     def _tracks(self) -> list[TrackMix]:
-        return [TrackMix(name=n, volume=s.value() / 100.0, muted=m.isChecked())
+        return [TrackMix(name=n, volume=slider_gain(s.value()), muted=m.isChecked())
                 for n, s, m in getattr(self, "_track_rows", [])]
 
     def _on_levels_changed(self) -> None:
         """A slider or a mute moved: hear it now, and remember it."""
         for index, track in enumerate(self._tracks()):
             self._mixer.set_level(index, track.volume, track.muted)
+            if index < len(self._level_labels):
+                _, slider, mute = self._track_rows[index]
+                self._level_labels[index].setText(
+                    _tr("clip_muted", "muted") if mute.isChecked()
+                    else f"{slider.value()}%")
         self._update_estimate()
 
     def _start_track_prep(self, count: int) -> None:
