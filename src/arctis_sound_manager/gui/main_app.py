@@ -157,7 +157,7 @@ class QMainApp(QBaseDesktopApp):
         # code it loaded at startup, and would otherwise go on doing so until
         # the next reboot — reporting a version it is not executing.
         self._staleness_timer = QTimer(self)
-        self._staleness_timer.setInterval(5 * 60 * 1000)
+        self._staleness_timer.setInterval(60 * 1000)
         self._staleness_timer.timeout.connect(self._check_upgraded_under_us)
         self._staleness_timer.start()
 
@@ -516,6 +516,23 @@ class QMainApp(QBaseDesktopApp):
         # Stop polling: the answer cannot change back, and the banner is now
         # the only thing that matters until the user acts on it.
         self._staleness_timer.stop()
+        if not self.main_window.isVisible():
+            # Nobody is looking at a window, so there is nothing to ask:
+            # a tray running yesterday's code is exactly what an upgrade
+            # exists to end. Release what must not be inherited across the
+            # exec — the capture's portal session, the encoder — and come
+            # back on the new code, same pid, same tray slot.
+            self.logger.info("upgraded to %s under a closed window — restarting the tray",
+                             new_version)
+            shutdown = getattr(getattr(self, "_clips_page", None), "shutdown", None)
+            if shutdown is not None:
+                try:
+                    shutdown()
+                except Exception:  # noqa: BLE001
+                    self.logger.debug("clips page shutdown failed", exc_info=True)
+            from arctis_sound_manager.runtime_staleness import restart_gui
+            restart_gui()
+            return
         self._home_page.on_restart_required(new_version)
 
     # ── Theme editor ──────────────────────────────────────────────────────────
