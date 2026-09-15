@@ -1,3 +1,43 @@
+arctis-sound-manager (1.4.26-1) noble; urgency=medium
+
+  * The daemon froze on wake from suspend (1.4.25 regression, #238). Two
+  * Chat channel routed to an external output device now stays stereo
+    instead of collapsing to mono/left-only, since ASM now owns its link
+    (PipeWire no longer force-negotiates the chat EQ output to the headset's
+    native mono PCM format). (#242)
+  * Turning the Aux channel off (or back on) never actually told the daemon.
+  * **ASM's own internal PipeWire nodes (the filter-chain/loopback plumbing
+  * The system tray's Output Routing menu never listed the Aux channel at
+    all, even when it was switched on — the per-channel device picker there
+    was hardcoded to Game/Chat/Media. Aux now appears whenever the channel
+    is enabled.
+  * **The Output channel could briefly play through the headset at startup
+  * **The headset's physical ChatMix knob has always crossfaded exactly two
+
+ -- loteran <axel.valadon@gmail.com>  Mon, 14 Sep 2026 00:00:00 +0000
+
+arctis-sound-manager (1.4.25-1) noble; urgency=medium
+
+  * **Nova Pro Omni: the ChatMix knob did nothing after boot until the
+    daemon
+  * A failed init frame was never retried. send_command() logs USB errors
+  * **ChatMix on the Nova Pro Omni also stayed dead specifically after a
+    system
+  * ASM never told the DAC it was leaving. SteelSeries' own engine sends
+  * **After the *wireless* headset itself reconnects (powers back on, or
+    comes
+  * DeepFilterNet noise cancellation silently stopped the microphone.
+  * **A native (non-PulseAudio) application stream with no application.name
+  * **The external Output channel could get silently and permanently stuck
+  * **GameBuds: the Volume Limiter and Wear Sense toggles were silently
+  * Bug reports no longer leak the weather widget's raw GPS coordinates
+  * **GameBuds: ANC intensity, and independent playback volume per
+    connection
+  * 4 new Sonar presets from SteelSeries GG 119.0.0: Bombanana!, Mortal
+    Shell
+
+ -- loteran <axel.valadon@gmail.com>  Sun, 13 Sep 2026 00:00:00 +0000
+
 arctis-sound-manager (1.4.24-1) noble; urgency=medium
 
   * Volume Boost had no audible effect with Spatial Audio on. The HeSuVi

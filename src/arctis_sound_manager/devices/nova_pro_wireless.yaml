@@ -1,5 +1,19 @@
 device:
   name: SteelSeries Arctis Nova Pro Wireless
+  # GG's own minimum spacing between commands for this firmware family.
+  # This profile's device_init sends the same Sonar/ChatMix mode-switch
+  # pair (0x8d, 0x49) as the Nova Pro Omni without an explicit settle —
+  # PR #245 flagged this family as untested but likely affected by the
+  # same abandoned-mode-switch bug; this generic pacing covers it.
+  time_between_commands_ms: 50
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length) — the firmware itself is still
+  # booting for this long.
+  init_sleep_length_ms: 5000
+  # GG's own retry delay for a status read after the wireless headset
+  # reconnects its radio link (up to 10 attempts) instead of trusting a
+  # single flat settle time before replaying settings.
+  radio_reconnect_probe_delay_ms: 100
   vendor_id: 0x1038
   product_ids:
     - 0x12e0 # SteelSeries Arctis Nova Pro Wireless
@@ -65,6 +79,15 @@ device:
     - ['status.request']  # Get device status
     - [0x06, 0x20, 0x00]
     - [0x06, 0xb7, 0x00]
+
+  # GG's own (shutdown ...) block for this family: turn sonar/chatmix back
+  # off before the interface is released, so the base station falls back to
+  # plain hardware volume instead of being left in software-ChatMix mode
+  # with nobody driving it once ASM stops.
+  shutdown_commands:
+    - [0x06, 0x49, 0x00]
+    - [0x06, 0x8d, 0x00]
+
   status:
     request: 0x06b0
     response_mapping:

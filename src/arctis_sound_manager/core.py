@@ -32,6 +32,8 @@ from arctis_sound_manager.channel_volumes import load_channel_volumes
 from arctis_sound_manager.pactl import ONLY_PHYSICAL, PulseAudioManager
 from arctis_sound_manager.settings import DeviceSettings, GeneralSettings
 from arctis_sound_manager.usb_devices_monitor import USBDevicesMonitor
+from arctis_sound_manager.usb_reenumerate import (reset_via_usbfs,
+                                                  sysfs_device_dir)
 from arctis_sound_manager.utils import ObservableDict
 from arctis_sound_manager.oled_manager import OledManager
 
@@ -139,6 +141,52 @@ _DERIVED_TOKENS = {
 # flap protection, for a headset sitting at the edge of its range.
 _SETTINGS_REPLAY_SETTLE_S = 1.5
 _SETTINGS_REPLAY_MIN_INTERVAL_S = 5.0
+
+# Issue #238: on some families (Nova Pro Omni) the ChatMix event stream stays
+# dead after a system resume until the DAC is replugged, even though
+# configure_virtual_sinks() re-acquires the USB handle cleanly. A USB reset
+# (USBDEVFS_RESET) forces the port to re-enumerate — see resume_from_sleep().
+# Rate-limited independently of the settings replay above: a reset drops the
+# ALSA node for a couple of seconds, so it gets a wider minimum interval and
+# at most one attempt per suspend/resume cycle.
+_USB_RESET_MIN_INTERVAL_S = 60.0
+_USB_RESET_SETTLE_S = 2.0
+_RESUME_STATUS_PROBE_TIMEOUT_S = 3.0
+# Worst case observed across profiles: init_sleep_length_ms tops out at 5s
+# (Nova Pro Omni/Elite/Wireless family) plus a few more seconds for
+# device_init itself once time_between_commands_ms pacing is applied to
+# every frame. Generous on purpose — this only gates how long the resume
+# status probe waits before giving up on configure_virtual_sinks() ever
+# finishing, not a normal-path duration.
+_RESUME_CONFIGURE_WAIT_TIMEOUT_S = 12.0
+
+# GG's own pattern after a *radio* reconnect (the wireless headset coming
+# back into range / powering on — not the USB transmitter, which never
+# moved): retry a status read up to this many times, sleeping
+# device_config.radio_reconnect_probe_delay_ms between attempts, instead of
+# trusting a single flat settle time. Every family that does this uses the
+# same attempt budget; only the per-attempt delay differs.
+_RADIO_RECONNECT_PROBE_ATTEMPTS = 10
+
+# Breadcrumb file for bug reports — see CoreEngine._record_usb_reset_attempt.
+_RESUME_RESET_STATE_PATH = Path.home() / '.config' / 'arctis_manager' / 'usb_resume_reset_state.json'
+
+
+def init_entry_pause_seconds(entry) -> float | None:
+    """The pause a `device_init` entry asks for, or None if it is a frame.
+
+    `['sleep', <milliseconds>]` is not sent to the device: the init sequence
+    waits that long before the next entry. The Nova Pro Omni needs it after
+    its two mode switches (0x8d sonar-present, 0x49 software ChatMix): the DAC
+    accepts the transfer but abandons the switch if another command lands
+    within a few milliseconds, which is what left the ChatMix knob inert after
+    every boot until the daemon was restarted by hand. Verified on hardware —
+    the identical frames spaced by a second engage the mixer every time.
+    """
+    if (isinstance(entry, (list, tuple)) and len(entry) == 2
+            and entry[0] == 'sleep' and isinstance(entry[1], int) and not isinstance(entry[1], bool)):
+        return entry[1] / 1000
+    return None
 
 
 #: Auto mic-switch trigger, stored as an int in the ``micro_autoswitch`` setting.
@@ -327,6 +375,31 @@ class CoreEngine:
         # _schedule_settings_replay().
         self._last_settings_push: float = 0.0
         self._settings_replay_timer: threading.Timer | None = None
+
+        # Guards for the resume-time USB reset escalation (#238). Reset by
+        # prepare_for_sleep() so at most one attempt happens per suspend cycle;
+        # the monotonic timestamp additionally rate-limits across cycles.
+        self._resume_reset_attempted: bool = False
+        self._last_usb_reset_monotonic: float = 0.0
+
+        # configure_virtual_sinks() runs on the pyudev observer thread, which
+        # must not block (it is the single path for every USB hotplug event,
+        # not just this device's) — so a profile's init_sleep_length_ms is
+        # served by a background timer rather than a plain time.sleep(). This
+        # event is cleared when detection starts and set once the deferred
+        # (or immediate, when no settle is needed) work finishes, so anything
+        # that needs to wait for a real configuration — resume_from_sleep()'s
+        # status probe, in particular — has something to wait on instead of
+        # assuming configure_virtual_sinks() already did the work by the time
+        # it returns.
+        self._device_configured_event = threading.Event()
+        self._device_configured_event.set()  # nothing pending yet
+        self._pending_init_timer: threading.Timer | None = None
+
+        # The main asyncio loop, captured in start() — lets a plain
+        # threading.Timer callback (replay_device_settings runs on one, not
+        # on the loop) run an async probe via run_coroutine_threadsafe.
+        self._main_event_loop: asyncio.AbstractEventLoop | None = None
 
         self.reload_device_configurations()
         self.usb_devices_monitor.register_on_connect(self.on_device_connected)
@@ -1650,6 +1723,7 @@ class CoreEngine:
 
     def start(self) -> Coroutine:
         self._stopping = False
+        self._main_event_loop = asyncio.get_running_loop()
         self.usb_devices_monitor.start()
 
         # Apply the configured quantum (#183) — including 0, which is what
@@ -1764,11 +1838,21 @@ class CoreEngine:
         # before, because gather() held the turn until the slowest interface
         # finished, which quietly paced the failing ones too. Waiting on the
         # first completed read removed that accidental brake.
+        # Snapshot under the lock, sleep outside it. This used to await inside
+        # the `with`, which parks the coroutine while the event-loop thread
+        # still owns the RLock. Anything else needing _device_lock from
+        # another thread then blocks until this coroutine is resumed - and it
+        # is not resumed if the loop thread itself goes on to block
+        # synchronously. That is exactly the wake-from-suspend deadlock (#238,
+        # 1.4.25): the pyudev thread in configure_virtual_sinks() waited here
+        # holding _detect_lock, while resume_from_sleep() sat in a blocking
+        # _detect_lock.acquire() on the loop thread. Neither could move, and
+        # the daemon stayed frozen until SIGKILL.
         with self._device_lock:
-            if self.usb_device is None:
-                await asyncio.sleep(_LISTEN_IDLE_BACKOFF_S)
-                return
             usb_device = self.usb_device
+        if usb_device is None:
+            await asyncio.sleep(_LISTEN_IDLE_BACKOFF_S)
+            return
 
         endpoint, max_packet_size = self.guess_interface_endpoint('in', interface_id)
 
@@ -2250,7 +2334,10 @@ class CoreEngine:
         return True
 
     def configure_virtual_sinks(self) -> None:
-        with self._detect_lock:
+        self._detect_lock.acquire()
+        self._device_configured_event.clear()
+        deferred = False
+        try:
             usb_device: Device | Any | None = None
             device_config: DeviceConfiguration | None = None
             used_preferred_device = False
@@ -2474,52 +2561,101 @@ class CoreEngine:
             self.setup_loopbacks()
             self._claim_default_source()
 
-            # Configure the device. Never fatal: init_device() retries USB
-            # errors per command and carries on, but anything else it raises —
-            # a profile whose device_init references a setting that is not
-            # there, a readback that throws, a hardware-EQ reconcile failing —
-            # used to escape here, before _device_ready is set at the end of
-            # this method. The daemon then had a working audio path and a
-            # responsive headset while every GUI surface said "No device
-            # detected", because the status sentinel is gated on _device_ready
-            # (#202: GameBuds X, whose profile documents its protocol as
-            # assumed rather than captured). A partly configured headset is
-            # still a present headset, and saying otherwise sends the user
-            # hunting for a connection problem they do not have.
-            try:
-                self.init_device()
-            except Exception as exc:
-                self.logger.error(
-                    "init_device failed for %s: %r — continuing with a "
-                    "partially configured device rather than reporting it "
-                    "absent. Some controls may not have been applied.",
-                    device_config.name, exc,
+            # SteelSeries' own GG engine waits this long after the USB
+            # transmitter (base station/dongle) enumerates before sending it
+            # any command at all — its `init-sleep-length`, up to 5s for the
+            # Nova Pro Omni/Elite/Wireless family, because the firmware is
+            # still booting. configure_virtual_sinks() runs on the pyudev
+            # observer thread (register_on_connect), which must not block —
+            # it is the single path for every USB hotplug event, not just
+            # this device's — so the wait is served by a timer instead of a
+            # plain time.sleep() here. _finish_configure_virtual_sinks() owns
+            # releasing _detect_lock and setting _device_configured_event
+            # once it runs; this method must not touch either on this path.
+            init_sleep = (device_config.init_sleep_length_ms or 0) / 1000
+            if init_sleep:
+                self.logger.info(
+                    "configure_virtual_sinks: waiting %.1fs for the transmitter "
+                    "to finish booting before init_device (init_sleep_length_ms)",
+                    init_sleep,
                 )
+                timer = threading.Timer(
+                    init_sleep, self._finish_configure_virtual_sinks, args=(device_config,))
+                timer.daemon = True
+                self._pending_init_timer = timer
+                deferred = True
+                timer.start()
+                return
 
-            if self.oled_manager is not None:
-                self.oled_manager.stop()
-                self.oled_manager = None
-            has_oled = (
-                device_config.status is not None
-                and 'gamedac' in device_config.status.representation
-                and device_config.oled is not None
+            self._finish_configure_virtual_sinks_body(device_config)
+        finally:
+            if not deferred:
+                self._device_configured_event.set()
+                self._detect_lock.release()
+
+    def _finish_configure_virtual_sinks(self, device_config: DeviceConfiguration) -> None:
+        """Timer callback for the init_sleep_length_ms deferral above.
+
+        The synchronous half of configure_virtual_sinks() handed off
+        _detect_lock without releasing it — owning that release (and marking
+        _device_configured_event) is this callback's job now.
+        """
+        try:
+            self._finish_configure_virtual_sinks_body(device_config)
+        finally:
+            self._device_configured_event.set()
+            self._detect_lock.release()
+
+    def _finish_configure_virtual_sinks_body(self, device_config: DeviceConfiguration) -> None:
+        """Everything configure_virtual_sinks() does once it is safe to talk
+        to the device: send device_init, bring up the OLED, mark it ready.
+
+        Never fatal: init_device() retries USB errors per command and
+        carries on, but anything else it raises — a profile whose
+        device_init references a setting that is not there, a readback that
+        throws, a hardware-EQ reconcile failing — used to escape here,
+        before _device_ready is set at the end of this method. The daemon
+        then had a working audio path and a responsive headset while every
+        GUI surface said "No device detected", because the status sentinel
+        is gated on _device_ready (#202: GameBuds X, whose profile documents
+        its protocol as assumed rather than captured). A partly configured
+        headset is still a present headset, and saying otherwise sends the
+        user hunting for a connection problem they do not have.
+        """
+        try:
+            self.init_device()
+        except Exception as exc:
+            self.logger.error(
+                "init_device failed for %s: %r — continuing with a "
+                "partially configured device rather than reporting it "
+                "absent. Some controls may not have been applied.",
+                device_config.name, exc,
             )
-            if has_oled:
-                # The OLED is decoration: never let it take the daemon down with
-                # it.  A missing font, an unexpected Pillow version (#154) or a
-                # refused USB interface used to abort startup entirely, leaving
-                # the user with no audio routing at all.
-                try:
-                    self.oled_manager = OledManager(self)
-                    self.oled_manager.start()
-                except Exception as exc:
-                    self.logger.error("OLED display disabled, initialisation failed: %r", exc)
-                    self.oled_manager = None
 
-            self.redirect_to_media_sink()
-            # Reached only when the full pipeline was configured without an early
-            # return; mark the device as ready so loop() stops re-scanning.
-            self._device_ready = True
+        if self.oled_manager is not None:
+            self.oled_manager.stop()
+            self.oled_manager = None
+        has_oled = (
+            device_config.status is not None
+            and 'gamedac' in device_config.status.representation
+            and device_config.oled is not None
+        )
+        if has_oled:
+            # The OLED is decoration: never let it take the daemon down with
+            # it.  A missing font, an unexpected Pillow version (#154) or a
+            # refused USB interface used to abort startup entirely, leaving
+            # the user with no audio routing at all.
+            try:
+                self.oled_manager = OledManager(self)
+                self.oled_manager.start()
+            except Exception as exc:
+                self.logger.error("OLED display disabled, initialisation failed: %r", exc)
+                self.oled_manager = None
+
+        self.redirect_to_media_sink()
+        # Reached only when the full pipeline was configured without an early
+        # return; mark the device as ready so loop() stops re-scanning.
+        self._device_ready = True
 
     def _discover_physical_nodes(
         self,
@@ -2628,27 +2764,52 @@ class CoreEngine:
             return
         endpoint = self.get_command_endpoint_address()
         total = len(self.device_config.device_init)
+        # SteelSeries' own GG engine paces every command it sends to a device
+        # by at least this much (its `time-between-commands`, pushed to the
+        # firmware over a HIDCONFIG report at connect time) — a command
+        # landing sooner than that after the previous one is silently
+        # dropped on some families. #238/#245 found one instance of this on
+        # the Nova Pro Omni (the Sonar/ChatMix mode switch); this is the
+        # general mechanism behind it, not specific to those two opcodes.
+        pace = (self.device_config.time_between_commands_ms or 0) / 1000
 
         for index, bytes in enumerate(self.device_config.device_init, start=1):
-            # One retry on USBError — most failures here are transient
+            pause = init_entry_pause_seconds(bytes)
+            if pause is not None:
+                # A settle time the profile author asked for, not a frame.
+                time.sleep(pause)
+                continue
+
+            # One retry on a failed write — most failures here are transient
             # (kernel driver re-attached itself between detach and write,
             # device still warming up after enumeration). Persistent
             # failures continue with the remaining commands so partial
             # state at least powers something rather than nothing.
+            #
+            # send_command() reports a USB error by returning False after
+            # logging it; it does not raise. The retry used to be written as
+            # an `except USBError` around that call, which could never fire,
+            # so every failed init frame was silently sent exactly once.
             for attempt in (1, 2):
+                failure: str | None = None
                 try:
-                    self.send_command(self.translate_init_bytes(bytes), endpoint)
-                    break
+                    if self.send_command(self.translate_init_bytes(bytes), endpoint) is False:
+                        failure = "USB write failed"
                 except usb.core.USBError as e:
-                    if attempt == 1:
-                        self.logger.warning(
-                            f"{context} cmd {index}/{total} failed ({e!r}); retrying once."
-                        )
-                        continue
-                    self.logger.error(
-                        f"{context} cmd {index}/{total} still failing after retry: {e!r}. "
-                        "Device may be left in a partially-configured state."
+                    failure = repr(e)
+                if failure is None:
+                    break
+                if attempt == 1:
+                    self.logger.warning(
+                        f"{context} cmd {index}/{total} failed ({failure}); retrying once."
                     )
+                    continue
+                self.logger.error(
+                    f"{context} cmd {index}/{total} still failing after retry: {failure}. "
+                    "Device may be left in a partially-configured state."
+                )
+            if pace:
+                time.sleep(pace)
         self._last_settings_push = time.monotonic()
 
     def _schedule_settings_replay(self) -> None:
@@ -2684,6 +2845,67 @@ class CoreEngine:
         self._settings_replay_timer = timer
         timer.start()
 
+    async def _probe_status_once(self, timeout: float) -> bool:
+        """One status request/reply round trip, true only if it succeeded.
+
+        Independent of _probe_device_awake() (resume_from_sleep's own probe,
+        #238): that one is tuned for a single post-suspend check with a
+        generous timeout, this one is meant to be called several times in a
+        tight retry loop with a short per-attempt timeout, so they are kept
+        separate rather than sharing one implementation with two different
+        timeout needs.
+        """
+        status = self.device_config.status if self.device_config else None
+        if status is None or status.request > 0xFF:
+            # Same limitation as _probe_device_awake(): the raw-response
+            # matcher can't key on a report-id-prefixed request value, so
+            # this family can't be probed at all — treat as answered rather
+            # than retrying uselessly for the full attempt budget.
+            return True
+        try:
+            self.request_device_status()
+        except usb.core.USBError:
+            return False
+        response = await self._await_raw_response(status.request, timeout=timeout)
+        return response is not None
+
+    def _wait_for_device_ready_after_radio_reconnect(self) -> None:
+        """Mirror GG's own retry-until-answered read after a *radio*
+        reconnect (get_fw_version retried up to 10x with a family-specific
+        delay in its own device spec) instead of trusting a single flat
+        settle time — see DeviceConfiguration.radio_reconnect_probe_delay_ms.
+
+        Runs on _schedule_settings_replay()'s threading.Timer thread, not
+        the pyudev observer thread configure_virtual_sinks() must not block
+        — sleeping here for a few seconds worst case is fine.
+        """
+        delay_ms = self.device_config.radio_reconnect_probe_delay_ms if self.device_config else None
+        if not delay_ms:
+            return
+        delay = delay_ms / 1000
+        loop = self._main_event_loop
+        if loop is None:
+            return
+        for attempt in range(1, _RADIO_RECONNECT_PROBE_ATTEMPTS + 1):
+            time.sleep(delay)
+            try:
+                future = asyncio.run_coroutine_threadsafe(self._probe_status_once(delay), loop)
+                answered = future.result(timeout=delay + 1.0)
+            except Exception as e:
+                self.logger.warning(
+                    "radio-reconnect probe attempt %d/%d failed: %r",
+                    attempt, _RADIO_RECONNECT_PROBE_ATTEMPTS, e)
+                answered = False
+            if answered:
+                self.logger.info(
+                    "radio-reconnect: device answered after %d/%d attempt(s)",
+                    attempt, _RADIO_RECONNECT_PROBE_ATTEMPTS)
+                return
+        self.logger.warning(
+            "radio-reconnect: device did not answer after %d attempts (%.1fs total) — "
+            "replaying settings anyway",
+            _RADIO_RECONNECT_PROBE_ATTEMPTS, _RADIO_RECONNECT_PROBE_ATTEMPTS * delay)
+
     def replay_device_settings(self) -> None:
         """Re-push what the headset forgot while it was switched off.
 
@@ -2694,6 +2916,7 @@ class CoreEngine:
         """
         if self.device_config is None or self.usb_device is None:
             return
+        self._wait_for_device_ready_after_radio_reconnect()
         self.logger.info("Headset came back on — replaying its settings")
         self._send_device_init_sequence(context="settings replay")
         self._replay_settings_missing_from_init()
@@ -3255,12 +3478,12 @@ class CoreEngine:
             ports = getattr(self.usb_device, 'port_numbers', None)
         except Exception:  # noqa: BLE001
             return None
-        if not bus or not ports:
+        device_dir = sysfs_device_dir(bus, ports, sys_root)
+        if device_dir is None:
             return None
-        device_dir_name = f"{bus}-" + ".".join(str(p) for p in ports)
         try:
             iface_dir = find_interface_sysfs_dir(
-                sys_root, device_dir_name, interface_number)
+                sys_root, device_dir.name, interface_number)
             if iface_dir is None:
                 return None
             # The HID device sits one level under the interface, in a
@@ -3478,7 +3701,9 @@ class CoreEngine:
                 raise Exception(f"Invalid update sequence value: {b}")
         return result
 
-    def send_command(self, command: list[int], endpoint: int) -> None:
+    def send_command(self, command: list[int], endpoint: int) -> bool:
+        """Write one command frame. Returns False when the USB write failed
+        (the error is logged here, not raised), True otherwise."""
         if self.device_config is None:
             raise Exception('Device configuration is not available')
     
@@ -3539,6 +3764,8 @@ class CoreEngine:
             else:
                 self._usb_busy_count = 0
                 self.logger.warning(f"Error sending command: {e}")
+            return False
+        return True
 
     def _find_hid_device(self, vendor_id: int, product_ids: list[int]) -> 'TypedDevice | None':
         """Find the first USB device matching vendor_id/product_ids that exposes an HID interface."""
@@ -4260,6 +4487,193 @@ class CoreEngine:
         except asyncio.CancelledError:
             raise
 
+    def prepare_for_sleep(self) -> None:
+        """Called from PrepareForSleep(True), just before the system suspends.
+
+        Only releases the USB handle. teardown() also tears down the audio
+        graph (redirect_audio_on_disconnect() + loopback_manager.stop_all()),
+        which would rebuild the whole PipeWire routing on every suspend for no
+        reason — not what this is for (#238).
+        """
+        timer = self._settings_replay_timer
+        if timer is not None:
+            timer.cancel()
+        # A pending init_sleep_length_ms timer (a resume immediately followed
+        # by another suspend) would otherwise fire init_device() on a handle
+        # this method is about to release — and leak _detect_lock, since
+        # cancel() here races the timer already having started running. Not
+        # fully closable without a lock around the cancel/release pair, but
+        # _finish_configure_virtual_sinks_body()'s broad except turns that
+        # race into a logged error rather than a crash either way.
+        pending = self._pending_init_timer
+        if pending is not None:
+            pending.cancel()
+        self._resume_reset_attempted = False
+        self.logger.info("prepare_for_sleep: releasing USB handle before system suspend")
+        self._release_usb_handle()
+
+    async def _configure_virtual_sinks_off_loop(self, context: str) -> None:
+        """Run configure_virtual_sinks() without blocking the event loop.
+
+        configure_virtual_sinks() starts with a blocking _detect_lock.acquire()
+        and later takes _device_lock. Called synchronously from a coroutine,
+        as resume_from_sleep() and _escalate_to_usb_reset() did, that acquire
+        stalls the whole event loop whenever another thread is already
+        detecting - which on wake from suspend is the normal case, since the
+        pyudev observer sees the same re-enumeration a few milliseconds
+        earlier. With the loop stalled, no coroutine holding _device_lock can
+        ever release it, and the two threads deadlock (#238, 1.4.25).
+
+        Two rules follow. A detection already in flight is left alone rather
+        than queued behind - it is doing the work this call wanted done, and
+        running a second one right after it would release the freshly claimed
+        handle again (the EBUSY window on_device_connected() avoids the same
+        way). Otherwise the call goes to the default executor, where blocking
+        is harmless. Either way the caller then waits on
+        _device_configured_event, which the running detection sets when done.
+        """
+        if self._detect_lock.locked():
+            self.logger.info(
+                "%s: a device detection is already running (udev saw the "
+                "re-enumeration) - waiting for it instead of starting another",
+                context)
+            return
+        await asyncio.get_running_loop().run_in_executor(
+            None, self.configure_virtual_sinks)
+
+    async def resume_from_sleep(self) -> None:
+        """Called from PrepareForSleep(False) — the system just woke up.
+
+        Replaces the previous bare init_device() (#238): that re-sent every
+        device_init command over the SAME libusb handle that just survived
+        suspend, which on the Nova Pro Omni left the ChatMix event stream dead
+        until a physical replug even though ordinary commands kept working.
+        configure_virtual_sinks() is the already-tested path that releases and
+        re-acquires a same-device re-enumeration (boot, wake, replug all go
+        through it) — use that instead of talking to the stale handle.
+        """
+        self.logger.info(
+            "resume_from_sleep: re-acquiring device (was: init_device on the "
+            "old handle, #238)")
+        await self._configure_virtual_sinks_off_loop("resume_from_sleep")
+
+        # configure_virtual_sinks() can return before it is actually done: a
+        # profile with init_sleep_length_ms (#238/#245 family) defers the
+        # rest of the work to a timer instead of blocking the pyudev thread.
+        # Probing before that timer fires would race init_device() and read
+        # a device that hasn't been told anything yet.
+        await asyncio.get_running_loop().run_in_executor(
+            None, self._device_configured_event.wait, _RESUME_CONFIGURE_WAIT_TIMEOUT_S)
+
+        if self.usb_device is None or self.device_config is None:
+            return
+
+        probe_ok = await self._probe_device_awake()
+        reset_on_resume = bool(self.device_config.reset_on_resume)
+        if not (reset_on_resume or not probe_ok):
+            return
+
+        if self._resume_reset_attempted:
+            return
+        now = time.monotonic()
+        since_last = now - self._last_usb_reset_monotonic
+        if since_last < _USB_RESET_MIN_INTERVAL_S:
+            self.logger.info(
+                "resume_from_sleep: skipping reset (last one %.0fs ago, minimum %.0fs)",
+                since_last, _USB_RESET_MIN_INTERVAL_S)
+            return
+
+        self._resume_reset_attempted = True
+        self._last_usb_reset_monotonic = now
+        await self._escalate_to_usb_reset(
+            reason="reset_on_resume" if reset_on_resume else "status probe timeout")
+
+    async def _probe_device_awake(self) -> bool:
+        """True once the device answers a status request after resume.
+
+        _await_raw_response() keys a pending reply on the single raw byte
+        response[0] (see _resolve_raw_response_waiters) — that only lines up
+        with device_config.status.request for families whose replies are not
+        prefixed by a HID report id. The Nova Pro Omni's status.request
+        (0x01b0) is such a report-id + opcode pair — every reply on that
+        family starts with the report id byte (0x01), never with the request
+        value itself — so a literal probe there would time out on every
+        resume regardless of whether the device is actually fine. Rather than
+        rig a probe that always "fails" and resets every headset in that
+        group on every wake, those profiles skip the generic probe entirely
+        and opt into the escalation explicitly via reset_on_resume instead.
+        """
+        status = self.device_config.status if self.device_config else None
+        if status is None or status.request > 0xFF:
+            return True
+
+        started = time.monotonic()
+        try:
+            self.request_device_status()
+        except usb.core.USBError as e:
+            self.logger.warning("resume_from_sleep: status request failed: %r", e)
+            return False
+
+        response = await self._await_raw_response(
+            status.request, timeout=_RESUME_STATUS_PROBE_TIMEOUT_S)
+        if response is not None:
+            self.logger.info(
+                "resume_from_sleep: status probe OK in %.2fs", time.monotonic() - started)
+            return True
+
+        self.logger.warning(
+            "resume_from_sleep: no status reply within %.1fs — device is not answering",
+            _RESUME_STATUS_PROBE_TIMEOUT_S)
+        return False
+
+    async def _escalate_to_usb_reset(self, reason: str) -> None:
+        if self.usb_device is None or self.device_config is None:
+            return
+        self.logger.info(
+            "usb_reenumerate: resetting %04x:%04x at %s (reason=%s)",
+            self.device_config.vendor_id,
+            self.usb_device.idProduct,
+            sysfs_device_dir(getattr(self.usb_device, 'bus', None),
+                             getattr(self.usb_device, 'port_numbers', None)),
+            reason,
+        )
+        success = reset_via_usbfs(self.usb_device, self.logger)
+        self._record_usb_reset_attempt(reason, success)
+        if not success:
+            return
+        # reset() invalidates the libusb handle: dispose it and let
+        # configure_virtual_sinks() re-detect the (possibly re-addressed)
+        # device from scratch, same as any other same-device re-enumeration.
+        usb.util.dispose_resources(self.usb_device)
+        self.usb_device = None
+        await asyncio.sleep(_USB_RESET_SETTLE_S)
+        # A reset re-enumerates the device, so the pyudev thread is very
+        # likely already in configure_virtual_sinks() by now - same hazard as
+        # on resume, same answer.
+        await self._configure_virtual_sinks_off_loop("usb_reenumerate")
+
+    def _record_usb_reset_attempt(self, reason: str, success: bool) -> None:
+        """Breadcrumb for bug reports (#238).
+
+        _resume_reset_attempted / _last_usb_reset_monotonic are in-memory
+        guards that die with the process; without this, a bug report from a
+        fresh daemon run can never show whether a resume-time reset ever
+        fired, or when — which is exactly the fact a "still dead after
+        resume" report needs. See bug_reporter.collect_system_info.
+        """
+        try:
+            state: dict = {}
+            if _RESUME_RESET_STATE_PATH.exists():
+                state = json.loads(_RESUME_RESET_STATE_PATH.read_text())
+            state['last_attempt_epoch'] = time.time()
+            state['last_reason'] = reason
+            state['last_success'] = success
+            state['attempts'] = int(state.get('attempts', 0)) + 1
+            _RESUME_RESET_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _RESUME_RESET_STATE_PATH.write_text(json.dumps(state))
+        except Exception as e:  # noqa: BLE001 — diagnostics must never break resume
+            self.logger.debug("Could not persist USB reset breadcrumb: %r", e)
+
     def _release_usb_handle(self) -> None:
         """Release the current libusb handle without performing a full teardown.
 
@@ -4296,8 +4710,32 @@ class CoreEngine:
         finally:
             self.usb_device = None
 
+    def _send_shutdown_commands(self) -> None:
+        """Tell the device ASM is going away, before the interface is released.
+
+        SteelSeries' own GG engine sends disable-chatmix/disable-sonar here
+        for the "Sonar integrated device" family (its `(shutdown ...)` block)
+        so the base station falls back to plain hardware volume instead of
+        being left in software-ChatMix mode with nobody driving it — the
+        knob would otherwise keep emitting mix-balance events into the void
+        until ASM (or GG) restarts and re-enables it. Best-effort: a failed
+        write here must never block the rest of teardown().
+        """
+        if not (self.device_config and self.device_config.shutdown_commands and self.usb_device):
+            return
+        endpoint = self.get_command_endpoint_address()
+        for command in self.device_config.shutdown_commands:
+            try:
+                self.send_command(self.translate_init_bytes(command), endpoint)
+            except usb.core.USBError as e:
+                self.logger.warning(f"Shutdown command {command} failed: {e!r}")
+
     def teardown(self) -> None:
         if self.usb_device:
+            try:
+                self._send_shutdown_commands()
+            except Exception as e:
+                self.logger.warning(f"Error sending shutdown commands: {e}")
             try:
                 if self.device_config is not None:
                     # Release every interface kernel_detach claimed, not just

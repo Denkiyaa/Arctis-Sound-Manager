@@ -349,6 +349,13 @@ class GeneralSettings(JsonSerializable):
     # output list, and one more filter stage running for nothing.
     aux_enabled: bool = False
 
+    # Which extra channels the ChatMix dial's non-chat side moves alongside
+    # Game (#249). Only "media" and/or "aux" are valid members: Game is
+    # already the dial's fixed non-chat side and Chat its fixed other side,
+    # so neither is configurable here. Empty (the default) reproduces the
+    # exact pre-#249 behaviour — the dial only ever touches Game and Chat.
+    chatmix_extra_channels: list[str] = []
+
     # #180: minutes of whole-graph inactivity (idle_detect.IdleTracker) before
     # ASM voluntarily cuts the last hop into the headset's own physical output
     # so it can suspend and the hardware auto-off timer can engage — see

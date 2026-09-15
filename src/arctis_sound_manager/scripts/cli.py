@@ -642,6 +642,20 @@ def main():
         '--list', action='store_true',
         help='Show each channel with its current level instead of changing it')
 
+    # USB reset / reenumerate (#238) — manual escalation when ChatMix stays
+    # dead after a resume the automatic resume-time reset did not fix.
+    usb_parser = subparsers.add_parser('usb', help='USB reset / re-enumeration tools')
+    usb_subparsers = usb_parser.add_subparsers(dest='action', required=True)
+
+    usb_reset_parser = usb_subparsers.add_parser(
+        'reset', help='Force a USB reset (USBDEVFS_RESET) on the connected device')
+    usb_reset_parser.add_argument('--vendor-id', default=0x1038, type=lambda s: int(s, 0))
+
+    usb_reenumerate_parser = usb_subparsers.add_parser(
+        'reenumerate',
+        help='Force a full unbind/rebind via sysfs authorized (root required)')
+    usb_reenumerate_parser.add_argument('--vendor-id', default=0x1038, type=lambda s: int(s, 0))
+
     # Diagnose — full local-only dump for bug reports.
     diagnose_parser = subparsers.add_parser('diagnose', help='Dump diagnostic info for bug reports (local-only, nothing is sent).')
     diagnose_parser.add_argument('--output', '-o', type=Path, default=None,
@@ -660,6 +674,15 @@ def main():
         except channel_control.ChannelError as exc:
             print(f'asm-cli volume: {exc}', file=sys.stderr)
             sys.exit(2)
+        return
+
+    if args.command == 'usb':
+        from arctis_sound_manager.cli_tools import (
+            usb_reenumerate_current_device, usb_reset_current_device)
+        if args.action == 'reset':
+            sys.exit(usb_reset_current_device(args.vendor_id))
+        elif args.action == 'reenumerate':
+            sys.exit(usb_reenumerate_current_device(args.vendor_id))
         return
 
     if args.command == 'diagnose':

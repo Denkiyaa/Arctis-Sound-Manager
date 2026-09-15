@@ -1,5 +1,10 @@
 device:
   name: SteelSeries Arctis Pro Wireless
+  # GG's own minimum spacing between commands for this firmware family.
+  time_between_commands_ms: 35
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length).
+  init_sleep_length_ms: 1500
   vendor_id: 0x1038
   product_ids:
     - 0x1290 # Arctis Pro Wireless

@@ -142,3 +142,65 @@ def test_on_stream_drop_falls_back_to_label_without_sink_input(monkeypatch):
     fake_self = SimpleNamespace(_get_pulse=lambda: pulse)
     HomePage._on_stream_drop(fake_self, 99, "Mpv", 123, "Arctis_Chat")
     assert saved == {"Mpv": "Arctis_Chat"}
+
+
+# ── _update_native_apps must never surface ASM's own nodes as an app tag ────
+# get_native_streams() falls back to raw node.name for a stream with neither
+# application.name nor application.process.binary set — exactly ASM's own
+# filter-chain/loopback nodes. If one is (even transiently) linked to a
+# channel's virtual sink, it must not show up as if a real app were dragged
+# onto that channel.
+
+def _fake_native_stream(node_name, sink_name, *, app_props=None, sid=1, pid="0"):
+    props = {"node.name": node_name}
+    if app_props:
+        props.update(app_props)
+    return {
+        "id": sid,
+        "app_name": app_props.get("application.name", node_name) if app_props else node_name,
+        "pid": pid,
+        "sink_name": sink_name,
+        "sink_id": 7,
+        "props": props,
+    }
+
+
+def _fake_home_page_for_native_apps(native_cache):
+    return SimpleNamespace(
+        _native_cache=native_cache,
+        _game_card=object(),
+        _chat_card=object(),
+        _media_card=object(),
+        _aux_card=object(),
+        _is_asm_internal_node=HomePage._is_asm_internal_node,
+    )
+
+
+def test_update_native_apps_excludes_asm_internal_node_from_media_card():
+    fake_self = _fake_home_page_for_native_apps([
+        _fake_native_stream(
+            "effect_output.virtual-surround-7.1-hesuvi-aux", "Arctis_Media", sid=1,
+        ),
+        _fake_native_stream(
+            "some-edge-node", "Arctis_Media", sid=2,
+            app_props={"application.name": "Microsoft Edge"}, pid="777",
+        ),
+    ])
+
+    per_card = HomePage._update_native_apps(fake_self, pulse_sinks=[], rescan=False)
+
+    media_rows = per_card.get(id(fake_self._media_card), [])
+    app_names = [row[0] for row in media_rows]
+    assert "Microsoft Edge" in app_names
+    assert "effect_output.virtual-surround-7.1-hesuvi-aux" not in app_names
+    assert len(media_rows) == 1
+
+
+def test_update_native_apps_excludes_loopback_playback_node():
+    fake_self = _fake_home_page_for_native_apps([
+        _fake_native_stream("Arctis_Media_sink_out", "Arctis_Media", sid=3),
+    ])
+
+    per_card = HomePage._update_native_apps(fake_self, pulse_sinks=[], rescan=False)
+
+    assert not per_card.get(id(fake_self._media_card))

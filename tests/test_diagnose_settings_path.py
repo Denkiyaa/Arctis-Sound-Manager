@@ -61,3 +61,24 @@ def test_a_genuinely_absent_file_still_says_so(tmp_path):
         section = diagnose._section_settings()
 
     assert "no settings file" in section
+
+
+def test_weather_coordinates_are_redacted(tmp_path):
+    """weather_lat/weather_lon are GPS coordinates, not covered by the
+    "city"/"location" patterns — issue #238 comment: they leaked in full
+    while weather_city_display was correctly stripped.
+    """
+    from arctis_sound_manager import diagnose
+
+    settings_folder = tmp_path / "arctis_manager" / "settings"
+    _write_settings(
+        settings_folder,
+        "weather_lat: 48.8566\nweather_lon: 2.3522\nweather_city_display: Paris\n",
+    )
+
+    with patch.object(diagnose, "SETTINGS_FOLDER", settings_folder):
+        section = diagnose._section_settings()
+
+    assert "48.8566" not in section
+    assert "2.3522" not in section
+    assert "Paris" not in section

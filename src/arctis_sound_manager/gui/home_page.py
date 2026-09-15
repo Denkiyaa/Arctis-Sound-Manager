@@ -317,9 +317,29 @@ class AudioCard(QWidget):
         self._device_combo.setVisible(False)
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
         _dr_layout.addWidget(self._device_combo, stretch=1)
-        outer.addWidget(self._device_row)
 
         self._device_change_cb = None
+
+        # ChatMix-inclusion toggle (#249): whether the physical dial's
+        # non-chat side moves this channel's volume alongside Game. Only
+        # Media and Aux ever show this — Game and Chat are the dial's fixed
+        # sides — so it starts hidden, like the device combo above, until
+        # HomePage decides this card is one of the two that can opt in.
+        self._chatmix_row = QWidget()
+        self._chatmix_row.setStyleSheet("background: transparent;")
+        _cm_layout = QHBoxLayout(self._chatmix_row)
+        _cm_layout.setContentsMargins(12, 0, 12, 4)
+        self._chatmix_checkbox = QCheckBox(I18n.translate("ui", "chatmix_include"))
+        self._chatmix_checkbox.setToolTip(I18n.translate("ui", "chatmix_include_hint"))
+        self._chatmix_checkbox.setStyleSheet(
+            f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 9pt; background: transparent;"
+        )
+        self._chatmix_checkbox.toggled.connect(self._on_chatmix_toggled)
+        _cm_layout.addWidget(self._chatmix_checkbox)
+        outer.addWidget(self._chatmix_row)
+        outer.addWidget(self._device_row)
+        self._chatmix_row.setVisible(False)
+        self._chatmix_toggle_cb = None
 
         self._on_change_callback = None
         self._on_drop_callback = None  # fn(si_index, app_name, pid)
@@ -451,6 +471,27 @@ class AudioCard(QWidget):
         sink_name = self._device_combo.currentData() or ""
         if self._device_change_cb:
             self._device_change_cb(sink_name)
+
+    def set_chatmix_toggle_visible(self, visible: bool) -> None:
+        self._chatmix_row.setVisible(visible)
+
+    def set_chatmix_checked(self, checked: bool) -> None:
+        """Set the checkbox state without firing the toggle callback.
+
+        Same guard as set_device_options()'s blockSignals: without it,
+        setting the initial state on population would fire the toggle
+        callback and re-write the setting to whatever it already was.
+        """
+        self._chatmix_checkbox.blockSignals(True)
+        self._chatmix_checkbox.setChecked(checked)
+        self._chatmix_checkbox.blockSignals(False)
+
+    def set_on_chatmix_toggle(self, cb) -> None:
+        self._chatmix_toggle_cb = cb
+
+    def _on_chatmix_toggled(self, checked: bool) -> None:
+        if self._chatmix_toggle_cb:
+            self._chatmix_toggle_cb(checked)
 
 
 # ── App tag with inline move buttons ──────────────────────────────────────────
@@ -965,6 +1006,7 @@ class HomePage(QWidget):
         self._media_card = AudioCard(I18n.translate("ui", "media"), _theme.c("COLOR_AUX"), MEDIA_ICON)
         self._media_card.set_on_change(self._on_aux_volume_changed)
         self._media_card.set_on_drop(lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_MEDIA))
+        self._media_card.set_on_chatmix_toggle(lambda enabled: self._on_chatmix_toggle("media", enabled))
         self._cards_layout.addWidget(self._media_card, stretch=1)
 
         # Aux card — the opt-in fourth playback channel (#209). Built once and
@@ -974,6 +1016,7 @@ class HomePage(QWidget):
         self._aux_card = AudioCard(I18n.translate("ui", "aux"), _theme.c("COLOR_AUX2"), MEDIA_ICON)
         self._aux_card.set_on_change(self._on_aux_channel_volume_changed)
         self._aux_card.set_on_drop(lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_AUX))
+        self._aux_card.set_on_chatmix_toggle(lambda enabled: self._on_chatmix_toggle("aux", enabled))
         self._aux_card.setVisible(False)
         self._cards_layout.addWidget(self._aux_card, stretch=1)
 
@@ -2040,6 +2083,29 @@ class HomePage(QWidget):
         _save_hidden_apps(self._hidden_apps)
         self._poll_volumes()
 
+    # ASM's own filter-chain / loopback nodes (effect_output.sonar-*-eq,
+    # effect_input.virtual-surround-*, Arctis_<Channel>_sink_out — see
+    # sonar_to_pipewire.py's _hesuvi_output_node()/_hesuvi_input_node() and
+    # loopback_manager.py's LoopbackSpec playback names) have neither
+    # application.name nor application.process.binary set, so
+    # get_native_streams() falls back to their raw node.name as "app_name".
+    # If one of these is ever (even transiently, e.g. a routing race) linked
+    # to a channel's virtual sink, it must never be shown as a user app
+    # dragged onto that channel. This is separate from, and additive to,
+    # _INTERNAL_BINARIES/_INTERNAL_MEDIA_HINTS above, which filter a
+    # different code path (PulseAudio sink-inputs in "Other applications").
+    _ASM_NODE_NAME_PREFIXES = ("effect_output.", "effect_input.")
+    _ASM_LOOPBACK_PLAYBACK_NAMES = frozenset(
+        f"Arctis_{ch}_sink_out" for ch in ("Game", "Chat", "Media", "Aux")
+    )
+
+    @classmethod
+    def _is_asm_internal_node(cls, node_name: str) -> bool:
+        return (
+            node_name.startswith(cls._ASM_NODE_NAME_PREFIXES)
+            or node_name in cls._ASM_LOOPBACK_PLAYBACK_NAMES
+        )
+
     def _update_native_apps(self, pulse_sinks, already_shown: set[str] = frozenset(),
                             *, rescan: bool = True):
         """Add native PipeWire streams (e.g. haruna/mpv) to the correct card.
@@ -2068,6 +2134,9 @@ class HomePage(QWidget):
         for s in native:
             if s["app_name"] in already_shown:
                 continue  # already listed via PulseAudio
+            node_name = s.get("props", {}).get("node.name", "") or s["app_name"]
+            if self._is_asm_internal_node(node_name):
+                continue  # ASM's own node, not a user application
             sink_name = s.get("sink_name") or ""
             card = next((c for bound, c in card_map.items() if bound in sink_name), None)
             if card is None:
@@ -2324,9 +2393,64 @@ class HomePage(QWidget):
         self._aux_card.setVisible(bool(enabled))
         self._fit_cards_to_row()
         self._refresh_app_tag_buttons()
+        self._refresh_chatmix_toggles()
         bar = getattr(self, "profile_bar", None)
         if bar is not None:
             bar.refresh_aux_label()
+
+    # ── ChatMix extra channels (#249) ────────────────────────────────────────
+
+    def _refresh_chatmix_toggles(self) -> None:
+        """Show/hide and (re)set the "Include in ChatMix" checkboxes.
+
+        Media always offers it. Aux only does while the Aux channel itself is
+        on — its card is already hidden entirely otherwise, but the checkbox
+        is kept in step too rather than relying on that alone. Called at
+        startup and whenever Aux's own enabled state changes, since that's
+        the only thing that can make the Aux checkbox go from irrelevant to
+        relevant (or back) during a running session.
+        """
+        try:
+            from arctis_sound_manager.settings import GeneralSettings
+            extra = set(GeneralSettings.read_from_file().chatmix_extra_channels)
+        except Exception:  # noqa: BLE001
+            extra = set()
+
+        self._media_card.set_chatmix_toggle_visible(True)
+        self._media_card.set_chatmix_checked("media" in extra)
+
+        aux_on = not self._aux_card.isHidden()
+        self._aux_card.set_chatmix_toggle_visible(aux_on)
+        self._aux_card.set_chatmix_checked("aux" in extra)
+
+    def _on_chatmix_toggle(self, channel: str, enabled: bool) -> None:
+        """Add/remove *channel* ('media' or 'aux') from the dial's non-chat side.
+
+        Mirrors _set_aux_enabled's dual write: the settings file is updated
+        immediately (the next manage_mix_change() tick in the daemon reads it
+        fresh — see PulseAudioManager.set_mix), and the D-Bus notify keeps a
+        currently-running daemon's own read of general_settings.yaml from
+        lagging, in a separate try/except so neither half can block the
+        other.
+        """
+        updated: list[str] = []
+        try:
+            from arctis_sound_manager.settings import GeneralSettings
+            gs = GeneralSettings.read_from_file()
+            updated = list(gs.chatmix_extra_channels)
+            if enabled and channel not in updated:
+                updated.append(channel)
+            elif not enabled and channel in updated:
+                updated.remove(channel)
+            gs.chatmix_extra_channels = updated
+            gs.write_to_file()
+        except Exception:  # noqa: BLE001
+            logger.warning("could not persist chatmix_extra_channels", exc_info=True)
+        try:
+            from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
+            DbusWrapper.change_setting("chatmix_extra_channels", updated)
+        except Exception:  # noqa: BLE001
+            logger.debug("could not notify the daemon about chatmix_extra_channels", exc_info=True)
 
     def _fit_cards_to_row(self) -> None:
         """Give every card a minimum width the window can actually satisfy.

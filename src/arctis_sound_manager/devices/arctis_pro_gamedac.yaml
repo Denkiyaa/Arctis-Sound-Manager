@@ -17,6 +17,12 @@
 # * It read ChatMix from command 0x24. This device pushes 0x45.
 device:
   name: SteelSeries Arctis Pro GameDAC
+  # GG's own minimum spacing between commands for this firmware family.
+  time_between_commands_ms: 50
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length) — the firmware itself is still
+  # booting for this long.
+  init_sleep_length_ms: 5000
   vendor_id: 0x1038
   product_ids:
     # The GameDAC presents itself as several USB products. 0x1280 carries HID

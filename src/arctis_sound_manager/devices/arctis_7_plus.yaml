@@ -1,5 +1,10 @@
 device:
   name: SteelSeries Arctis 7+
+  # GG's own minimum spacing between commands for this firmware family.
+  time_between_commands_ms: 1
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length; standard-boilerplate default).
+  init_sleep_length_ms: 100
   vendor_id: 0x1038
   product_ids:
     - 0x220e # Arctis 7+

@@ -35,6 +35,9 @@ def _make_engine_stub():
     engine.pa_audio_manager = MagicMock()
     engine._device_lock = threading.RLock()
     engine._detect_lock = threading.Lock()
+    engine._device_configured_event = threading.Event()
+    engine._device_configured_event.set()
+    engine._pending_init_timer = None
     engine._device_ready = False
     engine._rescan_in_flight = False
     engine._logged_no_device = False
@@ -51,6 +54,7 @@ def _make_device_config(vendor_id: int = 0x1038):
     cfg.listen_interface_indexes = [1]
     cfg.dial_interface_index = 2
     cfg.dial_interface_candidates = []
+    cfg.init_sleep_length_ms = None
     return cfg
 
 

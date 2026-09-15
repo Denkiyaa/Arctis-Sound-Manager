@@ -1,5 +1,12 @@
 device:
   name: SteelSeries Arctis 7/Pro Gaming
+  # GG's own minimum spacing between commands for this firmware family.
+  time_between_commands_ms: 10
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length). Two PIDs share this profile with
+  # different declared values (arctis-7-2018-tx: none/default,
+  # arctis-pro: 1000) — using the higher one.
+  init_sleep_length_ms: 1000
   vendor_id: 0x1038
   product_ids:
     - 0x1260 # Arctis 7

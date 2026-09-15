@@ -134,7 +134,7 @@ def test_device_init_hardcodes_no_user_setting(raw):
     # .at_least_1), so its state byte follows the user's choice (#161).
     structural = {0x8d: 1, 0x49: 1}
     for command in raw["device_init"]:
-        if command == ["status.request"]:
+        if command == ["status.request"] or command[0] == "sleep":
             continue
         report_id, opcode, *payload = command
         assert report_id == 0x01, f"{command}: missing report id"
@@ -163,7 +163,7 @@ def test_init_resolves_to_profile_defaults_with_no_saved_settings(raw, config):
     engine._setting_default = lambda name: CoreEngine._setting_default(engine, name)
 
     for command in raw["device_init"]:
-        if command == ["status.request"]:
+        if command == ["status.request"] or command[0] == "sleep":
             continue
         resolved = CoreEngine.translate_init_bytes(engine, list(command))
         assert all(isinstance(b, int) for b in resolved), f"{command} → {resolved}"

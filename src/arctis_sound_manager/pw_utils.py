@@ -910,10 +910,24 @@ def get_native_streams(data: list | None = None) -> list[dict]:
             sinks[oid] = props.get("node.name", "")
 
         if mc == "Stream/Output/Audio":
-            app = props.get("application.name", "")
             # Skip PulseAudio clients — pulsectl handles them
             if props.get("client.api") == "pipewire-pulse":
                 continue
+            # A raw ALSA/native PipeWire client (issue #243: SMAPI-launched
+            # Stardew Valley, a .NET/Mono app) routinely never sets
+            # application.name at all — only node.name (which is what
+            # bug_reporter._audio_graph already falls back to when printing
+            # this exact node, so a report and this scan must not disagree
+            # on whether the app is even there). Skipping on an empty
+            # application.name silently dropped the stream from every
+            # channel card: it kept playing (whatever sink WirePlumber
+            # picked), just invisible and undraggable in the mixer.
+            app = (
+                props.get("application.name")
+                or props.get("application.process.binary")
+                or props.get("node.name")
+                or ""
+            )
             if not app:
                 continue
             streams[oid] = {

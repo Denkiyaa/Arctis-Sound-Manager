@@ -246,6 +246,13 @@ class DeviceConfiguration:
     dial_interface_candidates: list[int]
     command_padding: ConfigPadding
     device_init: list[list[int|str]] | None
+    # Commands to send before releasing the USB interface (teardown/daemon
+    # stop). SteelSeries' own GG engine sends disable-chatmix/disable-sonar
+    # here for the "Sonar integrated device" family, on shutdown, so the
+    # base station falls back to plain hardware volume instead of being left
+    # in software-ChatMix mode with no host driving it. None/empty ⇒ nothing
+    # to send (most families never enable anything that needs undoing).
+    shutdown_commands: list[list[int|str]] | None
     status: ConfigStatus | None
     status_parse: dict[str, ConfigStatusParser]
     online_status: OnlineStatusConfig | None
@@ -276,6 +283,35 @@ class DeviceConfiguration:
     # profile declares `hardware_eq.readback`, which only happens for
     # families whose spec was checked directly for these opcodes.
     hardware_eq_readback: HardwareEqReadback | None
+    # Opt-in escalation for issue #238: force a USB reset on system resume
+    # instead of relying on the generic post-resume status probe. Only the
+    # Nova Pro Omni declares this — see resume_from_sleep() in core.py.
+    reset_on_resume: bool
+    # Minimum delay, in milliseconds, _send_device_init_sequence() waits
+    # after each frame it sends during device_init/settings replay. None ⇒
+    # no pacing (legacy behaviour). SteelSeries' own GG engine enforces this
+    # per firmware family (its `time-between-commands`, pushed to the device
+    # over a HIDCONFIG report at connect time) because a command arriving too
+    # soon after the previous one is silently dropped on some families — the
+    # Nova Pro Omni's Sonar/ChatMix mode switch is one instance of this
+    # (#238/#245), but the underlying firmware limitation applies to every
+    # command GG sends on the family, not just those two.
+    time_between_commands_ms: int | None
+    # How long, in milliseconds, to wait after claiming the USB interface
+    # before sending the first device_init command. SteelSeries' own GG
+    # engine waits this long after a connection event before talking to the
+    # device (its `init-sleep-length`) because the firmware itself needs
+    # time to finish booting — up to 5s for the Nova Pro Omni/Elite/Wireless
+    # family. None ⇒ no wait (legacy behaviour).
+    init_sleep_length_ms: int | None
+    # Delay, in milliseconds, between retries of a status probe after the
+    # *wireless* headset reconnects to its dongle (radio link, not the USB
+    # transmitter) — SteelSeries' own GG engine retries reading the device
+    # up to 10 times with this delay instead of trusting a single read,
+    # because the first attempt(s) right after a radio reconnect can return
+    # stale or incomplete data. None ⇒ no retry (legacy single-attempt
+    # behaviour); most families never had this problem in the first place.
+    radio_reconnect_probe_delay_ms: int | None
 
     def __init__(self, raw_configuration: dict[str, Any]):
         raw_config: dict[str, Any] | None = raw_configuration.get('device', None)
@@ -292,6 +328,10 @@ class DeviceConfiguration:
         # True for the profile that stands in for 'no SteelSeries hardware'.
         # See the validation block below and _setup_generic_device (#189).
         self.generic = bool(raw_config.get('generic', False))
+        self.reset_on_resume = bool(raw_config.get('reset_on_resume', False))
+        self.time_between_commands_ms = raw_config.get('time_between_commands_ms', None)
+        self.init_sleep_length_ms = raw_config.get('init_sleep_length_ms', None)
+        self.radio_reconnect_probe_delay_ms = raw_config.get('radio_reconnect_probe_delay_ms', None)
         self.command_interface_index = raw_config.get('command_interface_index', (-1, -1))
         # The HID usage page the vendor interface declares, from SteelSeries'
         # own (sync-interface <page> …). Their specifications address an
@@ -411,6 +451,8 @@ class DeviceConfiguration:
             self.device_init = raw_device_init
         else:
             self.device_init = None
+
+        self.shutdown_commands = raw_config.get('shutdown_commands', None) or None
 
         raw_status = raw_config.get('status', {})
         if raw_status:

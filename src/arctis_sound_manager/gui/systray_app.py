@@ -464,6 +464,12 @@ class QSystrayApp(QBaseDesktopApp):
                 ("chat", I18n.translate("ui", "chat")),
                 ("media", I18n.translate("ui", "media")),
             ]
+            try:
+                from arctis_sound_manager.settings import GeneralSettings
+                if bool(GeneralSettings.read_from_file().aux_enabled):
+                    _ch_labels.append(("aux", I18n.translate("ui", "aux")))
+            except Exception:
+                pass
             _default_label = I18n.translate("ui", "default_output")
             for _ch_key, _ch_label in _ch_labels:
                 _ch_menu = QMenu(_ch_label)

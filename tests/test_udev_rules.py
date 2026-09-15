@@ -94,6 +94,17 @@ def test_nova_7p_gen2_pids_present():
     assert 'ATTRS{idProduct}=="22a7"' in rules
 
 
+def test_power_persist_disabled_alongside_power_control():
+    """#238: power/persist="0" must sit next to power/control="on" on every
+    rule line, so a resumed device is not assumed still-connected across
+    suspend and forced to re-enumerate instead."""
+    rules = generate_rules([SRC_DEVICES])
+
+    for line in rules.splitlines():
+        if 'ATTR{power/control}="on"' in line:
+            assert 'ATTR{power/persist}="0"' in line
+
+
 def test_elevated_run_reads_invoking_user_devices(tmp_path: Path, monkeypatch):
     """Under sudo, DEVICES_CONFIG_FOLDER must include the real user's folder."""
     import pwd

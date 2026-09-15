@@ -56,6 +56,16 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="1.4.26" date="2026-09-14">
+      <description>
+        <p>The daemon froze on wake from suspend (1.4.25 regression, #238). Two. Chat channel routed to an external output device now stays stereo instead of collapsing to mono/left-only, since ASM now owns its link (PipeWire no longer force-negotiates the chat EQ output to the headset's native mono PCM format). (#242). Turning the Aux channel off (or back on) never actually told the daemon.</p>
+      </description>
+    </release>
+    <release version="1.4.25" date="2026-09-13">
+      <description>
+        <p>**Nova Pro Omni: the ChatMix knob did nothing after boot until the daemon. A failed init frame was never retried. send_command() logs USB errors. **ChatMix on the Nova Pro Omni also stayed dead specifically after a system.</p>
+      </description>
+    </release>
     <release version="1.4.24" date="2026-09-08">
       <description>
         <p>Volume Boost had no audible effect with Spatial Audio on. The HeSuVi. **A system sound-settings UI (GNOME Settings, Cinnamon's sound applet,.</p>
@@ -194,16 +204,6 @@
     <release version="1.2.33" date="2026-08-16">
       <description>
         <p>Channels could be completely silent on SteamOS, with everything appearing to work. The audio never reached the headset because the system refused to let ASM connect its channels to its own processing, on permission grounds. Nothing in the app looked wrong: the channels were there, the settings were saved, and a video would simply stall after a few seconds with a fraction of a second of sound. Affected users could not work around it either, since connecting the two by hand failed exactly the same way. ASM now recognises that refusal and asks the system for the one permission it needs before trying again. Reported by @baccatuesday, who ran every test that made the diagnosis possible, and confirmed by @emoeckel. Bug reports explain refused audio connections. Reports now say which program owns each part of the audio graph and what the system allowed each of them to do, which is what a refused connection turns on. asm-cli diagnose and the in-app report button now also carry the same information as each other: until now each had sections the other lacked, so which one you used decided whether your report could answer the question being asked of it.</p>
-      </description>
-    </release>
-    <release version="1.2.32" date="2026-08-15">
-      <description>
-        <p>Applications playing outside the Game / Chat / Media channels are now visible, and movable. The mixer only ever listed applications that were already on one of its channels. Anything playing elsewhere — on the headset's own device rather than a channel, on an HDMI output, on a second sound card — was audible but absent from ASM, so the only way to assign it was an external tool like pwvucontrol. A new Other applications section appears under the channel cards whenever there is something to show, listing each application with the device it is currently playing on and the same one-click buttons to send it to Game, Chat, Media or Output. Applications you deliberately keep elsewhere can be dismissed from the list with the ×, and a *Show hidden* button brings them back at any time; dismissing only stops the listing, it never moves your audio. The section stays hidden when everything is already on a channel, so nothing changes for setups that were fine. Suggested by @autune, whose Nova Pro dock feeds his speakers from its AUX output — an arrangement where routing everything through a channel would be the wrong answer. Installing on Bazzite, SteamOS or Silverblue could still leave the container empty. Setting up the package repository needs a local signing key, and the installer only created one when the container's keyring looked completely empty. Container images ship with the public part already filled in and no signing key, so that step was skipped on exactly the systems it was meant for: registering the repository failed, and the install ended with "target not found" and nothing installed. The key is now always prepared. Reported on Discord by binx9612. Bug reports now state which output device is the system default. Whether an Arctis channel holds that spot decides how much of ASM applies at all, and its absence from reports has cost a round of questions with someone whose setup was perfectly deliberate.</p>
-      </description>
-    </release>
-    <release version="1.2.31" date="2026-08-14">
-      <description>
-        <p>Bug reports now describe what your audio is actually doing, not just what exists. Until now a report listed your audio devices and their names, but not whether each one was playing, idle or asleep, nor what was connected to what. That is the difference between "something is keeping the headset busy" and "the surround processing is keeping it busy", and chasing the gap has cost real back-and-forth with people who took the time to report a problem. Reports now include every audio node with its live state, every connection between them, which ones are actually processing sound (with the glitch counters behind crackling), how each of ASM's own pieces is configured at that moment, and the kernel's own view of the sound card. Applications that pin their audio to a specific device show that too, which is what explains cases where another program's feature stops working. Nothing extra is asked of you: it is the same button and the same command as before, and the report stays a plain text file you can read in full before sending it.</p>
       </description>
     </release>
   </releases>

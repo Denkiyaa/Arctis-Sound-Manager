@@ -514,6 +514,54 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
             apply_hrir_choice(value)
             return True
 
+        # Special case: Aux channel toggle (no ConfigSetting entry — GUI uses
+        # its own dedicated button, not the generic settings_config widget
+        # system). Without this special case, `aux_enabled` still matches
+        # `setting in general_settings_keys` below (it's a GeneralSettings
+        # field) but has no ConfigSetting, so the generic path's
+        # `if not config:` branch always fired, logged "Unknown general
+        # setting configuration: aux_enabled" and returned False before ever
+        # writing the value or reconfiguring the virtual sinks. And without
+        # the reconfigure below, the mixer showed the channel while no
+        # Arctis_Aux sink existed — the "A" button then had nowhere to move a
+        # stream to and silently did nothing until the next daemon start
+        # (#209).
+        if setting == 'aux_enabled':
+            gs = self.core_engine.general_settings
+            if not isinstance(value, bool):
+                self.logger.error('SetSetting aux_enabled: expected bool, got %r', value)
+                return False
+            gs.aux_enabled = value
+            gs.write_to_file()
+            self.logger.info(
+                "aux_enabled set to %r — reconfiguring virtual sinks", value)
+            threading.Thread(
+                target=self.core_engine.configure_virtual_sinks,
+                name='asm-aux-channel-toggle',
+                daemon=True,
+            ).start()
+            return True
+
+        # Special case: ChatMix extra channels (#249, no ConfigSetting entry —
+        # the GUI toggles this from a per-card checkbox, not the generic
+        # settings_config widget system). Only affects the next
+        # manage_mix_change() tick — no virtual sinks to rebuild, unlike
+        # aux_enabled above.
+        if setting == 'chatmix_extra_channels':
+            gs = self.core_engine.general_settings
+            valid_members = {'media', 'aux'}
+            if not isinstance(value, list) or not all(
+                isinstance(v, str) and v in valid_members for v in value
+            ):
+                self.logger.error(
+                    'SetSetting chatmix_extra_channels: expected a list of '
+                    "'media'/'aux', got %r", value,
+                )
+                return False
+            gs.chatmix_extra_channels = value
+            gs.write_to_file()
+            return True
+
         general_settings_keys = self.core_engine.general_settings.to_dict().keys()
         if setting in general_settings_keys:
             gs = self.core_engine.general_settings
@@ -560,20 +608,6 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
                 threading.Thread(
                     target=self.core_engine.configure_virtual_sinks,
                     name='asm-preferred-device-switch',
-                    daemon=True,
-                ).start()
-
-            if setting == 'aux_enabled':
-                # Same reasoning as preferred_device above: without this the
-                # setting was written and nothing acted on it, so the mixer
-                # showed the channel while no Arctis_Aux sink existed — the
-                # "A" button then had nowhere to move a stream to and silently
-                # did nothing until the next daemon start (#209).
-                self.logger.info(
-                    "aux_enabled set to %r — reconfiguring virtual sinks", value)
-                threading.Thread(
-                    target=self.core_engine.configure_virtual_sinks,
-                    name='asm-aux-channel-toggle',
                     daemon=True,
                 ).start()
 

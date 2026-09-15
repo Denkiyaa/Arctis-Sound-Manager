@@ -909,6 +909,19 @@ def _link_ladspa(out: str, inp: str) -> str:
     return f'                    {{ output = "{out}:Output"  input = "{inp}:Input" }}'
 
 
+# Most LADSPA plugins wired into the micro chain here (rnnoise, gate_1410,
+# sc4m_1916) name their audio ports "Input"/"Output", so the link helpers above
+# hardcode that. DeepFilterNet's plugin does not: its descriptor names them
+# "Audio In" / "Audio Out" (see Rikorose/DeepFilterNet ladspa/src/lib.rs). A
+# generated conf that used the generic names referenced ports the loaded plugin
+# doesn't have — filter-chain built no working audio path and the mic went
+# silent with the node still "running" (issue #240). Nodes not listed here use
+# the generic "Input"/"Output" names.
+_LADSPA_AUDIO_PORTS: dict[str, tuple[str, str]] = {
+    "dfn": ("Audio In", "Audio Out"),
+}
+
+
 # ── HRIR choice ───────────────────────────────────────────────────────────────
 
 # ASM-generated config filenames inside _CONF_DIR — the complete list.
@@ -1442,7 +1455,18 @@ def generate_sonar_eq_conf(
         raise ValueError(
             f"channel must be 'game', 'chat', 'media', 'aux' or 'output', got {channel!r}")
 
-    owns_link = channel in spatial_channels()
+    # Chat also owns its link (issue #242): it targets the native mono chat
+    # PCM by default, and without node.autoconnect=false PipeWire locks the
+    # node's negotiated format to that 1-channel target at load time — so a
+    # later runtime relink to a user-chosen external stereo device only has
+    # one source channel to connect, playing mono/left-only.
+    # Output also owns its link (issue #246): without node.autoconnect=false,
+    # a device that hasn't enumerated yet at daemon startup (a TV still
+    # waking from standby) leaves WirePlumber's own default-sink policy free
+    # to grab the freshly-created node and connect it to whatever is
+    # currently the default sink — the headset — before ASM's watchdog
+    # (ensure_physical_output_links) ever gets a say.
+    owns_link = channel in spatial_channels() or channel in ("chat", "output")
     sink_name = f"effect_input.sonar-{channel}-eq"
 
     # Only a conf written to the channel's real path represents the live EQ;
@@ -1468,8 +1492,15 @@ def generate_sonar_eq_conf(
         # CHA-6: record which raw external_output_device setting produced
         # this target, so a later read can tell — cheaply, without a
         # pulsectl round-trip — whether the setting has since moved on
-        # without this conf being rewritten to match.
-        _sync_output_setting_snapshot()
+        # without this conf being rewritten to match. Only once resolution
+        # actually found a sink (issue #246): a device that is still
+        # settling in the graph right after a hotplug (a TV just switched
+        # on) makes _resolve_external_output() come back empty, and syncing
+        # the snapshot anyway would lock that failure in as "reconciled"
+        # forever — the next read only compares the setting against this
+        # snapshot and would never notice anything needs retrying.
+        if target:
+            _sync_output_setting_snapshot()
     else:
         # game / media: always 8ch, always (nominally) targets HeSuVi.
         target = target_override or _CHANNEL_TARGET.get(channel, "")
@@ -1529,7 +1560,7 @@ def generate_sonar_eq_conf(
     else:
         text = _active_conf_2ch(channel, sink_name, target, position,
                                 all_filters, band_slots, macro_bands,
-                                boost_db, smart_volume)
+                                boost_db, smart_volume, owns_link=owns_link)
 
     _write_conf(output_path, text)
     if writes_live_conf:
@@ -1666,6 +1697,7 @@ def _active_conf_2ch(
     macro_bands: list[tuple[str, EqBand]],
     boost_db: float,
     smart_volume: dict | None = None,
+    owns_link: bool = False,
 ) -> str:
     """2ch config: L/R filter pairs with explicit inputs/outputs."""
     node_lines: list[str] = []
@@ -1730,6 +1762,12 @@ def _active_conf_2ch(
         f'        node.target         = "{target}"\n'
         f'        target.object       = "{target}"\n'
     ) if target else ''
+    # See _active_conf_8ch's comment on this same pattern (issue #100/#88,
+    # extended to chat by issue #242).
+    _autoconnect_line = (
+        '        node.autoconnect     = false\n'
+        '        state.restore-target = false\n'
+    ) if owns_link else ''
 
     # The Output channel is the one users route applications *to* from any
     # mixer, so its sink must be visible to PulseAudio clients; every other
@@ -1779,7 +1817,7 @@ context.modules = [
       }}
       playback.props = {{
         node.name           = "effect_output.sonar-{channel}-eq"
-{_target_line}        node.dont-fallback  = true
+{_target_line}{_autoconnect_line}        node.dont-fallback  = true
         node.linger         = true
 {_pause_on_idle_line}        audio.channels      = 2
         audio.position      = [ {position} ]
@@ -1922,16 +1960,13 @@ def generate_sonar_micro_conf(
         """Pick the right link helper based on source/dest node types.
 
         Reads ``last_node`` / ``last_is_ladspa`` from the enclosing scope; it
-        never rebinds them, so no ``nonlocal`` declaration is needed.
+        never rebinds them, so no ``nonlocal`` declaration is needed. Consults
+        ``_LADSPA_AUDIO_PORTS`` for either side so a plugin with non-generic
+        port names (DeepFilterNet) still gets a valid link — see its comment.
         """
-        if last_is_ladspa and new_is_ladspa:
-            return _link_ladspa(last_node, new_name)
-        elif last_is_ladspa:
-            return _link_from_ladspa(last_node, new_name)
-        elif new_is_ladspa:
-            return _link_to_ladspa(last_node, new_name)
-        else:
-            return _link(last_node, new_name)
+        out_port = _LADSPA_AUDIO_PORTS.get(last_node, (None, "Output"))[1] if last_is_ladspa else "Out"
+        in_port = _LADSPA_AUDIO_PORTS.get(new_name, ("Input", None))[0] if new_is_ladspa else "In"
+        return f'                    {{ output = "{last_node}:{out_port}"  input = "{new_name}:{in_port}" }}'
 
     # ── Background noise reduction (high-pass: cuts low-frequency rumble) ──
     if bg.get("enabled", False):
@@ -2063,8 +2098,9 @@ def generate_sonar_micro_conf(
     nodes_text  = "\n".join(node_lines)
     links_text  = "\n".join(link_lines)
 
-    # LADSPA nodes use port name "Output", builtin nodes use "Out"
-    last_out_port = "Output" if last_is_ladspa else "Out"
+    # LADSPA nodes use port name "Output" (DeepFilterNet: "Audio Out"), builtin
+    # nodes use "Out" — see _LADSPA_AUDIO_PORTS.
+    last_out_port = _LADSPA_AUDIO_PORTS.get(last_node, (None, "Output"))[1] if last_is_ladspa else "Out"
 
     text = f"""\
 # Auto-generated by Arctis Sound Manager — DO NOT EDIT
@@ -2191,7 +2227,7 @@ context.modules = [
       }}
       playback.props = {{
         node.name           = "{sink_name.replace('effect_input.', 'effect_output.')}"
-{_target_line}        node.dont-fallback  = true
+{_target_line}{_autoconnect_line}        node.dont-fallback  = true
         node.linger         = true
         audio.channels      = 2
         audio.position      = [ {position} ]
@@ -2512,7 +2548,11 @@ def _regenerate_eq_conf(
             "to flat",
             conf_path.name, reason,
         )
-        if channel == "output":
+        # See the matching guard in generate_sonar_eq_conf() (issue #246):
+        # an empty target means resolution failed this attempt, not that the
+        # channel has genuinely no external sink configured — only sync on
+        # success, so a mismatch keeps being retried until it actually is.
+        if channel == "output" and target:
             _sync_output_setting_snapshot()
 
 
@@ -3136,7 +3176,7 @@ def check_and_fix_stale_configs() -> tuple[bool, bool]:
                 position = _CHANNEL_POSITION.get(channel, "FL FR")
                 _regenerate_eq_conf(
                     channel, path, sink_name, target, channels, position,
-                    owns_link=channel in spatial_channels(), log=log,
+                    owns_link=channel in spatial_channels() or channel == "chat", log=log,
                     reason=regen_reason,
                 )
                 fixed = True
@@ -3171,10 +3211,18 @@ def check_and_fix_stale_configs() -> tuple[bool, bool]:
             "Audio/Source/Virtual" in content
             or "Audio/Sink" in content
             or "label = gain" in content
+            or '"dfn:Input"' in content
+            or '"dfn:Output"' in content
         ):
+            # The last two: pre-#240 confs wired the DeepFilterNet node with
+            # the generic LADSPA port names ("Input"/"Output") instead of its
+            # actual "Audio In"/"Audio Out" — filter-chain built no working
+            # audio path and the mic went silent with the node still
+            # "running". Force a regen so already-affected users get the
+            # fixed port names without having to touch the micro EQ tab.
             _regenerate_micro_conf(
                 micro_path, log,
-                reason="wrong media.class or label=gain",
+                reason="wrong media.class, label=gain, or DeepFilterNet port names (#240)",
             )
             fixed = True
         elif 'target.object  = ""' in content:
@@ -3533,7 +3581,7 @@ def ensure_sonar_eq_configs() -> bool:
             _regenerate_eq_conf(
                 channel, conf_path, sink_name, exp["target"],
                 exp["channels"], exp["position"],
-                owns_link=channel in spatial_channels(), log=log,
+                owns_link=channel in spatial_channels() or channel == "chat", log=log,
                 reason=regen_reason,
             )
             generated = True
@@ -3757,15 +3805,40 @@ def _get_configured_external_output() -> str:
         current_setting, conf_target, snapshot,
     )
     resolved_target, channels, position = _resolve_external_output()
+    # This reconciliation path only ever regenerates the Output channel's own
+    # conf (hardcoded "output" above), so it owns its link exactly like the
+    # primary generate_sonar_eq_conf() call site now does (issue #246).
     _regenerate_eq_conf(
         "output", conf_path, "effect_input.sonar-output-eq",
-        resolved_target, channels, position, owns_link=False, log=_log,
+        resolved_target, channels, position, owns_link=True, log=_log,
         reason="external_output_device setting changed",
     )
     return resolved_target
 
 
 _output_fallback_active: str | None = None
+
+# How long the Output channel's last hop tolerates its configured external
+# sink being absent from the graph before falling back to the headset (SD-1).
+# The watchdog ticks every 5 s (see _note_output_fallback's docstring below),
+# so this spans at least two ticks — a single missed enumeration right after
+# boot (a TV still waking from standby, hotplug settling) must not trigger
+# the fallback on its own, only a sink that stays absent across several
+# ticks in a row. Long enough to ride out that startup settling window,
+# short enough that a genuinely unplugged/off display doesn't leave the
+# Output channel silently dead for an uncomfortable amount of time (#246).
+_OUTPUT_FALLBACK_GRACE_S = 10.0
+
+# Monotonic timestamp of the first tick where the configured external sink
+# was found configured-but-absent from the graph, or None while it is
+# present or has never been seen absent yet. Reset to None the moment the
+# sink reappears (see the "present" branch in ensure_physical_output_links)
+# so the grace window always restarts fresh from the first real absence,
+# rather than being stretched indefinitely by intermittent presence.
+# Deliberately separate from _output_fallback_active above, which only
+# dedupes the log line — this drives whether the fallback link is attempted
+# at all.
+_output_absent_since: float | None = None
 
 
 def _note_output_fallback(absent_target: str | None) -> None:
@@ -3857,7 +3930,11 @@ def ensure_physical_output_links(
         — only hops whose target is currently known (device attached / external
         sink configured) are included at all.
     """
+    import time
+
     from arctis_sound_manager.pw_utils import ensure_loopback_link
+
+    global _output_absent_since
 
     skip_targets = skip_targets or set()
     results: dict[str, bool] = {}
@@ -3909,27 +3986,44 @@ def ensure_physical_output_links(
         # have the watchdog retry with a fresh pw-dump every tick and escalate
         # on a situation that is not a fault at all.
         _note_output_fallback(None)
+        _output_absent_since = None
         results["output"] = ensure_loopback_link(
             _OUTPUT_EQ_OUTPUT_NAME, output_target, data=data
         )
     elif output_target:
         # The configured sink is gone — the monitor is off, the Bluetooth
-        # speaker walked away, the dock was unplugged. Skipping the hop left
-        # everything routed to the Output channel playing into a dead end,
+        # speaker walked away, the dock was unplugged, OR it simply hasn't
+        # enumerated yet (right after boot, a TV waking from standby). Those
+        # two cases are indistinguishable on the very first tick, so give the
+        # sink _OUTPUT_FALLBACK_GRACE_S to show up before ever considering the
+        # headset a stand-in (#246): Output stays silent/unlinked during the
+        # grace window rather than transiently blasting through the headset
+        # and switching a few seconds later once the real device settles.
+        # Combined with Output owning its EQ link (generate_sonar_eq_conf's
+        # owns_link) there is no WirePlumber autoconnect to fall back on
+        # either, so "do nothing this tick" really does mean silence.
+        #
+        # Once the grace period elapses, the pre-existing SD-1 safety net
+        # below still applies for a genuinely absent device: skipping the hop
+        # forever left everything routed to Output playing into a dead end,
         # silently and indefinitely, whenever the tray GUI was not running to
-        # do the fallback itself (SD-1). Game/Chat/Media never had that gap:
+        # do the fallback itself. Game/Chat/Media never had that gap:
         # channel_destination() falls back to the headset the moment the saved
         # device is absent, re-evaluated on every tick.
         #
         # The setting is deliberately NOT rewritten: the user's choice stays
         # the user's, so the channel returns to the external sink on its own as
         # soon as it comes back. This is a link-level fallback, not a decision.
-        fallback = _get_physical_out_game()
-        if fallback and fallback not in skip_targets and _node_in_graph(data, fallback):
-            _note_output_fallback(output_target)
-            results["output"] = ensure_loopback_link(
-                _OUTPUT_EQ_OUTPUT_NAME, fallback, data=data
-            )
+        now = time.monotonic()
+        if _output_absent_since is None:
+            _output_absent_since = now
+        elif now - _output_absent_since >= _OUTPUT_FALLBACK_GRACE_S:
+            fallback = _get_physical_out_game()
+            if fallback and fallback not in skip_targets and _node_in_graph(data, fallback):
+                _note_output_fallback(output_target)
+                results["output"] = ensure_loopback_link(
+                    _OUTPUT_EQ_OUTPUT_NAME, fallback, data=data
+                )
 
     return results
 

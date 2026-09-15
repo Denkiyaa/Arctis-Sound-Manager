@@ -699,6 +699,42 @@ def _usb_access(
     return '\n'.join(out).strip()
 
 
+def _usb_resume_reset_info() -> str:
+    """Sysfs path of the connected Arctis device, plus the resume-time USB
+    reset counters (#238). Never raises: absence of either is itself useful
+    information (no device connected / no reset ever attempted this install).
+    """
+    from arctis_sound_manager.constants import STEELSERIES_VENDOR_ID
+    from arctis_sound_manager.usb_reenumerate import sysfs_device_dir
+
+    lines: list[str] = []
+
+    try:
+        import usb.core
+        device = usb.core.find(idVendor=STEELSERIES_VENDOR_ID)
+        device_dir = sysfs_device_dir(
+            getattr(device, 'bus', None), getattr(device, 'port_numbers', None)
+        ) if device is not None else None
+        lines.append(f"sysfs path: {device_dir if device_dir else '(no device / unresolved)'}")
+    except Exception as e:
+        lines.append(f"sysfs path: (error resolving it: {e!r})")
+
+    state_path = Path.home() / '.config' / 'arctis_manager' / 'usb_resume_reset_state.json'
+    try:
+        if state_path.is_file():
+            state = json.loads(state_path.read_text())
+            lines.append(f"reset attempts (lifetime): {state.get('attempts', 0)}")
+            lines.append(f"last attempt: reason={state.get('last_reason')} "
+                         f"success={state.get('last_success')} "
+                         f"epoch={state.get('last_attempt_epoch')}")
+        else:
+            lines.append("reset attempts: none recorded (file absent)")
+    except Exception as e:
+        lines.append(f"reset attempts: (error reading state file: {e!r})")
+
+    return '\n'.join(lines)
+
+
 def _device_status_dump() -> str:
     """The daemon's GetStatus payload, pretty-printed, or why it is missing.
 
@@ -787,6 +823,14 @@ def collect_system_info() -> dict:
         info['usb_hid'] = r.stdout.strip() if r.returncode == 0 else r.stderr.strip()
     except Exception:
         info['usb_hid'] = ''
+
+    # Resume-time USB re-enumeration state (issue #238: ChatMix dead after a
+    # system suspend until the DAC is replugged). The sysfs path is resolved
+    # fresh here — no daemon needed — the same way core.py's _hid_usage_page
+    # does it; the reset counters come from CoreEngine's own breadcrumb file,
+    # since those guards are otherwise in-memory only and gone the moment this
+    # separate `asm-cli diagnose` process asks about them.
+    info['usb_resume_reset'] = _usb_resume_reset_info()
 
     # What the daemon actually decodes from the device: the battery level, the
     # power status, and every other status variable this model reports.
@@ -1230,6 +1274,16 @@ def format_bug_report(traceback_str: Optional[str] = None) -> str:
             '## USB HID devices',
             '```',
             usb_hid,
+            '```',
+            '',
+        ]
+
+    usb_resume_reset = info.get('usb_resume_reset', '')
+    if usb_resume_reset:
+        lines += [
+            '## USB resume/reset state (issue #238)',
+            '```',
+            usb_resume_reset,
             '```',
             '',
         ]

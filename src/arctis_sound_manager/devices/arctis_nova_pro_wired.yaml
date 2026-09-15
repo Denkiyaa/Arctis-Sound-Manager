@@ -1,5 +1,11 @@
 device:
   name: SteelSeries Arctis Nova Pro Wired
+  # GG's own minimum spacing between commands for this firmware family.
+  time_between_commands_ms: 50
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length) — the firmware itself is still
+  # booting for this long.
+  init_sleep_length_ms: 5000
   vendor_id: 0x1038
   product_ids:
     - 0x12cb # Arctis Nova Pro Wired
@@ -41,6 +47,12 @@ device:
     - [0x06, 0xbf, 'settings.mic_led_brightness'] # Mic mute LED brightness
     - [0x06, 0x49, 0x01]                          # Enable ChatMix
     - [0x06, 0x20]
+
+  # GG's own (shutdown ...) block for this family. Only disable-chatmix:
+  # this profile never sends set_sonar_present (0x8d) in device_init in the
+  # first place, so there is nothing to undo there.
+  shutdown_commands:
+    - [0x06, 0x49, 0x00]                          # Disable ChatMix
 
   status:
     request: 0x06b0

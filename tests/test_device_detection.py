@@ -201,8 +201,12 @@ def test_device_init_well_formed(path: Path):
     if cfg.device_init is None:
         pytest.skip("No device_init defined")
 
+    from arctis_sound_manager.core import init_entry_pause_seconds
+
     for i, row in enumerate(cfg.device_init):
         assert row, f"Row {i} is empty in {path.stem}"
+        if init_entry_pause_seconds(row) is not None:
+            continue  # ['sleep', ms] is a settle pause, not a frame
         for j, byte in enumerate(row):
             if isinstance(byte, str):
                 # DSL tokens like 'value', 'status.request', 'settings.*' are valid

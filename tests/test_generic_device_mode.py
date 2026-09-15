@@ -98,6 +98,9 @@ def _engine(*, generic_mode: bool, output: str | None = "alsa_output.usb-Generic
     engine = CoreEngine.__new__(CoreEngine)
     engine.logger = MagicMock()
     engine._detect_lock = threading.Lock()
+    engine._device_configured_event = threading.Event()
+    engine._device_configured_event.set()
+    engine._pending_init_timer = None
     engine._logged_no_device = False
     engine._device_ready = False
     engine.device_config = None

@@ -10,8 +10,10 @@ import time
 
 import pulsectl
 
-from arctis_sound_manager.constants import (PULSE_CHAT_NODE_NAME,
+from arctis_sound_manager.constants import (PULSE_AUX_NODE_NAME,
+                                            PULSE_CHAT_NODE_NAME,
                                             PULSE_GAME_NODE_NAME,
+                                            PULSE_MEDIA_NODE_NAME,
                                             STEELSERIES_VENDOR_ID)
 
 ONLY_PHYSICAL = 1
@@ -407,6 +409,28 @@ class PulseAudioManager:
             return False
         return True
 
+    # #249: user-configurable channels that ride along with Game on the dial's
+    # non-chat side. Game and Chat are never members — they're the fixed,
+    # always-on halves of the physical crossfade.
+    _EXTRA_MIX_NODE_NAMES = {
+        'media': PULSE_MEDIA_NODE_NAME,
+        'aux': PULSE_AUX_NODE_NAME,
+    }
+
+    def _chatmix_extra_channels(self) -> list[str]:
+        """Extra channels configured to move with Game (#249).
+
+        Read fresh from disk on every call, never cached: the user can toggle
+        this while the daemon is running, and a stale answer here means the
+        dial silently stops (or never starts) driving a channel the user just
+        (un)checked. Mirrors sonar_to_pipewire._aux_enabled()'s rationale.
+        """
+        try:
+            from arctis_sound_manager.settings import GeneralSettings
+            return list(GeneralSettings.read_from_file().chatmix_extra_channels)
+        except Exception:  # noqa: BLE001
+            return []
+
     def set_mix(self, media_mix: int, chat_mix: int):
         if media_mix > 100:
             media_mix = 100
@@ -429,6 +453,24 @@ class PulseAudioManager:
             self.pulse.volume_set_all_chans(game, media_mix / 100)
         if chat and not self._sink_is_at(chat, chat_mix):
             self.pulse.volume_set_all_chans(chat, chat_mix / 100)
+
+        # Extra channels (#249) opted in to ride along with Game. Looked up
+        # against the full sink list, not `sinks`/ONLY_VIRTUAL above — that
+        # set is deliberately Game/Chat only (see set_sink_volume_by_node's
+        # docstring), and Media/Aux are not part of it.
+        extra_channels = self._chatmix_extra_channels()
+        if extra_channels:
+            all_sinks = self.sink_list_wrapper()
+            for channel in extra_channels:
+                node_name = self._EXTRA_MIX_NODE_NAMES.get(channel)
+                if node_name is None:
+                    continue
+                extra_sink = next(
+                    (s for s in all_sinks if s.proplist.get('node.name', '') == node_name),
+                    None,
+                )
+                if extra_sink and not self._sink_is_at(extra_sink, media_mix):
+                    self.pulse.volume_set_all_chans(extra_sink, media_mix / 100)
 
     @staticmethod
     def _sink_is_at(sink, pct: int) -> bool:

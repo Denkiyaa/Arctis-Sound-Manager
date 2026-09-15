@@ -13,13 +13,20 @@ even though the headset is off, because the device status never changes
 Fixed by:
   * CoreEngine.reconcile_audio_routing_for_power_state(), which re-asserts the
     correct redirect for the current online/offline state.
-  * DbusAwake.on_prepare_for_sleep(), which now schedules
-    _reconcile_routing_after_wake() (two delayed passes) after init_device().
+  * DbusAwake.on_prepare_for_sleep(), which schedules
+    _reconcile_routing_after_wake() (two delayed passes) alongside the resume
+    task.
+
+Issue #238 later replaced the bare init_device() call on wake with
+CoreEngine.resume_from_sleep() (see test_dbus_awake_sleep_hook.py and
+test_resume_recovery.py) — the #128 reconciliation task asserted here must
+keep firing regardless of that change, which is what
+test_on_prepare_for_sleep_wake_schedules_resume_and_reconcile checks.
 """
 
 import asyncio
 import threading
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -69,17 +76,23 @@ def _make_dbus_awake():
     d = DbusAwake.__new__(DbusAwake)
     d.log = MagicMock()
     d.core_engine = MagicMock()
+    d.core_engine.resume_from_sleep = AsyncMock()
     return d
 
 
-def test_on_prepare_for_sleep_going_to_sleep_does_nothing():
+def test_on_prepare_for_sleep_going_to_sleep_calls_prepare_for_sleep_only():
     d = _make_dbus_awake()
     d.on_prepare_for_sleep(True)
+    d.core_engine.prepare_for_sleep.assert_called_once()
     d.core_engine.init_device.assert_not_called()
+    d.core_engine.teardown.assert_not_called()
     d.core_engine.reconcile_audio_routing_for_power_state.assert_not_called()
 
 
-def test_on_prepare_for_sleep_wake_runs_init_device_and_schedules_reconcile():
+def test_on_prepare_for_sleep_wake_schedules_resume_and_reconcile():
+    """#238 replaced the bare init_device() call with a resume_from_sleep()
+    task; the #128 reconcile task must still be scheduled alongside it,
+    independently (see the module docstring)."""
     async def _run():
         d = _make_dbus_awake()
         d._WAKE_SETTLE_S = 0
@@ -87,12 +100,13 @@ def test_on_prepare_for_sleep_wake_runs_init_device_and_schedules_reconcile():
 
         before = asyncio.all_tasks()
         d.on_prepare_for_sleep(False)
-        d.core_engine.init_device.assert_called_once()
+        d.core_engine.init_device.assert_not_called()
 
         scheduled = asyncio.all_tasks() - before
-        assert len(scheduled) == 1
+        assert len(scheduled) == 2
         await asyncio.gather(*scheduled)
 
+        d.core_engine.resume_from_sleep.assert_called_once()
         assert d.core_engine.reconcile_audio_routing_for_power_state.call_count == 2
 
     asyncio.run(_run())

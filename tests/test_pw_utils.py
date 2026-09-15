@@ -93,6 +93,61 @@ def test_get_native_streams_skips_empty_app():
     assert get_native_streams(data) == []
 
 
+def test_get_native_streams_falls_back_to_node_name_when_app_name_missing():
+    """Issue #243 reproduction: a raw ALSA/native client (SMAPI-launched
+    Stardew Valley on the reporter's machine) never sets application.name at
+    all, only node.name — the same field bug_reporter._audio_graph already
+    falls back to when printing this exact node. Skipping on empty
+    application.name silently dropped the stream from every channel card:
+    it kept playing, just invisible and undraggable in the mixer.
+    """
+    data = [
+        {
+            "id": 10,
+            "type": "PipeWire:Interface:Node",
+            "info": {"props": {"media.class": "Audio/Sink", "node.name": "Arctis_Game"}},
+        },
+        {
+            "id": 100,
+            "type": "PipeWire:Interface:Node",
+            "info": {"props": {
+                "media.class": "Stream/Output/Audio",
+                "node.name": "StardewModdingAPI",
+                "application.process.id": "4242",
+            }},
+        },
+        {
+            "id": 9100,
+            "type": "PipeWire:Interface:Link",
+            "info": {"output-node-id": 100, "input-node-id": 10},
+        },
+    ]
+    result = get_native_streams(data)
+    assert len(result) == 1
+    assert result[0]["app_name"] == "StardewModdingAPI"
+    assert result[0]["sink_name"] == "Arctis_Game"
+
+
+def test_get_native_streams_prefers_application_name_over_node_name():
+    """application.name, when present, is still the preferred label — the
+    node.name/application.process.binary fallback only kicks in once it's
+    genuinely absent."""
+    data = [
+        {
+            "id": 100,
+            "type": "PipeWire:Interface:Node",
+            "info": {"props": {
+                "media.class": "Stream/Output/Audio",
+                "application.name": "mpv",
+                "node.name": "internal-node-name-xyz",
+            }},
+        },
+    ]
+    result = get_native_streams(data)
+    assert len(result) == 1
+    assert result[0]["app_name"] == "mpv"
+
+
 def test_move_native_stream_exact_match():
     """Ensure move_native_stream uses exact match, not substring."""
     data = _make_pw_dump(

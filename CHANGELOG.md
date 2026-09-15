@@ -5,6 +5,157 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.26] - 14 September 2026
+
+### Fixed
+
+- **The daemon froze on wake from suspend (1.4.25 regression, #238).** Two
+  threads deadlocked on every resume where the headset re-enumerates, which
+  on the Nova Pro Omni is every resume: the pyudev thread, reacting to the
+  re-enumeration, was inside device detection holding the detection lock and
+  waiting for the device lock; the event-loop thread, in the new
+  `resume_from_sleep`, was blocking on the detection lock. The device lock was
+  owned by the listen loop, which had awaited its idle back-off *inside* the
+  lock and could not be resumed because the loop thread was blocked. Nothing
+  logged, D-Bus went silent, the ChatMix knob stayed dead, and `systemctl
+  restart` hung for the full stop timeout because a blocked main thread
+  cannot run the SIGTERM handler. The listen loop now sleeps outside the lock,
+  and the resume and USB-reset paths run detection off the event loop,
+  deferring to a detection already in flight rather than queueing a second
+  one. Diagnosed from a py-spy dump of the hung process. Contributed by
+  @kevinpbaker. (#238)
+- Chat channel routed to an external output device now stays stereo instead of collapsing to mono/left-only, since ASM now owns its link (PipeWire no longer force-negotiates the chat EQ output to the headset's native mono PCM format). (#242)
+- **Turning the Aux channel off (or back on) never actually told the daemon.**
+  The toggle saved `aux_enabled` to disk correctly, but `SetSetting` looked
+  it up in the settings-widget registry — the generic dropdown/slider table,
+  which Aux was never part of since it has its own dedicated toggle button —
+  found no match, logged "Unknown general setting configuration:
+  aux_enabled", and returned before ever reaching the block of code that
+  reconfigures the virtual sinks, which was unreachable dead code as a
+  result. `aux_enabled` is now special-cased ahead of that generic lookup,
+  the same way a couple of other settings already needed to be.
+- **ASM's own internal PipeWire nodes (the filter-chain/loopback plumbing
+  behind each channel) could show up in the mixer's per-channel application
+  list as if a real app had been dropped there** — most visibly after a
+  brief internal routing hiccup left one of them momentarily linked to a
+  channel's virtual sink. They're now excluded from that list.
+- The system tray's Output Routing menu never listed the Aux channel at all, even when it was switched on — the per-channel device picker there was hardcoded to Game/Chat/Media. Aux now appears whenever the channel is enabled.
+- **The Output channel could briefly play through the headset at startup
+  instead of the configured external device.** Its EQ node never disabled
+  PipeWire's own default-sink autoconnect, so a device that hadn't
+  enumerated yet at boot (a TV still waking from standby, typically) left
+  WirePlumber free to route it to whatever the system's default sink was —
+  the headset — before ASM's watchdog got a say; the watchdog's own "device
+  is genuinely gone" fallback then fired just as eagerly, unable to tell
+  "still settling" from "switched off". Output now owns its link like
+  Game/Chat/Media, and the fallback to the headset only engages once the
+  configured device has stayed absent for a few watchdog ticks, so a device
+  that's merely slow to enumerate now stays silent and links straight to it
+  once found instead of audibly detouring through the headset first. (#246)
+
+### Added
+
+- **The headset's physical ChatMix knob has always crossfaded exactly two
+  things: Game's volume on one side, Chat's on the other.** Media and Aux
+  were never part of it, no matter what. Media and Aux can now each be
+  switched on to ride along with the knob's non-chat side too, from a
+  toggle on their mixer card (hidden unless the channel itself is enabled,
+  for Aux). Game and Chat are unaffected and remain the knob's fixed,
+  non-configurable sides. (#249)
+
+## [1.4.25] - 13 September 2026
+
+### Fixed
+
+- **Nova Pro Omni: the ChatMix knob did nothing after boot until the daemon
+  was restarted.** The base station only reports its mixer to the PC once
+  software has switched it into that mode (0x8d sonar-present, 0x49 software
+  ChatMix). It accepts both commands and then abandons the switch if the next
+  command lands within a few milliseconds — which it always did, since init
+  sends its frames 6 ms apart. Pressing the knob showed no mixer, turning it
+  only moved the station volume, and restarting the daemon by hand replayed
+  the same too-fast burst. Profiles can now put `['sleep', <ms>]` in
+  `device_init`; the Omni waits a second after each mode switch. Verified on
+  hardware, including from a cold base station. Contributed by @kevinpbaker.
+  (#238, #235, #245)
+- **A failed init frame was never retried.** `send_command()` logs USB errors
+  and returns, it does not raise, so the "retry once" written around it in the
+  init sequence could never fire. It now reports failure and the retry runs.
+- **ChatMix on the Nova Pro Omni also stayed dead specifically after a system
+  resume, on top of the boot-time issue above.** `resume_from_sleep()` used
+  to replay `device_init` over the same libusb handle that had just survived
+  suspend; on this family that left the ChatMix event stream dead until a
+  physical replug even though ordinary commands kept working.
+  `configure_virtual_sinks()` — the already-tested path that properly
+  releases and re-acquires a same-device re-enumeration — is used instead.
+  Checking SteelSeries' own engine specification against ASM turned up two
+  more protocol timings ASM never respected on any profile: a firmware-family
+  minimum spacing between consecutive commands (`time_between_commands_ms`,
+  1-50ms depending on family) and a settle time the transmitter needs after
+  enumerating before it can be talked to at all (`init_sleep_length_ms`, up
+  to 5s on the Nova Pro Omni/Elite/Wireless/GameDAC family) — both are now
+  honoured for every headset profile, sourced from SteelSeries' own
+  specifications. The device settle wait runs off the USB hotplug thread via
+  a background timer so it can never delay detecting other USB devices.
+  (#238)
+- **ASM never told the DAC it was leaving.** SteelSeries' own engine sends
+  disable-ChatMix/disable-Sonar to the Nova Pro Omni/Elite/Wireless/Wired and
+  Nova 3 Wireless families before releasing the USB interface, so the base
+  station falls back to plain hardware volume instead of staying in
+  software-ChatMix mode with nothing driving it once the host goes away.
+  `teardown()` now does the same, best-effort, on every daemon stop or
+  disconnect.
+- **After the *wireless* headset itself reconnects (powers back on, or comes
+  back into range), ASM trusted the very first settings read/replay attempt
+  instead of retrying.** SteelSeries' own engine retries a status read up to
+  10 times after a radio reconnect on several families, because the first
+  attempt(s) right after reconnect can come back stale — ASM's own settings
+  replay now does the same before pushing anything back to the device,
+  falling back to the old flat-delay behaviour on families where this was
+  never observed to matter.
+- **DeepFilterNet noise cancellation silently stopped the microphone.**
+  `generate_sonar_micro_conf()` assumed every LADSPA node in the micro chain
+  exposes ports named "Input"/"Output" — true for RNNoise, the noise gate and
+  the compressor, but DeepFilterNet's plugin names them "Audio In"/"Audio
+  Out" instead. The generated filter-chain config referenced ports the
+  loaded plugin doesn't have: no audio path was built and the mic went
+  silent with the node still "running", no crash, nothing in the logs.
+  Configs already broken by this are now auto-detected and repaired instead
+  of staying stuck. (#240)
+- **A native (non-PulseAudio) application stream with no `application.name`
+  property was invisible to the mixer, even though it was still playing and
+  still moved by the Output volume slider.** `get_native_streams()` only
+  looked at that one property to identify a stream; a raw ALSA/native client
+  that never sets it — reported case: SMAPI-launched Stardew Valley, a
+  .NET/Mono app under Distrobox — was silently dropped instead of falling
+  back to `node.name`/`application.process.binary`, so there was no way to
+  drag it onto Game/Chat/Media. (#243)
+- **The external Output channel could get silently and permanently stuck
+  pointing at nothing after a device was connected while ASM was already
+  running** (e.g. a TV switched on over HDMI). Resolving the new device's
+  sink can fail on the very first attempt because it hasn't finished
+  settling in the PipeWire graph yet; that empty result used to get locked
+  in as "reconciled" regardless, so the watchdog never retried it even once
+  the device was fully there. Only a full daemon restart used to force a
+  fresh resolution. (#246)
+- **GameBuds: the Volume Limiter and Wear Sense toggles were silently
+  swapped**, each one controlling the other's feature, since the profile's
+  opcodes didn't match SteelSeries' own specification (0x27 is actually the
+  volume limiter, 0xc5 is actually wear sense).
+- Bug reports no longer leak the weather widget's raw GPS coordinates
+  (`weather_lat`/`weather_lon`) — they were the one field the existing
+  "location"/"city" redaction patterns didn't match, while the city name
+  next to them was correctly stripped.
+
+### Added
+
+- **GameBuds: ANC intensity, and independent playback volume per connection
+  type (Bluetooth / 2.4GHz dongle).** ANC has its own intensity memory on the
+  device, separate from the existing Transparency level control, and was not
+  previously adjustable at all.
+- 4 new Sonar presets from SteelSeries GG 119.0.0: Bombanana!, Mortal Shell
+  II, The Sinking City 2, Tukoni: Forest Keepers.
+
 ## [1.4.24] - 8 September 2026
 
 ### Fixed

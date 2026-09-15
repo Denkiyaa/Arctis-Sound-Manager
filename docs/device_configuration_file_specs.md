@@ -20,6 +20,7 @@ device:
     # ...
     - [0x06, 0xc3, 'settings.wireless_mode']      # Can accept also values from the settings (settings.NAME_OF_THE_SETTING)
     - ['status.request']                          # Can accept the special 'status.request' to send device.status.request's value
+    - ['sleep', 500]                              # Not sent: pauses the sequence for N milliseconds, for devices that abandon a mode switch when the next command follows too quickly (Nova Pro Omni)
   status:
     request: 0x06b0 # Message to be sent to request the device's status
     response_mapping: # A list of objects having

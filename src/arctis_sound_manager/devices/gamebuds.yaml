@@ -1,5 +1,16 @@
 device:
   name: SteelSeries Arctis GameBuds
+  # GG's own minimum spacing between commands for this firmware family.
+  time_between_commands_ms: 50
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length; standard-boilerplate default).
+  init_sleep_length_ms: 100
+  # GG's own retry delay after the earbuds reconnect their radio link (up to
+  # 10 attempts) before it trusts the settings it reads back — here it's the
+  # full settings sync that gets retried, not just a firmware-version read,
+  # but the same "don't trust the first read" principle applies to ASM's
+  # own settings replay just as much.
+  radio_reconnect_probe_delay_ms: 500
   vendor_id: 0x1038
   product_ids:
     - 0x230a  # Arctis GameBuds (PS5/PC) via dongle 2.4 GHz — confirmé par capture USB
@@ -143,8 +154,11 @@ device:
     - [0xbd, 'settings.noise_cancelling']
     - [0xb9, 'settings.noise_level']
     - [0xc1, 'settings.pm_shutdown']
-    - [0xc5, 'settings.volume_limiter']
-    - [0x27, 'settings.wear_sense']
+    - [0x27, 'settings.volume_limiter']
+    - [0xc5, 'settings.wear_sense']
+    - [0xb8, 'settings.anc_level']
+    - [0x25, 'settings.volume_24g']
+    - [0x23, 'settings.volume_bt']
     - [0x09]
     - ['status.request']
 
@@ -194,6 +208,9 @@ device:
         default: 0x00
         update_sequence: [0xbd, 'value']
       noise_level:
+        # This is specifically the *transparency* level (opcode 0xb9) — ANC
+        # has its own separate level memory on the device (opcode 0xb8, see
+        # anc_level below); the two are independent, not one shared slider.
         # GG exposes three steps and transform_transparency_ui_to_fw sends
         # 3 / 6 / 10 for them; its inverse buckets anything 7-10 back to "high",
         # so the firmware takes a continuous 0-10 level. Kept as a fine-grained
@@ -208,8 +225,53 @@ device:
         max_label: perc_100
         default: 0x06
         update_sequence: [0xb9, 'value']
+      anc_level:
+        # ANC's own intensity, independent of the transparency level above
+        # (opcode 0xb8, `(field level uint8 (range 1 3))` — a plain 1-3 scale
+        # on the wire, no UI/FW transform unlike transparency's 0xb9).
+        type: slider
+        min: 0x01
+        max: 0x03
+        step: 1
+        min_label: perc_0
+        max_label: perc_100
+        default: 0x02
+        update_sequence: [0xb8, 'value']
+      volume_24g:
+        # Playback volume over the 2.4GHz dongle link — independent from
+        # volume_bt below, the earbuds keep separate memories per connection
+        # (opcode 0x25 write / 0x24 read, level 0-15). GG adds a 200ms
+        # device-side settle (a HIDSLEEP report) before this write because
+        # the device can't handle the volume sliding too fast; ASM has no
+        # equivalent of a device-side sleep report, so this instead relies
+        # on the family's own time_between_commands_ms (50ms) pacing above —
+        # a smaller margin, not the exact same mechanism.
+        type: slider
+        min: 0x00
+        max: 0x0f
+        step: 1
+        min_label: perc_0
+        max_label: perc_100
+        default: 0x0f
+        update_sequence: [0x25, 'value']
+      volume_bt:
+        # Playback volume over Bluetooth — see volume_24g above, same shape,
+        # independent memory (opcode 0x23 write / 0x22 read).
+        type: slider
+        min: 0x00
+        max: 0x0f
+        step: 1
+        min_label: perc_0
+        max_label: perc_100
+        default: 0x0f
+        update_sequence: [0x23, 'value']
     headset:
       volume_limiter:
+        # Fix: was update_sequence [0xc5, 'value'] — 0xc5 is wear_sense in
+        # SteelSeries' own spec (base_arctis_gamebuds_dongle.device), not
+        # volume_limiter (0x27). This toggle was silently controlling
+        # wear-sense instead of the volume limiter it's labelled as; the
+        # opcode below is the corrected one — see device_init above too.
         type: toggle
         values:
           off: 0x00
@@ -217,8 +279,10 @@ device:
           off_label: off
           on_label: on
         default: 0x00
-        update_sequence: [0xc5, 'value']
+        update_sequence: [0x27, 'value']
       wear_sense:
+        # Fix: was update_sequence [0x27, 'value'] — swapped with
+        # volume_limiter above, see that comment.
         type: toggle
         values:
           off: 0x00
@@ -226,7 +290,7 @@ device:
           off_label: off
           on_label: on
         default: 0x01
-        update_sequence: [0x27, 'value']
+        update_sequence: [0xc5, 'value']
     power_management:
       pm_shutdown:
         type: button_group

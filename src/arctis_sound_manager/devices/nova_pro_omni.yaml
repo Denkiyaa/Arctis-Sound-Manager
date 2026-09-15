@@ -34,6 +34,20 @@
 # ──────────────────────────────────────────────────────────────────────────────
 device:
   name: SteelSeries Arctis Nova Pro Omni
+  # GG's own minimum spacing between commands for this firmware family
+  # (base_arctis_nova_elite_tx). The two explicit `['sleep', 1000]` entries
+  # in device_init below are on top of this, not instead of it — this is
+  # the general mechanism behind the specific bug #245 found and fixed.
+  time_between_commands_ms: 50
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length) — the firmware itself is still
+  # booting for this long. Applied before device_init even starts, deferred
+  # off the pyudev thread by configure_virtual_sinks() (see core.py).
+  init_sleep_length_ms: 5000
+  # GG's own retry delay for a status read after the wireless headset
+  # reconnects its radio link (up to 10 attempts) instead of trusting a
+  # single flat settle time before replaying settings.
+  radio_reconnect_probe_delay_ms: 500
   vendor_id: 0x1038
   product_ids:
     - 0x2290 # SteelSeries Arctis Nova Pro Omni (DAC switch in USB-1 position)
@@ -49,6 +63,13 @@ device:
     length: 64
     position: end
     filler: 0x00
+
+  # Issue #238: ChatMix stays dead after a system suspend/resume until the DAC
+  # is physically replugged. The generic post-resume status probe can't cover
+  # this device (its status.request is report-id-prefixed, see
+  # CoreEngine.resume_from_sleep), so escalate straight to a USB reset on every
+  # resume rather than only on a probe failure.
+  reset_on_resume: true
 
   # Control/data interface = 3 (64-byte Interrupt IN on EP 0x83); interface 4 is
   # the 2-byte consumer-control endpoint. Confirmed via asm-cli tools arctis-devices.
@@ -77,9 +98,19 @@ device:
   #   • 0x09 save_to_flash after each deploy — pointless flash wear on every start,
   #   • fixed stream-mix / line-out / Bluetooth values — those are the user's
   #     state, not ours to overwrite at boot.
+  # The two mode switches need a settle time. The DAC accepts the SET_REPORT
+  # and then abandons the switch if the next command arrives within a few
+  # milliseconds — which is every ASM start, since init fires its frames 6 ms
+  # apart. The symptom is a ChatMix knob that does nothing after boot (no
+  # mixer on the OLED, no 0x0745 events, only 0x0725 volume frames) until the
+  # daemon is restarted by hand. Verified on hardware: the same frames spaced
+  # by one second engage the mixer every time; a settle after 0x49 alone was
+  # not tested, so both get one.
   device_init:
     - [0x01, 0x8d, 0x01]                           # set_sonar_present ON
+    - ['sleep', 1000]
     - [0x01, 0x49, 0x01]                           # software chatmix ON
+    - ['sleep', 1000]
     - [0x01, 0x20]                                 # audio_settings query
     - [0x01, 0x10]                                 # fw_versions query
     - [0x01, 0x80]                                 # ux_settings query
@@ -95,6 +126,14 @@ device:
     - [0x01, 0xb2, 'settings.bluetooth_power_status']  # BT on at power-up
     - [0x01, 0xb3, 'settings.bluetooth_auto_mute']     # what a call does to game audio
     - ['status.request']
+
+  # GG's own (shutdown ...) block for this family: turn sonar/chatmix back
+  # off before the interface is released, so the base station falls back to
+  # plain hardware volume instead of being left in software-ChatMix mode
+  # with nobody driving it once ASM stops.
+  shutdown_commands:
+    - [0x01, 0x49, 0x00]                           # software chatmix OFF
+    - [0x01, 0x8d, 0x00]                           # set_sonar_present OFF
 
   status:
     request: 0x01b0

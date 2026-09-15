@@ -1,5 +1,13 @@
 device:
   name: SteelSeries Arctis Nova 3
+  # GG's own minimum spacing between commands (standard-boilerplate default;
+  # this wired variant's own spec pulls in lighting includables this repo
+  # doesn't extract, so the family baseline is used rather than guessing).
+  time_between_commands_ms: 10
+  # Same reasoning: GG's own wait after the transmitter enumerates before
+  # sending it any command at all (init-sleep-length; standard-boilerplate
+  # default).
+  init_sleep_length_ms: 100
   vendor_id: 0x1038
   product_ids:
     - 0x12ec # Arctis Nova 3 (wired)

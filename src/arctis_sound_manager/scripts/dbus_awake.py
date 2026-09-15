@@ -66,26 +66,46 @@ class DbusAwake:
 
     def on_prepare_for_sleep(self, going_to_sleep: bool) -> None:
         if going_to_sleep:
+            try:
+                self.core_engine.prepare_for_sleep()
+            except Exception as e:
+                self.log.warning(f"prepare_for_sleep failed: {e}")
             return
 
-        # Re-run device init (USB commands + EQ) exactly as before.
-        self.core_engine.init_device()
-
-        # Then reconcile audio routing a moment later: on resume PipeWire/
-        # WirePlumber re-links streams to their remembered targets as the graph
-        # settles, pulling media apps back onto Arctis_Media even with the
-        # headset off (issue #128). init_device() alone never fixed this because
-        # the status is unchanged (offline -> offline), so no redirect fires.
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # No running loop (should not happen inside the daemon) — best effort.
+            # No running loop (should not happen inside the daemon) — best
+            # effort: re-acquire synchronously, skip the async probe/escalation
+            # (issue #238) since those need the loop's listen-endpoint task.
+            try:
+                self.core_engine.configure_virtual_sinks()
+            except Exception as e:
+                self.log.warning(f"resume_from_sleep (no loop) failed: {e}")
             try:
                 self.core_engine.reconcile_audio_routing_for_power_state()
             except Exception as e:
                 self.log.warning(f"Post-wake routing reconciliation failed: {e}")
             return
+
+        # Re-acquire the device (issue #238 — replaces the old bare
+        # init_device() call, which wrote over the same libusb handle that
+        # just survived suspend instead of re-claiming it).
+        loop.create_task(self._resume_from_sleep_task())
+
+        # Reconcile audio routing a moment later, independently of the resume
+        # task above: on resume PipeWire/WirePlumber re-links streams to their
+        # remembered targets as the graph settles, pulling media apps back
+        # onto Arctis_Media even with the headset off (issue #128). Scheduled
+        # unconditionally so a slow or failed USB reset never delays this
+        # guard.
         loop.create_task(self._reconcile_routing_after_wake())
+
+    async def _resume_from_sleep_task(self) -> None:
+        try:
+            await self.core_engine.resume_from_sleep()
+        except Exception as e:
+            self.log.warning(f"resume_from_sleep failed: {e}")
 
     async def _reconcile_routing_after_wake(self) -> None:
         for delay in (self._WAKE_SETTLE_S, self._WAKE_RECHECK_S):

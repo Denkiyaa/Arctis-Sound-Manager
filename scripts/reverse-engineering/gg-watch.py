@@ -127,9 +127,34 @@ def save_state(version: str, edevice_files: list[str], spec_hashes: dict[str, st
     }, indent=2, ensure_ascii=False) + "\n")
 
 
+def commit_state() -> None:
+    """Push the freshly-written STATE_FILE to main, on its own.
+
+    Not folded into add_presets()'s commit: that one only fires when new
+    presets were found, which most version bumps don't produce. Without
+    this, a run that changes nothing but the tracked version writes
+    STATE_FILE to the runner's ephemeral checkout and it is never pushed —
+    next week's run reads the same stale (or absent) state and reprocesses
+    the "new" version all over again forever.
+    """
+    if NO_PUSH:
+        log("  [no-push] state file written — commit manually")
+        return
+    git = ["git", "-C", str(ASM_ROOT)]
+    status = subprocess.run(git + ["status", "--porcelain", "--", str(STATE_FILE)],
+                             text=True, capture_output=True).stdout
+    if not status.strip():
+        return
+    run(git + ["add", str(STATE_FILE)])
+    run(git + ["commit", "-m", "chore(gg-watch): update state [skip ci]"])
+    run(git + ["push", "origin", "HEAD"])
+    log("  state file pushed to main")
+
+
 # ── acquisition ──────────────────────────────────────────────────────────────
 
 def fetch(version: str, url: str) -> Path:
+    GG_WORKDIR.mkdir(parents=True, exist_ok=True)
     dest = GG_WORKDIR / f"SteelSeriesGG{version}Setup.exe"
     if dest.is_file() and dest.stat().st_size > 100_000_000:
         log(f"  installer already downloaded: {dest.name}")
@@ -361,8 +386,12 @@ def add_presets(new: dict[str, dict], version: str) -> list[str]:
            f"Extracted from the Sonar db-migrations in the installer, where each\n"
            f"preset is an INSERT INTO configs carrying the same JSON shape ASM\n"
            f"stores on disk.\n\n{body}\n")
+    # STATE_FILE is deliberately not added here: save_state() in main() only
+    # writes it *after* this function returns, so committing it at this point
+    # would still carry the previous run's content. commit_state() below is
+    # what actually persists it, unconditionally, once it is current.
     git = ["git", "-C", str(ASM_ROOT)]
-    run(git + ["add", str(PRESETS), str(PROVENANCE), str(MANIFEST), str(STATE_FILE)])
+    run(git + ["add", str(PRESETS), str(PROVENANCE), str(MANIFEST)])
     run(git + ["commit", "-m", msg])
     run(git + ["push", "origin", "HEAD"])
     log("  presets pushed to main")
@@ -503,6 +532,7 @@ def main() -> int:
         return 0
 
     save_state(version, edevice_files, spec_hashes, written, new_files, changed, issue)
+    commit_state()
     log("done.")
     return 0
 

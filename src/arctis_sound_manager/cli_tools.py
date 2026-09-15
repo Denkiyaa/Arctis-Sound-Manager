@@ -197,3 +197,78 @@ def print_hardware_eq_readback(result: dict[str, Any]) -> int:
 
     return 0 if bands is not None else 1
 
+
+# ── asm-cli usb reset / reenumerate (#238) ──────────────────────────────────
+#
+# Manual escalation for "ChatMix dead after resume" when the automatic
+# resume-time reset (CoreEngine.resume_from_sleep) either did not run (older
+# ASM, GUI-less session that never suspended through logind) or did not help.
+# Runs standalone, without asm-daemon: usb.core.find() opens its own handle
+# rather than going through the daemon's D-Bus, so this also works when the
+# daemon is stuck badly enough that GetStatus itself would time out.
+
+def usb_reset_current_device(vendor_id: int = 0x1038) -> int:
+    """`asm-cli usb reset` — force a USBDEVFS_RESET on the connected device."""
+    import logging
+
+    from arctis_sound_manager.usb_reenumerate import reset_via_usbfs
+
+    logger = logging.getLogger('asm-cli')
+    device = usb.core.find(idVendor=vendor_id)
+    if device is None:
+        print(f'No device found with vendor ID {vendor_id:04x}.')
+        return 1
+
+    ok = reset_via_usbfs(device, logger)
+    if not ok:
+        print('USB reset failed — see the warning above for the reason.')
+        return 1
+
+    print('USB reset sent successfully.')
+    print('The daemon may need a restart to pick the device back up:')
+    print('  systemctl --user restart arctis-manager')
+    return 0
+
+
+def usb_reenumerate_current_device(vendor_id: int = 0x1038) -> int:
+    """`asm-cli usb reenumerate` — toggle sysfs `authorized` (root-only).
+
+    Falls back to this when a plain USB reset (`asm-cli usb reset`) was not
+    enough: it forces a full unbind/rebind rather than just re-enumerating in
+    place. /sys/.../authorized is root:root — no udev rule can widen that, it
+    only ever applies to /dev nodes — so this refuses cleanly instead of
+    raising when run unprivileged.
+    """
+    import logging
+
+    from arctis_sound_manager.usb_reenumerate import (can_toggle_authorized,
+                                                       sysfs_device_dir,
+                                                       toggle_authorized)
+
+    logger = logging.getLogger('asm-cli')
+    device = usb.core.find(idVendor=vendor_id)
+    if device is None:
+        print(f'No device found with vendor ID {vendor_id:04x}.')
+        return 1
+
+    device_dir = sysfs_device_dir(
+        getattr(device, 'bus', None), getattr(device, 'port_numbers', None))
+    if device_dir is None:
+        print('Could not resolve the device sysfs path (no bus/port info).')
+        return 1
+
+    if not can_toggle_authorized(device_dir):
+        print(f'{device_dir / "authorized"} is not writable by this user.')
+        print('This needs root. Run:')
+        print('  sudo asm-cli usb reenumerate')
+        return 1
+
+    if not toggle_authorized(device_dir, settle_s=2.0, logger=logger):
+        print('Re-enumeration failed — see the warning above for the reason.')
+        return 1
+
+    print('Device re-enumerated successfully.')
+    print('The daemon may need a restart to pick the device back up:')
+    print('  systemctl --user restart arctis-manager')
+    return 0
+

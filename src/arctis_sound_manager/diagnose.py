@@ -32,14 +32,17 @@ from arctis_sound_manager.constants import (HOME_CONFIG_FOLDER,
                                             UDEV_RULES_PATHS)
 from arctis_sound_manager.utils import project_version
 
-# Settings keys that may carry semi-private data (city names for the weather
-# widget, custom paths, etc.) — strip them before dumping.
+# Settings keys that may carry semi-private data (city names and GPS
+# coordinates for the weather widget, custom paths, etc.) — strip them
+# before dumping.
 _REDACT_KEY_PATTERNS = (
     re.compile(r'(?i)location'),
     re.compile(r'(?i)city'),
     re.compile(r'(?i)token'),
     re.compile(r'(?i)password'),
     re.compile(r'(?i)email'),
+    re.compile(r'(?i)^weather_lat$'),
+    re.compile(r'(?i)^weather_lon$'),
 )
 
 

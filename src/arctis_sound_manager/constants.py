@@ -75,6 +75,8 @@ PULSE_MEDIA_NODE_NAME = 'Arctis_Media'
 
 PULSE_CHAT_NODE_NAME = 'Arctis_Chat'
 
+PULSE_AUX_NODE_NAME = 'Arctis_Aux'
+
 STEELSERIES_VENDOR_ID = 0x1038
 
 SETTINGS_FOLDER = _XDG_CONFIG / 'arctis_manager' / 'settings'

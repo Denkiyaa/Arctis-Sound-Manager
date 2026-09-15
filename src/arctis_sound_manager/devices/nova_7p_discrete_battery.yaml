@@ -1,5 +1,15 @@
 device:
   name: SteelSeries Arctis Nova 7P (Gen 1)
+  # GG's own minimum spacing between commands for this firmware family
+  # (standard-boilerplate default — this family declares no override).
+  time_between_commands_ms: 10
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length; standard-boilerplate default).
+  init_sleep_length_ms: 100
+  # GG's own retry delay for a status read after the wireless headset
+  # reconnects its radio link (up to 10 attempts) instead of trusting a
+  # single flat settle time before replaying settings.
+  radio_reconnect_probe_delay_ms: 100
   vendor_id: 0x1038
   product_ids:
     - 0x220a # Arctis Nova 7P (firmware before Jan. 2026 update — discrete battery 0-4)

@@ -1,5 +1,15 @@
 device:
   name: SteelSeries Arctis 9 Wireless
+  # GG's own minimum spacing between commands for this firmware family.
+  time_between_commands_ms: 20
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length).
+  init_sleep_length_ms: 200
+  # GG's own retry delay for a status read after the wireless headset
+  # reconnects its radio link (up to 10 attempts) instead of trusting a
+  # single flat settle time before replaying settings. This family reuses
+  # init-sleep-length as the retry delay too (same value, same spec).
+  radio_reconnect_probe_delay_ms: 200
   vendor_id: 0x1038
   product_ids:
     - 0x12c2 # Arctis 9

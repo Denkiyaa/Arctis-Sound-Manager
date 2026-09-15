@@ -84,12 +84,19 @@ def test_the_status_sentinel_reports_online_for_such_a_device():
 
 def test_init_device_failing_does_not_mark_the_device_absent():
     """The fix: an exception out of init_device() must not skip the line that
-    records the device as ready."""
+    records the device as ready.
+
+    init_device()/_device_ready live in _finish_configure_virtual_sinks_body()
+    rather than configure_virtual_sinks() itself since the init_sleep_length_ms
+    deferral (#238/#245 family): the pyudev-thread-facing method only decides
+    whether to run that body immediately or via a settle timer, never touches
+    init_device() directly.
+    """
     import inspect
 
     from arctis_sound_manager.core import CoreEngine
 
-    src = inspect.getsource(CoreEngine.configure_virtual_sinks)
+    src = inspect.getsource(CoreEngine._finish_configure_virtual_sinks_body)
     init_at = src.index("self.init_device()")
     ready_at = src.rindex("self._device_ready = True")
     guarded = src[:init_at].rstrip().endswith("try:")
