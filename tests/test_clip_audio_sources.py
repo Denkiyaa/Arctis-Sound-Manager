@@ -258,3 +258,25 @@ def test_a_source_that_was_never_there_does_not_count_as_changed(monkeypatch):
     capture._source_ids = {"@DEFAULT_MONITOR@": None}
     monkeypatch.setattr(clip_capture, "audio_source_ids", lambda names: {"@DEFAULT_MONITOR@": None})
     assert capture.audio_sources_changed() is False
+
+
+def test_the_processed_microphone_chain_is_preferred_over_the_raw_input():
+    """What every app hears is the Micro EQ / noise-suppression output; the
+    raw capture behind it carried the room and the fans into every clip."""
+    pulse = _Pulse([
+        _source("alsa_input.usb-HyperX.analog-stereo"),
+        _source("effect_output.sonar-micro-eq"),
+    ], default="effect_output.sonar-micro-eq")
+    with patch("arctis_sound_manager.settings.GeneralSettings.read_from_file",
+               return_value=SimpleNamespace(
+                   micro_input_source="alsa_input.usb-HyperX.analog-stereo")):
+        assert _default_microphone(pulse) == "effect_output.sonar-micro-eq"
+
+
+def test_without_the_chain_the_chosen_raw_input_still_wins():
+    pulse = _Pulse([_source("alsa_input.usb-HyperX.analog-stereo"),
+                    _source("alsa_input.other")], default="alsa_input.other")
+    with patch("arctis_sound_manager.settings.GeneralSettings.read_from_file",
+               return_value=SimpleNamespace(
+                   micro_input_source="alsa_input.usb-HyperX.analog-stereo")):
+        assert _default_microphone(pulse) == "alsa_input.usb-HyperX.analog-stereo"

@@ -147,6 +147,10 @@ SONAR_MONITORS = [
 # default rather than naming a device that may be gone by the next login.
 NO_SONAR_TRACKS = [("game", "@DEFAULT_MONITOR@")]
 
+# The output of ASM's microphone chain (Micro EQ + noise suppression) — what
+# every application hears as "the microphone" while the daemon runs.
+PROCESSED_MIC_SOURCE = "effect_output.sonar-micro-eq"
+
 
 class ClipCaptureUnavailable(RuntimeError):
     """Raised when the machine cannot support clip capture at all."""
@@ -546,7 +550,18 @@ def _default_microphone(pulse) -> str | None:
     except Exception:
         chosen = None
 
-    sources = [s for s in pulse.source_list()
+    all_sources = list(pulse.source_list())
+    # ASM's own microphone chain comes first. Its output — Micro EQ, noise
+    # suppression, DeepFilterNet when enabled — is what Discord and every
+    # other app hear; recording the raw capture behind it put the room, the
+    # fans and the mic's own floor into every clip (a −47 dBFS floor on a
+    # DuoCast, heard as "an engine running") while the voice everyone else
+    # got was clean. The chain only exists while the daemon has a device,
+    # so the raw input stays as the fallback.
+    for source in all_sources:
+        if source.name == PROCESSED_MIC_SOURCE:
+            return source.name
+    sources = [s for s in all_sources
                if not s.name.endswith(".monitor")
                and s.proplist.get("device.class", "") != "monitor"
                and not s.name.startswith("effect_")]
