@@ -304,6 +304,7 @@ class ClipsPage(QWidget):
         super().__init__(parent)
         self._capture = None
         self._error: str | None = None
+        self._starting = False      # a start is in flight — see _start_capture
         # The editor that is up, if any — see _on_open_clip.
         self._editor = None
         self._editor_open = False
@@ -749,6 +750,20 @@ class ClipsPage(QWidget):
             self._stop_capture()
 
     def _start_capture(self) -> None:
+        # Re-entrancy guard. start() waits for the portal's answer in a
+        # nested GLib loop, and while the picker is on screen that loop
+        # keeps dispatching Qt timers — including the game poll, which saw
+        # no capture yet and started another. Three pickers, side by side,
+        # each unaware of the others.
+        if self._starting:
+            return
+        self._starting = True
+        try:
+            self._start_capture_inner()
+        finally:
+            self._starting = False
+
+    def _start_capture_inner(self) -> None:
         try:
             from arctis_sound_manager.clip_capture import (ClipCapture,
                                                            ClipCaptureUnavailable)
@@ -1028,7 +1043,7 @@ class ClipsPage(QWidget):
         Only the capture this started is stopped. Someone who pressed Start
         themselves gets to decide when it ends.
         """
-        if self._closing:
+        if self._closing or self._starting:
             return
 
         try:

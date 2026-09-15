@@ -107,3 +107,20 @@ def test_the_guard_is_released_when_the_editor_fails_to_build(monkeypatch):
     ClipsPage._on_open_clip(page, _item())
 
     assert page._editor_open is False
+
+
+def test_a_start_in_flight_is_not_started_again():
+    """start() waits for the portal in a nested GLib loop; the game poll fired
+    inside it, saw no capture, and opened another picker — three at once."""
+    page = MagicMock()
+    page._starting = False
+    calls = []
+
+    def inner():
+        calls.append(1)
+        ClipsPage._start_capture(page)      # the poll firing mid-start
+
+    page._start_capture_inner = inner
+    ClipsPage._start_capture(page)
+    assert calls == [1]
+    assert page._starting is False
