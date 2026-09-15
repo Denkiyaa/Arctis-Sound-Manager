@@ -246,6 +246,8 @@ class CoreEngine:
         self.media_mix = 100
         self.chat_mix = 100
         self._active_extra_dial_interfaces = []
+        # EIO streak per listened interface (see listen_endpoint_loop).
+        self._eio_counts: dict[int, int] = {}
         # Interfaces the profile names but this model does not expose. Kept so
         # the "no endpoint" warning is logged once per connection rather than
         # on every read attempt.
@@ -1329,9 +1331,19 @@ class CoreEngine:
                 # function to leave a matching target alone rather than
                 # report it as failed, so the fail-tick counter never
                 # escalates over it (B3, #180).
+                # Only while a cut can actually have happened: with
+                # headset_idle_off_minutes == 0 (observation only) nothing is
+                # ever released, and a disarmed tracker no longer tracks
+                # anything — in both cases a missing link is a real fault the
+                # hops must repair. Skipping on the bare state was how a
+                # tracker that disarmed while "idle" silenced the physical
+                # hop repair for the rest of the session: the headset
+                # power-cycled, its links dropped, and nobody put them back.
                 _physical_skip_targets = (
                     {device_state.get_physical_out_game(), device_state.get_physical_out_chat()}
-                    if _idle_tracker.state == "idle" else None
+                    if (_idle_tracker.state == "idle"
+                        and not _idle_tracker.disarmed
+                        and self._idle_off_minutes() > 0) else None
                 )
 
                 from arctis_sound_manager.sonar_to_pipewire import ensure_spatial_eq_links
@@ -1418,9 +1430,7 @@ class CoreEngine:
                 # settings file only while this is validated against real
                 # usage (settings.GeneralSettings.headset_idle_off_minutes).
                 try:
-                    idle_off_minutes = int(getattr(
-                        getattr(self, "general_settings", None),
-                        "headset_idle_off_minutes", 0) or 0)
+                    idle_off_minutes = self._idle_off_minutes()
                     if idle_off_minutes > 0:
                         _idle_tracker.idle_after_s = idle_off_minutes * 60
 
@@ -1475,6 +1485,15 @@ class CoreEngine:
                     self.logger.error("idle_detect: tick failed: %r", exc)
         except asyncio.CancelledError:
             raise
+
+    def _idle_off_minutes(self) -> int:
+        """The #180 opt-in: minutes of silence before the last hop is cut, 0 = never."""
+        try:
+            return int(getattr(
+                getattr(self, "general_settings", None),
+                "headset_idle_off_minutes", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _hop_result_ok(result) -> bool:
@@ -1776,7 +1795,7 @@ class CoreEngine:
             # milliseconds instead of every second or two (GameDAC 2 volume /
             # ChatMix responsiveness).
             read_input: list[int] = list(await asyncio.to_thread(usb_device.read, endpoint, max_packet_size, 1000))
-            self._eio_count = 0  # transfer succeeded, clear any EIO recovery state
+            self._eio_counts.pop(interface_id, None)  # this interface read fine again
             with self._device_lock:
                 if self.device_config is None:
                     return
@@ -1836,8 +1855,14 @@ class CoreEngine:
                     self._enodev_count = 0
                     self.on_device_disconnected(0, 0)
             elif e.errno == 5:  # EIO — interface got rebound by the kernel driver (usbhid)
-                self._eio_count = getattr(self, '_eio_count', 0) + 1
-                if self._eio_count == 1 or self._eio_count % 20 == 0:
+                # Counted per interface. One shared counter was reset by every
+                # successful read on the status interface, so a dial candidate
+                # that failed on every read never reached the recovery below
+                # and logged "×1" at each attempt instead — ~10 000 lines in
+                # three days, enough to rotate the journal within a day.
+                eio_count = self._eio_counts.get(interface_id, 0) + 1
+                self._eio_counts[interface_id] = eio_count
+                if eio_count == 1 or eio_count % 20 == 0:
                     # Naming the driver, not just "the kernel driver": once
                     # hid-steelseries exists (Linux 7.3+) this line is what
                     # tells "usbhid/hid-generic won the race again" apart
@@ -1845,10 +1870,10 @@ class CoreEngine:
                     # interface" — see INT-1 in docs/HARDWARE-QUESTIONS.md.
                     self.logger.warning(
                         'USB I/O error (errno 5 ×%d) on interface %d, currently held '
-                        'by driver=%s: %s', self._eio_count, interface_id,
+                        'by driver=%s: %s', eio_count, interface_id,
                         self._interface_kernel_driver(usb_device, interface_id), e)
                 await asyncio.sleep(0.5)
-                if self._eio_count == 10:
+                if eio_count == 10:
                     # ~5 s of consecutive EIO: try to reclaim the interface(s)
                     # from the kernel before giving up on this connection.
                     with self._device_lock:
@@ -1856,10 +1881,24 @@ class CoreEngine:
                     if usb_device is not None and device_config is not None:
                         self.logger.info('Re-acquiring USB interfaces after repeated EIO errors')
                         self.kernel_detach(usb_device, device_config)
-                elif self._eio_count >= 20:
-                    # Re-acquisition did not help: force a full reset.
+                elif eio_count >= 20 and interface_id in self._active_extra_dial_interfaces:
+                    # A dial *candidate* (listed for a sibling model, e.g. the
+                    # WoW Edition's interface 5) that the kernel driver keeps
+                    # and that never yields a dial frame is not worth a device
+                    # reset: the status interface is fine and audio is
+                    # playing. Stop scanning it for this connection; the next
+                    # connect starts the scan afresh.
+                    self.logger.warning(
+                        'Interface %d is not readable (EIO ×%d, held by driver=%s) — '
+                        'giving up on it as a dial candidate for this connection',
+                        interface_id, eio_count,
+                        self._interface_kernel_driver(usb_device, interface_id))
+                    self._active_extra_dial_interfaces = [
+                        i for i in self._active_extra_dial_interfaces if i != interface_id]
+                    self._eio_counts.pop(interface_id, None)
+                elif eio_count >= 20:
                     self.logger.warning('EIO persists after re-acquisition attempt, forcing device reset')
-                    self._eio_count = 0
+                    self._eio_counts.pop(interface_id, None)
                     self.on_device_disconnected(0, 0)
             else:
                 self._enodev_count = 0
