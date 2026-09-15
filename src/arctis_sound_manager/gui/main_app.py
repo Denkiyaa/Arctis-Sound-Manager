@@ -516,24 +516,27 @@ class QMainApp(QBaseDesktopApp):
         # Stop polling: the answer cannot change back, and the banner is now
         # the only thing that matters until the user acts on it.
         self._staleness_timer.stop()
-        if not self.main_window.isVisible():
-            # Nobody is looking at a window, so there is nothing to ask:
-            # a tray running yesterday's code is exactly what an upgrade
-            # exists to end. Release what must not be inherited across the
-            # exec — the capture's portal session, the encoder — and come
-            # back on the new code, same pid, same tray slot.
-            self.logger.info("upgraded to %s under a closed window — restarting the tray",
-                             new_version)
-            shutdown = getattr(getattr(self, "_clips_page", None), "shutdown", None)
-            if shutdown is not None:
-                try:
-                    shutdown()
-                except Exception:  # noqa: BLE001
-                    self.logger.debug("clips page shutdown failed", exc_info=True)
-            from arctis_sound_manager.runtime_staleness import restart_gui
-            restart_gui()
-            return
-        self._home_page.on_restart_required(new_version)
+        # Restart on the new code, whatever is open. The banner used to wait
+        # for a click, and a tray running yesterday's code next to daemons
+        # already on today's is exactly the half-upgraded state an upgrade
+        # exists to end — the capture and the shortcut in particular are
+        # the tray's, and stayed on the old code for the whole session.
+        # Release what must not be inherited across the exec — the
+        # capture's portal session, the encoder — and come back on the
+        # code now on disk, same pid, same tray slot.
+        self.logger.info("upgraded to %s — restarting on the new code", new_version)
+        shutdown = getattr(getattr(self, "_clips_page", None), "shutdown", None)
+        if shutdown is not None:
+            try:
+                shutdown()
+            except Exception:  # noqa: BLE001
+                self.logger.debug("clips page shutdown failed", exc_info=True)
+        try:
+            self.main_window.close()
+        except Exception:  # noqa: BLE001
+            pass
+        from arctis_sound_manager.runtime_staleness import restart_gui
+        restart_gui()
 
     # ── Theme editor ──────────────────────────────────────────────────────────
 

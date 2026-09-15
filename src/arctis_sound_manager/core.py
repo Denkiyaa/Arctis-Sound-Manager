@@ -400,6 +400,9 @@ class CoreEngine:
         # threading.Timer callback (replay_device_settings runs on one, not
         # on the loop) run an async probe via run_coroutine_threadsafe.
         self._main_event_loop: asyncio.AbstractEventLoop | None = None
+        # Output devices muted for a chain rebuild, and the unmute timer.
+        self._hushed: set[str] = set()
+        self._hush_timer = None
 
         self.reload_device_configurations()
         self.usb_devices_monitor.register_on_connect(self.on_device_connected)
@@ -445,6 +448,102 @@ class CoreEngine:
         except OSError:
             return False
 
+    # How long the output devices stay muted after a chain rebuild. Long
+    # enough to cover the second rebuild that follows a device re-enumeration
+    # (~1.5 s later) and the link pass after it; short enough not to read as
+    # "no sound".
+    _REBUILD_HUSH_S = 3.0
+
+    def _hush_outputs_while_rebuilding(self, devices: set[str]) -> None:
+        """Mute the output devices for the length of a chain rebuild.
+
+        Tearing the loopbacks and filter chains down and building them again
+        is not silent: for a few seconds every link is renegotiated and what
+        reaches the device is bursts of crackle — on a Bluetooth headset, five
+        seconds of it, on every daemon start and every device event. Nothing
+        useful plays in that window, so the devices are muted for it and
+        unmuted once it has settled. Only devices that were not already
+        muted are touched, and only those are unmuted afterwards. A rebuild
+        landing inside the window just extends it.
+        """
+        try:
+            from arctis_sound_manager.sonar_to_pipewire import _load_channel_outputs
+            devices = set(devices) | {v for v in _load_channel_outputs().values()
+                                      if isinstance(v, str) and v}
+        except Exception:  # noqa: BLE001
+            pass
+        devices.discard("")
+        if not devices:
+            return
+        # Engines built without __init__ (tests, tooling) have no state yet.
+        if not hasattr(self, "_hushed"):
+            self._hushed, self._hush_timer = set(), None
+        newly: set[str] = set()
+        for dev in devices:
+            if dev in self._hushed:
+                continue
+            try:
+                muted = subprocess.run(["pactl", "get-sink-mute", dev],
+                                       capture_output=True, text=True, timeout=2).stdout
+                if "yes" in muted:
+                    continue
+                subprocess.run(["pactl", "set-sink-mute", dev, "1"],
+                               capture_output=True, timeout=2)
+                newly.add(dev)
+            except Exception:  # noqa: BLE001 — a device we cannot mute plays the crackle
+                continue
+        self._hushed |= newly
+        if not self._hushed:
+            return
+        if self._hush_timer is not None:
+            self._hush_timer.cancel()
+        loop = self._main_event_loop
+        if loop is None:
+            self._unhush_outputs()
+            return
+        self._hush_timer = loop.call_later(self._REBUILD_HUSH_S, self._unhush_outputs)
+
+    def _hush_outputs_for_shutdown(self) -> None:
+        """Tearing the chain down on the way out crackles just like building
+        it. This process will not be around to unmute, so the unmute is left
+        to a detached shell that fires after the window; a daemon starting in
+        the meantime mutes again for its own rebuild and unmutes after."""
+        if not hasattr(self, "_hushed"):
+            self._hushed, self._hush_timer = set(), None
+        if self._hush_timer is not None:
+            self._hush_timer.cancel()
+            self._hush_timer = None
+        try:
+            devices = {device_state.get_physical_out_game(),
+                       device_state.get_physical_out_chat()}
+        except Exception:  # noqa: BLE001
+            devices = set()
+        self._hush_outputs_while_rebuilding(devices)
+        hushed, self._hushed = self._hushed, set()
+        if self._hush_timer is not None:
+            self._hush_timer.cancel()
+            self._hush_timer = None
+        for dev in hushed:
+            try:
+                subprocess.Popen(
+                    ["sh", "-c", f"sleep {self._REBUILD_HUSH_S}; pactl set-sink-mute '{dev}' 0"],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, start_new_session=True)
+            except Exception:  # noqa: BLE001
+                self.logger.warning("could not schedule the unmute of %s", dev)
+
+    def _unhush_outputs(self) -> None:
+        self._hush_timer = None
+        hushed, self._hushed = getattr(self, "_hushed", set()), set()
+        for dev in hushed:
+            try:
+                subprocess.run(["pactl", "set-sink-mute", dev, "0"],
+                               capture_output=True, timeout=2)
+            except Exception:  # noqa: BLE001
+                self.logger.warning("could not unmute %s after the rebuild", dev)
+        if hushed:
+            self.logger.info("chain rebuilt — outputs unmuted: %s", ", ".join(sorted(hushed)))
+
     def setup_loopbacks(self) -> None:
         """Create or recreate the Arctis virtual loopbacks for the current mode.
 
@@ -480,6 +579,7 @@ class CoreEngine:
         # minutes after it comes back, silently skipped even though its process
         # is brand new.
         self._device_session_id += 1
+        self._hush_outputs_while_rebuilding({physical_game, physical_chat})
         try:
             self.loopback_manager.recreate_all(specs)
             self.logger.info(
@@ -1742,6 +1842,7 @@ class CoreEngine:
         self.logger.info("Stopping CoreEngine...")
         self._stopping = True
         self.usb_devices_monitor.stop()
+        self._hush_outputs_for_shutdown()
         # Honor "redirect on disconnect" *before* tearing down the loopbacks.
         # redirect_audio_on_disconnect() only fires when the current default is
         # still an Arctis-owned sink (its guard); once stop_all() removes the
