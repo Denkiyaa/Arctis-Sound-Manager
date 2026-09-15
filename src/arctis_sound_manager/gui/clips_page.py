@@ -1024,6 +1024,24 @@ class ClipsPage(QWidget):
         self._error = None
         self._update_status()
 
+    def _rebuild_if_sources_recreated(self) -> None:
+        """The daemon rebuilt the channel sinks under a running capture:
+        build the capture again on the new ones, or every channel but the
+        mic records silence from here on."""
+        capture = self._capture
+        if capture is None or not getattr(capture, "audio_sources_changed", lambda: False)():
+            return
+        try:
+            logger.info("audio sources were recreated — rebuilding the capture on them")
+            capture.restart()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not rebuild the capture on the new sources: %s", exc)
+            self._error = str(exc)
+            self._stop_capture()
+            return
+        self._error = None
+        self._update_status()
+
     def _poll_game(self) -> None:
         """Start the capture when a game shows up, drop it when the game goes.
 
@@ -1061,6 +1079,7 @@ class ClipsPage(QWidget):
         self._last_detected_game = game
 
         self._rebuild_once_sonar_is_up()
+        self._rebuild_if_sources_recreated()
 
         if not self._autostart.isChecked():
             return

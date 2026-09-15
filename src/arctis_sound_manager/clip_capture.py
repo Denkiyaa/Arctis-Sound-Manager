@@ -462,6 +462,19 @@ def resolve_audio_sources() -> list[tuple[str, str]]:
     return _unique_tracks(tracks) or list(NO_SONAR_TRACKS)
 
 
+def audio_source_ids(names: list[str]) -> dict[str, int | None]:
+    """PipeWire node id per source name — the thing that changes when a
+    monitor is torn down and built again under the same name. None for a
+    name that is not there (or an alias like @DEFAULT_MONITOR@)."""
+    try:
+        import pulsectl
+        with pulsectl.Pulse("asm-clip-source-ids") as pulse:
+            by_name = {s.name: s.index for s in pulse.source_list()}
+    except Exception:  # noqa: BLE001 — no answer is "unchanged"
+        return {n: None for n in names}
+    return {n: by_name.get(n) for n in names}
+
+
 def sonar_sinks_present() -> bool:
     """Whether any of the Sonar channels exist right now."""
     try:
@@ -950,6 +963,7 @@ class ClipCapture:
         convert = self._convert_chain[self._convert_index]
 
         self.audio_tracks = resolve_audio_sources()
+        self._source_ids = audio_source_ids([src for _, src in self.audio_tracks])
         log.info("audio tracks: %s", ", ".join(n for n, _ in self.audio_tracks) or "none")
 
         # No `video/x-raw` filter and no forced framerate here. Naming plain
@@ -1196,6 +1210,20 @@ class ClipCapture:
     @property
     def ready_s(self) -> float:
         return self.buffer.ready_s()
+
+    def audio_sources_changed(self) -> bool:
+        """Whether any source this capture records from has been recreated.
+
+        The Sonar channels are pw-loopback nodes the daemon tears down and
+        builds again — on a device event, a settings change, and (as it
+        turns out) whenever the GUI starts. A pulsesrc bound to the old
+        monitor is not moved to the new one: it stays connected to nothing
+        and records silence, and the clip comes out with the mic and
+        nothing else. Compared by node id, which is what changes.
+        """
+        current = audio_source_ids([src for _, src in self.audio_tracks])
+        return any(current.get(name) != node
+                   for name, node in self._source_ids.items() if node is not None)
 
     @property
     def recording_without_sonar(self) -> bool:

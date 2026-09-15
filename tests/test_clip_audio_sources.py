@@ -229,3 +229,32 @@ def test_capture_knows_when_it_started_without_sonar():
     assert capture.recording_without_sonar is True
     capture.audio_tracks = [("game", "Arctis_Game.monitor"), ("mic", "m")]
     assert capture.recording_without_sonar is False
+
+
+def test_capture_notices_its_sources_being_recreated(monkeypatch):
+    """The daemon rebuilds the channel loopbacks (on a device event, a
+    settings change, a GUI start). A pulsesrc bound to the old monitor is
+    left recording silence; the capture has to notice and rebuild."""
+    from arctis_sound_manager import clip_capture
+    from arctis_sound_manager.clip_capture import ClipCapture
+    capture = ClipCapture.__new__(ClipCapture)
+    capture.audio_tracks = [("game", "Arctis_Game.monitor"), ("mic", "mic_src")]
+    capture._source_ids = {"Arctis_Game.monitor": 41, "mic_src": 7}
+
+    monkeypatch.setattr(clip_capture, "audio_source_ids",
+                        lambda names: {"Arctis_Game.monitor": 41, "mic_src": 7})
+    assert capture.audio_sources_changed() is False
+
+    monkeypatch.setattr(clip_capture, "audio_source_ids",
+                        lambda names: {"Arctis_Game.monitor": 99, "mic_src": 7})
+    assert capture.audio_sources_changed() is True
+
+
+def test_a_source_that_was_never_there_does_not_count_as_changed(monkeypatch):
+    from arctis_sound_manager import clip_capture
+    from arctis_sound_manager.clip_capture import ClipCapture
+    capture = ClipCapture.__new__(ClipCapture)
+    capture.audio_tracks = [("game", "@DEFAULT_MONITOR@")]
+    capture._source_ids = {"@DEFAULT_MONITOR@": None}
+    monkeypatch.setattr(clip_capture, "audio_source_ids", lambda names: {"@DEFAULT_MONITOR@": None})
+    assert capture.audio_sources_changed() is False
