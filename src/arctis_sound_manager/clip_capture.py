@@ -142,6 +142,11 @@ SONAR_MONITORS = [
     ("media", "Arctis_Media.monitor"),
 ]
 
+# What is recorded when no Sonar channel exists: the system output, once.
+# PulseAudio's own alias for "the default sink's monitor", so it follows the
+# default rather than naming a device that may be gone by the next login.
+NO_SONAR_TRACKS = [("game", "@DEFAULT_MONITOR@")]
+
 
 class ClipCaptureUnavailable(RuntimeError):
     """Raised when the machine cannot support clip capture at all."""
@@ -400,11 +405,20 @@ def resolve_audio_sources() -> list[tuple[str, str]]:
 
     The non-Sonar sinks are what covers a game left on the headset directly or
     on a Bluetooth headset, where the Sonar monitors would genuinely be silent.
+
+    When none of the Sonar channels exist yet — the daemon has not built them,
+    which is the normal state of a capture autostarted at login — the answer
+    is one track on whatever the system is playing through, never the Sonar
+    names on faith. A monitor that does not exist is not an error to
+    PipeWire: ``pulsesrc device=Arctis_Game.monitor`` quietly opens the
+    default source instead, so "game", "chat" and "media" came out as three
+    byte-identical copies of the headset's full mix. Summed back together in
+    the editor and on export, three copies is +9.5 dB — every clip clipped.
     """
     try:
         import pulsectl
     except ImportError:
-        return list(SONAR_MONITORS)
+        return list(NO_SONAR_TRACKS)
 
     sonar = {name for _, m in SONAR_MONITORS for name in (m.removesuffix(".monitor"),)}
     tracks: list[tuple[str, str]] = []
@@ -429,6 +443,9 @@ def resolve_audio_sources() -> list[tuple[str, str]]:
                 tracks.append((_track_label(sorted(set(names))[0]),
                                sink.name + ".monitor"))
 
+            if not tracks:
+                tracks += list(NO_SONAR_TRACKS)
+
             # The microphone is always its own track. Per-channel game/chat
             # separation depends on those apps being routed through the Sonar
             # channels, which a user listening on Bluetooth earbuds is not doing
@@ -440,9 +457,20 @@ def resolve_audio_sources() -> list[tuple[str, str]]:
                 tracks.append(("mic", mic))
     except Exception as exc:
         log.warning("could not resolve audio sources: %s", exc)
-        return list(SONAR_MONITORS)
+        return list(NO_SONAR_TRACKS)
 
-    return _unique_tracks(tracks) or list(SONAR_MONITORS)
+    return _unique_tracks(tracks) or list(NO_SONAR_TRACKS)
+
+
+def sonar_sinks_present() -> bool:
+    """Whether any of the Sonar channels exist right now."""
+    try:
+        import pulsectl
+        with pulsectl.Pulse("asm-clip-sonar-check") as pulse:
+            present = {s.name for s in pulse.sink_list()}
+    except Exception:  # noqa: BLE001 — no answer is "no"
+        return False
+    return any(m.removesuffix(".monitor") in present for _, m in SONAR_MONITORS)
 
 
 def _track_label(app_name: str) -> str:
@@ -1151,6 +1179,17 @@ class ClipCapture:
     @property
     def ready_s(self) -> float:
         return self.buffer.ready_s()
+
+    @property
+    def recording_without_sonar(self) -> bool:
+        """True when no Sonar channel was there to record when this started.
+
+        The page polls this: a capture autostarted at login is built before
+        the daemon has its channels up, and the only way to get game/chat/
+        media as separate tracks is to build it again once they exist.
+        """
+        sources = {source for _, source in self.audio_tracks}
+        return not any(monitor in sources for _, monitor in SONAR_MONITORS)
 
     @property
     def fps(self) -> float:

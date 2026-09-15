@@ -948,6 +948,33 @@ class ClipsPage(QWidget):
         if on:
             self._poll_game()
 
+    def _rebuild_once_sonar_is_up(self) -> None:
+        """A capture that started before the Sonar channels existed is built
+        again the moment they do.
+
+        At login the tray comes up alongside the daemon, and the capture is
+        wired before Arctis_Game/Chat/Media are there to record; it then holds
+        one track of the system output for as long as it runs. Rebuilding
+        costs the buffer, which at that point holds nothing worth keeping, and
+        no portal prompt — start() reuses the restore token.
+        """
+        capture = self._capture
+        if capture is None or not getattr(capture, "recording_without_sonar", False):
+            return
+        try:
+            from arctis_sound_manager.clip_capture import sonar_sinks_present
+            if not sonar_sinks_present():
+                return
+            logger.info("Sonar channels are up — rebuilding the capture with them")
+            capture.restart()
+        except Exception as exc:  # noqa: BLE001 — a failed rebuild must not kill the page
+            logger.warning("could not rebuild the capture on the Sonar channels: %s", exc)
+            self._error = str(exc)
+            self._stop_capture()
+            return
+        self._error = None
+        self._update_status()
+
     def _poll_game(self) -> None:
         """Start the capture when a game shows up, drop it when the game goes.
 
@@ -983,6 +1010,8 @@ class ClipsPage(QWidget):
         # runs here, on the slow timer that exists for exactly this, whether or
         # not autostart is on: the label is shown either way.
         self._last_detected_game = game
+
+        self._rebuild_once_sonar_is_up()
 
         if not self._autostart.isChecked():
             return

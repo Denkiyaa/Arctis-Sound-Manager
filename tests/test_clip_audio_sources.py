@@ -195,3 +195,37 @@ def test_two_sinks_running_the_same_app_do_not_collide():
 def test_the_mic_is_its_own_track():
     tracks = _resolve(SONAR_SINKS, [], mic="alsa_input.usb-HyperX")
     assert tracks[-1] == ("mic", "alsa_input.usb-HyperX")
+
+
+# ── no Sonar at all ───────────────────────────────────────────────────────────
+#
+# Seen in a clip: game, chat and media byte-identical. The capture had started
+# at login, before the daemon built the Sonar sinks, and fell back to asking
+# for the three monitors by name. PipeWire does not refuse a source that does
+# not exist — it hands over the default one — so all three recorded the
+# headset's full mix, and the editor then summed the copies: +9.5 dB.
+
+def test_no_sonar_records_the_system_output_once():
+    tracks = _resolve([_sink(9, "alsa_output.headset")], [])
+    assert tracks == [("game", "@DEFAULT_MONITOR@")]
+
+
+def test_no_sonar_never_asks_for_monitors_that_do_not_exist():
+    tracks = _resolve([], [], mic="mic_source")
+    assert [src for _, src in tracks] == ["@DEFAULT_MONITOR@", "mic_source"]
+
+
+def test_a_pulse_failure_does_not_invent_sonar_monitors():
+    from arctis_sound_manager import clip_capture
+    with patch("pulsectl.Pulse", side_effect=RuntimeError("no server")):
+        tracks = clip_capture.resolve_audio_sources()
+    assert tracks == [("game", "@DEFAULT_MONITOR@")]
+
+
+def test_capture_knows_when_it_started_without_sonar():
+    from arctis_sound_manager.clip_capture import ClipCapture
+    capture = ClipCapture.__new__(ClipCapture)
+    capture.audio_tracks = [("game", "@DEFAULT_MONITOR@"), ("mic", "m")]
+    assert capture.recording_without_sonar is True
+    capture.audio_tracks = [("game", "Arctis_Game.monitor"), ("mic", "m")]
+    assert capture.recording_without_sonar is False
