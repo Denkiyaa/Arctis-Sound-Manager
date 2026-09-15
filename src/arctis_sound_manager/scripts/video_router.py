@@ -22,7 +22,8 @@ from arctis_sound_manager.constants import (DBUS_BUS_NAME,
                                             DBUS_STATUS_INTERFACE_NAME,
                                             DBUS_STATUS_OBJECT_PATH)
 from arctis_sound_manager.power_status import HeadsetPower, extract_power_status
-from arctis_sound_manager.pw_utils import app_override_key, get_native_streams, move_native_stream
+from arctis_sound_manager.pw_utils import (app_override_key, get_native_streams,
+                                           is_asm_internal_stream, move_native_stream)
 
 from arctis_sound_manager.log_setup import configure_logging
 configure_logging(default=logging.INFO, fmt="[%(levelname)s] %(message)s")
@@ -402,8 +403,15 @@ def _prune_dead_overrides(overrides: dict, present_sinks=()) -> tuple[dict, list
     needs to fail both a structural and a liveness test before it is dropped.
     """
     present = set(present_sinks)
+    # An entry *keyed* by one of ASM's own chain nodes is not a choice
+    # anyone made — it is the node.name fallback (#243) having mistaken the
+    # filter chain for an application, and re-applying it either sends the
+    # chain to whatever device WirePlumber last picked or, for the output
+    # EQ, feeds the end of the chain back into its start. Dropped on sight,
+    # so an install that already learned them heals on the next tick.
     dead_keys = [key for key, target in overrides.items()
-                if _is_dead_override_target(target, present)]
+                 if is_asm_internal_stream(key)
+                 or _is_dead_override_target(target, present)]
     if not dead_keys:
         return overrides, []
     pruned = {key: target for key, target in overrides.items()
