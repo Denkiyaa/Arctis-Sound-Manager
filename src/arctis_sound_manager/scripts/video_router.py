@@ -531,6 +531,15 @@ def ensure_card_profile(pulse: pulsectl.Pulse) -> bool:
     return True
 
 
+def _dont_reconnect(props: dict) -> bool:
+    """Whether a stream carries node.dont-reconnect (PipeWire's "leave my
+    target alone" flag), in any of the spellings pw-dump hands back."""
+    value = props.get("node.dont-reconnect", False)
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return bool(value)
+
+
 def _explicit_pin_target(props: dict, sink_map: dict) -> str | None:
     """Return the foreign virtual sink a stream is explicitly pinned to, or None.
 
@@ -945,6 +954,15 @@ def _process_tick(pulse: pulsectl.Pulse) -> None:
         app = s["app_name"]
         binary = s.get("props", {}).get("application.process.binary", "")
         key = app_override_key(app, binary)
+
+        # A stream that asked not to be reconnected cannot be moved: the
+        # session manager ignores target.node for it. plasmashell's volume
+        # feedback is one (node.dont-reconnect=true, pinned to the device
+        # sink). Writing the target anyway meant trying again every tick for
+        # ever — each attempt a graph renegotiation, audible on Bluetooth as
+        # a burst of crackle — with the stream never moving an inch.
+        if _dont_reconnect(s.get("props", {})):
+            continue
 
         # Same foreign-virtual-sink pin guard as the PA pass above, including
         # the "only undo our own displacement" rule.

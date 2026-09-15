@@ -1053,3 +1053,14 @@ def test_overrides_keyed_by_asm_chain_nodes_are_pruned():
     assert set(dropped) == {"effect_output.sonar-output-eq",
                             "effect_output.virtual-surround-7.1-hesuvi",
                             "Arctis_Game_sink_out"}
+
+
+def test_dont_reconnect_streams_are_left_alone():
+    """plasmashell's volume feedback carries node.dont-reconnect=true and is
+    pinned to the device sink; WirePlumber ignores target.node for it, so the
+    router tried to move it every tick for ever — a graph renegotiation each
+    time, heard on Bluetooth as a burst of crackle."""
+    assert video_router._dont_reconnect({"node.dont-reconnect": "true"}) is True
+    assert video_router._dont_reconnect({"node.dont-reconnect": True}) is True
+    assert video_router._dont_reconnect({"node.dont-reconnect": "false"}) is False
+    assert video_router._dont_reconnect({}) is False

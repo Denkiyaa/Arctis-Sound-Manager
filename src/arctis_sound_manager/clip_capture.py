@@ -1154,10 +1154,8 @@ class ClipCapture:
         The buffer is cleared because its timestamps belong to the pipeline
         that produced them.
         """
-        Gst = self._Gst
         if self.pipeline is not None:
-            self.pipeline.set_state(Gst.State.NULL)
-            self.pipeline = None
+            self._release_pipeline()
         self.buffer.clear()
         self.caps.clear()
         self._pts_offset.clear()
@@ -1166,10 +1164,29 @@ class ClipCapture:
         self.portal = None
         self.start()
 
+    def _release_pipeline(self) -> None:
+        """Take the pipeline down without hearing from it on the way.
+
+        The bus watch comes off first. Tearing a pipeline down emits bus
+        messages, and with the watch still attached those reached
+        _on_bus_message *during* the teardown — an ERROR there calls
+        restart(), which builds a new capture inside stop(), and at process
+        exit the callback fired from GLib into Python objects already being
+        finalised: a SIGSEGV in _gi on every Exit, which also left the tray
+        icon registered with nobody behind it.
+        """
+        pipeline, self.pipeline = self.pipeline, None
+        try:
+            bus = pipeline.get_bus()
+            if bus is not None:
+                bus.remove_signal_watch()
+        except Exception:  # noqa: BLE001 — a bus we cannot detach still gets NULL'd
+            log.debug("could not detach the bus watch", exc_info=True)
+        pipeline.set_state(self._Gst.State.NULL)
+
     def stop(self) -> None:
         if self.pipeline is not None:
-            self.pipeline.set_state(self._Gst.State.NULL)
-            self.pipeline = None
+            self._release_pipeline()
         if self.portal is not None:
             # Closed, not just dropped — otherwise the session outlives the
             # capture and the compositor keeps showing it as recording.

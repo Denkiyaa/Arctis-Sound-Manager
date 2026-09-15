@@ -541,6 +541,16 @@ def main():
 
     asyncio.run(q_object.start())
 
+    # Leave without running the interpreter's teardown. Everything that
+    # matters was closed by sig_stop (capture, portal session, D-Bus, the
+    # single-instance server); what remains is GObject state — GStreamer,
+    # Gio proxies — whose GLib signals kept firing into Python objects
+    # mid-finalisation and crashed the process in _gi on every Exit. A
+    # crash there is not cosmetic: the tray icon stays registered with
+    # nobody behind it, and the compositor's end of the screencast is cut.
+    logging.shutdown()
+    os._exit(0)
+
 
 if __name__ == '__main__':
     main()
