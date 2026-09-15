@@ -292,6 +292,9 @@ class ClipsPage(QWidget):
         super().__init__(parent)
         self._capture = None
         self._error: str | None = None
+        # The editor that is up, if any — see _on_open_clip.
+        self._editor = None
+        self._editor_open = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 20, 24, 20)
@@ -1395,14 +1398,30 @@ class ClipsPage(QWidget):
         path = item.data(Qt.ItemDataRole.UserRole)
         if not path:
             return
+        # One editor at a time. Building one is not instant — it probes the
+        # file with ffprobe before it can show anything — and every extra
+        # double-click that lands in that gap is still queued when exec()
+        # starts its nested event loop, so each one used to open another
+        # editor on top of the first. The editor being up is what refuses
+        # them; the flag is only so the check does not depend on Qt having
+        # shown the window yet.
+        if self._editor_open:
+            if self._editor is not None:
+                self._editor.raise_()
+                self._editor.activateWindow()
+            return
+        self._editor_open = True
         try:
             from arctis_sound_manager.gui.clip_editor import ClipEditor
-            editor = ClipEditor(Path(path), self)
-            editor.exec()
+            self._editor = ClipEditor(Path(path), self)
+            self._editor.exec()
             self.refresh_clips()     # an export lands next to the original
         except Exception:
             logger.exception("could not open the clip editor")
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        finally:
+            self._editor = None
+            self._editor_open = False
 
     # ── status ────────────────────────────────────────────────────────────────
 
