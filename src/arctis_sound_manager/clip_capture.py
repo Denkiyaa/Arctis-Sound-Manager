@@ -57,6 +57,12 @@ TOKEN_FILE = CONFIG_DIR / "clip_screencast_token.json"
 # imported at ASM start-up.
 from arctis_sound_manager.clip_library import clip_dir
 
+# How long a portal request may wait for its Response — long enough for a
+# person to find the window in the picker, short enough that a dismissed
+# picker does not hold the capture start (and the page's start guard) for
+# the rest of the session.
+PORTAL_RESPONSE_TIMEOUT_S = 120
+
 PORTAL = "org.freedesktop.portal.Desktop"
 PORTAL_PATH = "/org/freedesktop/portal/desktop"
 SCREENCAST = "org.freedesktop.portal.ScreenCast"
@@ -717,6 +723,13 @@ class ScreenCastPortal:
             PORTAL, "org.freedesktop.portal.Request", "Response", req_path, None,
             Gio.DBusSignalFlags.NONE,
             lambda *a: (setattr(self, "_result", a[-1].unpack()), loop.quit()))
+        # A Response that never comes must not hold the page for ever. The
+        # picker can be dismissed in ways that emit nothing, and while this
+        # loop runs the page's start guard is up: every Start press and
+        # every autostart is refused, with the window looking perfectly
+        # alive. Give up after the window a person needs to pick, and let
+        # the caller report a failed start.
+        GLib.timeout_add_seconds(PORTAL_RESPONSE_TIMEOUT_S, lambda: (loop.quit(), False)[1])
         try:
             # handle_token must go in with the other options: an a{sv} needs
             # every value to be a GLib.Variant, and patching it in afterwards
@@ -730,6 +743,10 @@ class ScreenCastPortal:
         finally:
             self.bus.signal_unsubscribe(sub)
 
+        if self._result is None:
+            raise ClipCaptureUnavailable(
+                f"{method}: no answer from the portal in {PORTAL_RESPONSE_TIMEOUT_S}s "
+                "(picker dismissed?)")
         code, results = self._result  # type: ignore[misc]
         if code != 0:
             raise ClipCaptureUnavailable(
