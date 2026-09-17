@@ -1482,19 +1482,6 @@ class ClipCapture:
         log.info("clip saved: %s (%.1fs, %d tracks, %.1f MB%s)",
                  path, actual, len(order), size / (1024 * 1024),
                  f", {game}" if game else "")
-        # Track names beside the clip as well as inside it. The container now
-        # carries them (see _finish_matroska), but the sidecar is what the
-        # editor reads first: it also holds the game and the measured duration,
-        # it needs no ffprobe to read, and it survives an export or a re-encode
-        # by some other tool dropping the tags.
-        try:
-            path.with_suffix(".tracks.json").write_text(json.dumps({
-                "tracks": order,
-                "game": game,
-                "seconds": round(actual, 2),
-            }, indent=2))
-        except OSError as exc:
-            log.debug("could not write the track sidecar: %s", exc)
 
         announce_clip(path, actual, game)
         return path

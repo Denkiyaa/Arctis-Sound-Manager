@@ -216,18 +216,6 @@ def probe_tracks(path: Path) -> list[str]:
     Falls back to positional labels when ffprobe is unavailable or the file
     carries no titles — the editor still needs one row per track.
     """
-    # ASM writes the real channel names beside the clip when it saves one;
-    # the container itself has no titles, so ffprobe alone can only ever answer
-    # "Audio" for every track.
-    sidecar = path.with_suffix(".tracks.json")
-    try:
-        import json
-        names = json.loads(sidecar.read_text()).get("tracks")
-        if isinstance(names, list) and names:
-            return [str(n) for n in names if n != "video"]
-    except (OSError, ValueError):
-        pass
-
     ffprobe = shutil.which("ffprobe")
     if ffprobe is None:
         return []
