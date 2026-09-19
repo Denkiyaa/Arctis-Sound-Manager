@@ -214,6 +214,7 @@ class _ChannelMixer:
         self._parent = parent
         self._players: list = []
         self._outputs: list = []
+        self._positions: list[int] = []
 
     @property
     def ready(self) -> bool:
@@ -228,15 +229,19 @@ class _ChannelMixer:
 
         self.release()
         device = preview_output_device()
-        for path in files:
+        for index, path in enumerate(files):
             player = QMediaPlayer(self._parent)
             output = QAudioOutput(self._parent)
             if device is not None:
                 output.setDevice(device)
             player.setAudioOutput(output)
             player.setSource(QUrl.fromLocalFile(str(path)))
+            # Remembered from the signal rather than read back: see resync.
+            player.positionChanged.connect(
+                lambda ms, i=index: self._positions.__setitem__(i, ms))
             self._players.append(player)
             self._outputs.append(output)
+            self._positions.append(0)
         return bool(self._players)
 
     def set_level(self, index: int, volume: float, muted: bool) -> None:
@@ -261,9 +266,18 @@ class _ChannelMixer:
             player.stop()
 
     def resync(self, ms: int) -> None:
-        """Pull back any channel that has wandered away from the video."""
-        for player in self._players:
-            if abs(player.position() - ms) > _SYNC_TOLERANCE_MS:
+        """Pull back any channel that has wandered away from the video.
+
+        The positions compared are the ones the players last reported, not
+        `player.position()`: on the ffmpeg backend every such call is a
+        blocking round trip into the playback thread, made here on every
+        position tick of the video — and with the audio device stalled
+        underneath (a Bluetooth sink in error, a channel sink being rebuilt)
+        that thread never answers and the whole GUI hangs on it. Reading the
+        cached value costs nothing and only seeks when a channel has drifted.
+        """
+        for index, player in enumerate(self._players):
+            if abs(self._positions[index] - ms) > _SYNC_TOLERANCE_MS:
                 player.setPosition(ms)
 
     def release(self) -> None:
@@ -272,6 +286,7 @@ class _ChannelMixer:
             player.setSource(QUrl())
         self._players.clear()
         self._outputs.clear()
+        self._positions.clear()
 
 
 # ── channel strips ────────────────────────────────────────────────────────────
@@ -476,6 +491,11 @@ class ClipEditor(QDialog):
         # the first frame without the clip starting up on its own.
         self._player.play()
         self._player.pause()
+        # Kept from the signal so _on_position never asks the player — see
+        # _ChannelMixer.resync for why a query per tick is a hang waiting to
+        # happen.
+        self._playing = False
+        self._player.playbackStateChanged.connect(self._on_playback_state)
         self._player.positionChanged.connect(self._on_position)
         self._player.durationChanged.connect(self._on_media_duration)
         return video
@@ -521,11 +541,12 @@ class ClipEditor(QDialog):
             self._mixer.pause()
             self._seek(band.start_s)
 
-    def _is_playing(self) -> bool:
+    def _on_playback_state(self, state) -> None:
         from PySide6.QtMultimedia import QMediaPlayer as _QMP
-        player = getattr(self, "_player", None)
-        return (player is not None
-                and player.playbackState() == _QMP.PlaybackState.PlayingState)
+        self._playing = state == _QMP.PlaybackState.PlayingState
+
+    def _is_playing(self) -> bool:
+        return getattr(self, "_playing", False)
 
     # ── trim ──────────────────────────────────────────────────────────────────
 
