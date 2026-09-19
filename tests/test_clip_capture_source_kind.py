@@ -95,8 +95,9 @@ def _portal(saved_token: str | None = None) -> tuple[ScreenCastPortal, dict]:
         return {}
 
     portal._call = _call
-    portal._load_token = lambda: saved_token
-    portal._save_token = lambda token: recorded.setdefault("saved", token)
+    portal._load_token = lambda window=False: saved_token
+    portal._save_token = lambda token, window=False: recorded.setdefault(
+        "saved", (token, window))
     return portal, recorded
 
 
@@ -158,3 +159,29 @@ def test_capture_window_setting_round_trips():
     loaded.write_to_file()
 
     assert settings_mod.GeneralSettings.read_from_file().clips_capture_window is True
+
+
+def test_token_from_the_other_source_kind_is_not_replayed(tmp_path, monkeypatch):
+    """A window token replayed in screen mode restores the window — and once
+    that window is gone, the picker on every launch. The kind is stored with
+    the token and a mismatch reads as "no token"."""
+    from arctis_sound_manager import clip_capture as cc
+    monkeypatch.setattr(cc, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(cc, "TOKEN_FILE", tmp_path / "tok.json")
+
+    cc.ScreenCastPortal._save_token("win-token", window=True)
+
+    assert cc.ScreenCastPortal._load_token(window=True) == "win-token"
+    assert cc.ScreenCastPortal._load_token(window=False) is None
+
+
+def test_legacy_token_file_is_not_trusted(tmp_path, monkeypatch):
+    """A file written before the kind was recorded could be either — the
+    window-default builds minted window tokens into it — so it is dropped
+    for both, and the picker asked once for the right thing."""
+    from arctis_sound_manager import clip_capture as cc
+    monkeypatch.setattr(cc, "TOKEN_FILE", tmp_path / "tok.json")
+    (tmp_path / "tok.json").write_text('{"restore_token": "old"}')
+
+    assert cc.ScreenCastPortal._load_token(window=False) is None
+    assert cc.ScreenCastPortal._load_token(window=True) is None

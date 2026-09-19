@@ -779,14 +779,14 @@ class ScreenCastPortal:
             "cursor_mode": GLib.Variant("u", 2),
             "persist_mode": GLib.Variant("u", 2),
         }
-        if (saved := self._load_token()):
+        if (saved := self._load_token(window)):
             select["restore_token"] = GLib.Variant("s", saved)
 
         self._call("SelectSources", "(oa{sv})", (self.session,), select)
         res = self._call("Start", "(osa{sv})", (self.session, ""), {})
 
         if res.get("restore_token"):
-            self._save_token(res["restore_token"])
+            self._save_token(res["restore_token"], window)
 
         streams = res.get("streams") or []
         if not streams:
@@ -843,17 +843,34 @@ class ScreenCastPortal:
         TOKEN_FILE.unlink(missing_ok=True)
 
     @staticmethod
-    def _load_token() -> str | None:
+    def _load_token(window: bool = False) -> str | None:
+        """The saved token, if it was granted for the kind of source asked for.
+
+        A token names what was picked, and the portal restores *that* — a
+        token from a window pick replayed in screen mode brings back the
+        window, not a screen, and once that window is gone the picker comes
+        up on every game launch. That is how switching the default back to
+        screen capture left a window token on disk still being replayed:
+        forget() only runs when the setting is changed from the page. So the
+        kind is stored beside the token, and a token for the other kind is
+        ignored (and the picker asked once, for the right thing).
+        """
         try:
-            return json.loads(TOKEN_FILE.read_text()).get("restore_token")
+            saved = json.loads(TOKEN_FILE.read_text())
         except Exception:
             return None
+        # A file with no kind was written by a build that could have minted
+        # it for either; it is not trusted, at the cost of one picker.
+        if "window" not in saved or bool(saved["window"]) != bool(window):
+            return None
+        return saved.get("restore_token")
 
     @staticmethod
-    def _save_token(token: str) -> None:
+    def _save_token(token: str, window: bool = False) -> None:
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            TOKEN_FILE.write_text(json.dumps({"restore_token": token}))
+            TOKEN_FILE.write_text(json.dumps(
+                {"restore_token": token, "window": bool(window)}))
         except OSError as exc:
             log.warning("could not persist the screencast token: %s", exc)
 
