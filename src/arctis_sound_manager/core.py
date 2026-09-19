@@ -1098,6 +1098,11 @@ class CoreEngine:
         _idle_tracker = idle_detect.IdleTracker()
         _idle_disarmed_logged = False
 
+        from arctis_sound_manager.bt_reconnect import BluetoothReconnector
+        from arctis_sound_manager.pw_utils import pw_node_exists
+        from arctis_sound_manager.sonar_to_pipewire import _load_channel_outputs
+        _bt_reconnect = BluetoothReconnector()
+
         try:
             while not self._stopping:
                 await asyncio.sleep(_WATCHDOG_INTERVAL)
@@ -1108,6 +1113,17 @@ class CoreEngine:
                     continue
 
                 now = time.monotonic()
+
+                # A Bluetooth output that dropped out of the graph while BlueZ
+                # still has it paired is asked back, so a channel routed to
+                # earbuds does not sit on the headset until the user notices
+                # and reconnects by hand.
+                try:
+                    _bt_reconnect.tick(
+                        _load_channel_outputs(),
+                        lambda n: pw_node_exists(n), now)
+                except Exception:  # noqa: BLE001 — never let this stop the watchdog
+                    self.logger.debug("bluetooth reconnect tick failed", exc_info=True)
 
                 # New device session → the anti-flap history describes processes
                 # that no longer exist. Drop it, so a channel that was cooling

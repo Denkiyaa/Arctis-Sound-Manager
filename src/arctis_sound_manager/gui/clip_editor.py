@@ -24,7 +24,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QThread, QUrl, Signal
+from PySide6.QtCore import QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -903,13 +903,36 @@ class ClipEditor(QDialog):
 
     def closeEvent(self, event) -> None:
         self._remember()
+        # Only pause here. stop() on the ffmpeg backend is a blocking call
+        # into the playback thread, and made from inside the window's close
+        # handling it has deadlocked — the GUI thread waiting on a latch the
+        # playback thread will only release once the GUI thread renders the
+        # frame it is holding — and the app had to be killed. The window is
+        # let go of first; the players are torn down on the next turn of the
+        # event loop, in _release_players, with nothing else on the stack.
         player = getattr(self, "_player", None)
         if player is not None:
-            player.stop()
-        self._mixer.release()
+            player.pause()
+        self._mixer.pause()
         for worker in (self._worker, self._prep_worker):
             if worker is not None and worker.isRunning():
                 worker.wait(2000)
+        super().closeEvent(event)
+        QTimer.singleShot(0, self._release_players)
+
+    def _release_players(self) -> None:
+        """Stop and unload the players once the window is gone."""
+        player = getattr(self, "_player", None)
+        if player is not None:
+            try:
+                player.setVideoOutput(None)
+                player.stop()
+                player.setSource(QUrl())
+            except Exception:  # noqa: BLE001 — the window is already closed
+                logger.debug("video player did not release cleanly", exc_info=True)
+        try:
+            self._mixer.release()
+        except Exception:  # noqa: BLE001
+            logger.debug("mixer did not release cleanly", exc_info=True)
         # The split channels are only good for this dialog's lifetime.
         shutil.rmtree(self._workdir, ignore_errors=True)
-        super().closeEvent(event)
