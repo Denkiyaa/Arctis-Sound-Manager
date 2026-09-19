@@ -778,6 +778,32 @@ class QSystrayApp(QBaseDesktopApp):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             QTimer.singleShot(0, self.open_main_window)
 
+    def _ensure_main_app(self):
+        """The one main window, built at most once.
+
+        `hasattr(self, '_main_app')` alone was not a guard: the attribute is
+        only set once QMainApp() returns, and building it takes seconds during
+        which Qt keeps processing events. A tray click or a "show" from a
+        second asm-gui landing in that gap saw no window and built another —
+        two windows, two Clips pages, two rolling captures, two Alt+F bindings
+        saving to the same file name (one truncating the other into a
+        one-second clip), and a capture nobody could stop because only the
+        last-assigned window was reachable from here. So the build is fenced by
+        a flag, and a caller that arrives mid-build gets None and must come
+        back once the build is done.
+        """
+        app = getattr(self, '_main_app', None)
+        if app is not None:
+            return app
+        if getattr(self, '_building_main_app', False):
+            return None
+        self._building_main_app = True
+        try:
+            self._main_app = QMainApp(self.app, self.logger.level)
+        finally:
+            self._building_main_app = False
+        return self._main_app
+
     def arm_background_pages(self) -> None:
         """Build the main window, hidden, when a page has work to do while
         the window is closed — today that is Clips (global shortcut, rolling
@@ -790,15 +816,21 @@ class QSystrayApp(QBaseDesktopApp):
                 return
         except Exception:  # noqa: BLE001 — no answer means no Clips
             return
-        self._main_app = QMainApp(self.app, self.logger.level)
+        self._ensure_main_app()
 
     def open_main_window(self):
-        if not hasattr(self, '_main_app'):
-            self._main_app = QMainApp(self.app, self.logger.level)
+        app = self._ensure_main_app()
+        if app is None:
+            # Asked while the window is still being built (see
+            # _ensure_main_app). Show it once that finishes rather than build
+            # a second one.
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(200, self.open_main_window)
+            return
 
-        self._main_app.main_window.show()
-        self._main_app.main_window.raise_()
-        self._main_app.main_window.activateWindow()
+        app.main_window.show()
+        app.main_window.raise_()
+        app.main_window.activateWindow()
 
     def import_preset_url(self, url: str) -> None:
         """Handle an arctis-asm:// deep link — dispatch to the preset or theme import flow."""

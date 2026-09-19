@@ -94,6 +94,7 @@ _NOT_A_GAME = {
     "webrtc voiceengine",
     # The rest of the desktop's own noise, which is never the subject of a clip.
     "asm", "arctis", "notification", "notifications", "canberra", "libcanberra",
+    "kded", "kded6", "kwin", "kwin_wayland", "xdg-desktop-portal",
 }
 
 
