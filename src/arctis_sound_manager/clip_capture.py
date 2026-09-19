@@ -325,8 +325,32 @@ def _process_environ(pid: int) -> str:
         return ""       # not ours to read; only a hint is lost
 
 
-def detect_game() -> str | None:
+# PulseAudio's "no sink": a stream that exists but is connected to nothing.
+_PA_INVALID_INDEX = 0xFFFFFFFF
+
+
+def _is_audible(si) -> bool:
+    """Whether a stream is actually delivering audio somewhere.
+
+    Corked streams and streams with no sink are apps that opened a playback
+    connection and are not using it — a slicer, a launcher, a paused player.
+    They used to count, and the capture armed itself (picker and all) for a
+    3D-printing app that had never made a sound.
+    """
+    if getattr(si, "corked", False):
+        return False
+    return getattr(si, "sink", _PA_INVALID_INDEX) != _PA_INVALID_INDEX
+
+
+def detect_game(strict: bool = False) -> str | None:
     """Name the app a clip is most likely about, for labelling it.
+
+    With ``strict`` only the positive rules answer — a stream the user put on
+    the Game channel, or one running under a game runtime. The last-resort
+    guess ("a playback stream that is not obviously not a game") is fine for
+    naming a clip, where a wrong word costs nothing, and wrong for arming the
+    capture, where it costs a portal picker in the user's face for whatever
+    unlisted app happened to open an audio stream.
 
     This is a *name for the clip*, not the screen being captured. What is on
     screen was chosen in the portal picker and Wayland never tells us what it
@@ -365,7 +389,7 @@ def detect_game() -> str | None:
 
     try:
         with pulsectl.Pulse("asm-clip-detect") as pulse:
-            streams = pulse.sink_input_list()
+            streams = [si for si in pulse.sink_input_list() if _is_audible(si)]
 
             # 0. Whatever the user routed to the Game channel.
             game_sinks = {
@@ -391,6 +415,8 @@ def detect_game() -> str | None:
                         return name
 
             # 2. Fall back to "a playback stream that is not obviously not a game".
+            if strict:
+                return None
             for si in streams:
                 name = label(si)
                 if name and not _is_not_a_game(name):

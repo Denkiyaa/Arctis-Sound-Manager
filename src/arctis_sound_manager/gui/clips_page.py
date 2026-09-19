@@ -1066,7 +1066,9 @@ class ClipsPage(QWidget):
 
         try:
             from arctis_sound_manager.clip_capture import detect_game
-            game = detect_game()
+            # strict: this decides whether to arm the capture, and arming
+            # can mean a portal picker — a guess is not good enough for that.
+            game = detect_game(strict=True)
         except Exception:  # noqa: BLE001 — a probe failure is not worth the page
             logger.debug("could not look for a game", exc_info=True)
             return
