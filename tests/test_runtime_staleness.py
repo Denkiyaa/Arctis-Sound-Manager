@@ -150,3 +150,41 @@ def test_same_version_and_same_files_is_not_an_upgrade(monkeypatch):
     monkeypatch.setattr(rs, "RUNNING_STAMP", 1000.0)
     monkeypatch.setattr(rs, "_package_stamp", lambda: 1000.0)
     assert rs.upgraded_under_us() is None
+
+
+def test_restart_request_reaches_a_listening_gui(monkeypatch, tmp_path):
+    """`asm-gui --restart` from a package scriptlet must land on the running
+    GUI's single-instance socket without Qt — the scriptlet runs as the user
+    with no display. The listener here stands in for QLocalServer."""
+    import socket
+    import threading
+
+    path = tmp_path / "gui.sock"
+    monkeypatch.setattr(rs, "gui_socket_path", lambda: str(path))
+    received: list[bytes] = []
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    listener.listen(1)
+
+    def serve():
+        conn, _ = listener.accept()
+        with conn:
+            received.append(conn.recv(64))
+            conn.sendall(b"ok")
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    try:
+        assert rs.request_gui_restart(timeout=5.0) is True
+        t.join(5.0)
+    finally:
+        listener.close()
+    assert received == [rs.GUI_RESTART_COMMAND]
+
+
+def test_restart_request_with_no_gui_is_not_an_error(monkeypatch, tmp_path):
+    """Nothing listening is the common case on a headless upgrade: report it
+    as "nobody to restart", never raise into the package transaction."""
+    monkeypatch.setattr(rs, "gui_socket_path", lambda: str(tmp_path / "absent.sock"))
+    assert rs.request_gui_restart(timeout=1.0) is False

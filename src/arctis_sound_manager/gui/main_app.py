@@ -513,18 +513,26 @@ class QMainApp(QBaseDesktopApp):
         new_version = upgraded_under_us()
         if not new_version:
             return
-        # Stop polling: the answer cannot change back, and the banner is now
-        # the only thing that matters until the user acts on it.
+        self.restart_on_new_code(f"upgraded to {new_version}")
+
+    def restart_on_new_code(self, reason: str) -> None:
+        """Replace this process with one running the code now on disk.
+
+        Reached from the staleness poll above and from the package scriptlet
+        knocking on the single-instance socket (`asm-gui --restart`). Restart
+        whatever is open: the banner used to wait for a click, and a tray
+        running yesterday's code next to daemons already on today's is
+        exactly the half-upgraded state an upgrade exists to end — the
+        capture and the shortcut in particular are the tray's, and stayed on
+        the old code for the whole session. Release what must not be
+        inherited across the exec — the capture's portal session, the
+        encoder — and come back on the code now on disk, same pid, same
+        tray slot.
+        """
+        # Stop polling: the answer cannot change back, and this restart is
+        # the only thing that matters now.
         self._staleness_timer.stop()
-        # Restart on the new code, whatever is open. The banner used to wait
-        # for a click, and a tray running yesterday's code next to daemons
-        # already on today's is exactly the half-upgraded state an upgrade
-        # exists to end — the capture and the shortcut in particular are
-        # the tray's, and stayed on the old code for the whole session.
-        # Release what must not be inherited across the exec — the
-        # capture's portal session, the encoder — and come back on the
-        # code now on disk, same pid, same tray slot.
-        self.logger.info("upgraded to %s — restarting on the new code", new_version)
+        self.logger.info("%s — restarting on the new code", reason)
         shutdown = getattr(getattr(self, "_clips_page", None), "shutdown", None)
         if shutdown is not None:
             try:

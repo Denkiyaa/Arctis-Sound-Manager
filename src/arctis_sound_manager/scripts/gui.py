@@ -128,7 +128,12 @@ def _import_qt_or_exit():
         sys.exit(3)
 
 
-_SERVER_NAME = "ArctisManagerGui"
+from arctis_sound_manager.runtime_staleness import (  # noqa: E402
+    GUI_RESTART_COMMAND,
+    GUI_SERVER_NAME,
+)
+
+_SERVER_NAME = GUI_SERVER_NAME
 
 # Basename of the installed desktop entry, without ".desktop". This is the
 # identity the XDG portals key their per-application state to — see where it is
@@ -199,9 +204,19 @@ def main():
                         help='Start systray without opening window (for autostart at login)')
     parser.add_argument('--verbose', '-v', action='count', default=0, help='Increase verbosity (up to -vvvv)')
     parser.add_argument('--no-enforce-systemd', action='store_true', help='Do not enforce systemd unit')
+    parser.add_argument('--restart', action='store_true',
+                        help='Ask the running GUI to restart on the code now on disk '
+                             '(used by package upgrades); starts nothing if none is running')
     parser.add_argument('url', nargs='?', default=None,
                         help='arctis-asm:// URL to handle (invoked by xdg-open)')
     args = parser.parse_args()
+
+    # Before Qt is even imported: this runs from a package scriptlet as the
+    # user, with no display to open. Exit 1 when no GUI answered so a human
+    # at the prompt can tell "restarted" from "nothing was running".
+    if args.restart:
+        from arctis_sound_manager.runtime_staleness import request_gui_restart
+        sys.exit(0 if request_gui_restart() else 1)
 
     # Default base level depends on -v flags (CRITICAL→…→DEBUG), but ARCTIS_LOG_LEVEL
     # always wins so users can crank verbosity for bug reports without restarting the GUI.
@@ -297,6 +312,11 @@ def main():
             elif data.startswith(b"url:"):
                 url = data[4:].decode(errors="replace")
                 q_object.import_preset_url(url)
+            elif data == GUI_RESTART_COMMAND:
+                # A package upgrade just landed (asm-gui --restart from its
+                # scriptlet). Same exec as the staleness poll, without the
+                # up-to-a-minute wait — and without depending on the poll.
+                q_object.restart_on_new_code("asked to by the package upgrade")
 
     server.newConnection.connect(_on_new_connection)
 

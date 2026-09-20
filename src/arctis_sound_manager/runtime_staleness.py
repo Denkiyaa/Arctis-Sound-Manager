@@ -13,10 +13,15 @@ still there, and reports it against a version number they are not running. The
 bug report says 1.2.14; the code answering the report is 1.2.12.
 
 Package scriptlets restart the user services (see
-``scripts/restart-user-services.sh``), but the GUI is commonly started by the
-desktop's autostart rather than systemd, and killing someone's open window from
-inside a package transaction would be rude. So the GUI checks for itself and
-offers.
+``scripts/restart-user-services.sh``). The GUI is commonly started by the
+desktop's autostart rather than systemd, so there is no unit for a scriptlet to
+restart, and killing it from root would run whatever exit path the old code
+has. Instead the scriptlet *asks*: `asm-gui --restart` knocks on the running
+instance's single-instance socket (:func:`request_gui_restart`) and the GUI
+replaces itself in place, the same way it does when its own poll
+(:func:`upgraded_under_us`) notices the upgrade. Two triggers for one exec:
+the poll alone left a tray on yesterday's code for a whole session when it
+did not fire, with the clip shortcut and the capture on it.
 """
 
 from __future__ import annotations
@@ -24,7 +29,9 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import socket
 import sys
+import tempfile
 
 from arctis_sound_manager import service_control as sc
 from arctis_sound_manager.utils import project_version
@@ -121,6 +128,45 @@ def restart_user_services() -> None:
         return
     if not sc.restart(*running, timeout=30):
         log.warning("Could not restart user services: %s", ", ".join(running))
+
+
+#: Name of the GUI's single-instance socket (scripts/gui.py listens on it
+#: through QLocalServer). Shared from here so the sender needs no Qt.
+GUI_SERVER_NAME = "ArctisManagerGui"
+
+#: What a sender writes to that socket to have the GUI exec itself on the
+#: code now on disk. The GUI answers "ok" once it has read it.
+GUI_RESTART_COMMAND = b"restart"
+
+
+def gui_socket_path() -> str:
+    """Where QLocalServer puts a socket named without a slash: the temp dir."""
+    return os.path.join(tempfile.gettempdir(), GUI_SERVER_NAME)
+
+
+def request_gui_restart(timeout: float = 5.0) -> bool:
+    """Ask the running GUI, if any, to restart on the code now on disk.
+
+    A plain Unix socket rather than QLocalSocket: this runs from a package
+    scriptlet as the user, with no display and no reason to import Qt. True
+    when a GUI was there to take the request; False when nothing listens,
+    which is not an error — there is simply nothing to restart.
+    """
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            sock.connect(gui_socket_path())
+            sock.sendall(GUI_RESTART_COMMAND)
+            # The reply only says it was picked up; the command is already in
+            # the GUI's buffer either way, so a slow answer is not a failure.
+            try:
+                sock.recv(16)
+            except OSError:
+                pass
+    except OSError as exc:
+        log.debug("no GUI to restart: %s", exc)
+        return False
+    return True
 
 
 def restart_gui() -> None:
