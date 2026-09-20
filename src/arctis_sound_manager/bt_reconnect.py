@@ -14,6 +14,15 @@ and it is gone from the graph while BlueZ says it is not connected, so a
 that connect (``Host is down``), so attempts back off — 15 s doubling to five
 minutes — and stop costing anything much. The backoff resets the moment the
 node is seen again.
+
+It also has to know when to stop. BlueZ cannot say whether a device went away
+because the transport failed or because the user pressed Disconnect, and the
+first version of this treated both the same — so the earbuds came back within
+seconds of being switched off on purpose, every time, "out of spite". The
+difference is visible from here, though: a transport failure happens once,
+and after the reconnect the device stays. A device that drops out again soon
+after this brought it back was sent away by someone, and is left alone until
+it is seen on the graph again — that is, until the user reconnects it.
 """
 
 from __future__ import annotations
@@ -32,6 +41,12 @@ _BLUEZ_NODE = re.compile(r"^bluez_output\.([0-9A-Fa-f]{2}(?:_[0-9A-Fa-f]{2}){5})
 BACKOFF_FIRST_S = 15.0
 BACKOFF_MAX_S = 300.0
 CONNECT_TIMEOUT_S = 20.0
+
+# A device that vanishes again this soon after a reconnect of ours was not lost
+# — it was disconnected. Long enough to cover the user reaching for the applet
+# after noticing the earbuds are back; short enough that a transport that fails
+# again an hour later still gets reconnected.
+DELIBERATE_WINDOW_S = 600.0
 
 
 def mac_of(node_name: str) -> str | None:
@@ -62,6 +77,12 @@ class BluetoothReconnector:
         self._delay: dict[str, float] = {}
         self._busy: set[str] = set()
         self._lock = threading.Lock()
+        # mac → when this reconnected it, while the node has not shown up yet
+        self._reconnected_at: dict[str, float] = {}
+        # mac → when this reconnected it, once the node was seen back
+        self._returned_at: dict[str, float] = {}
+        # Devices the user sent away after a reconnect; nothing until they return.
+        self._dismissed: set[str] = set()
 
     def tick(self, saved_outputs: dict[str, str], node_exists, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
@@ -70,10 +91,24 @@ class BluetoothReconnector:
             if mac is None:
                 continue
             if node_exists(node):
-                if mac in self._delay:
+                if mac in self._delay or mac in self._dismissed:
                     _log.info("bluetooth: %s is back on the graph", node)
                 self._delay.pop(mac, None)
                 self._next_try.pop(mac, None)
+                self._dismissed.discard(mac)
+                with self._lock:
+                    when = self._reconnected_at.pop(mac, None)
+                if when is not None:
+                    self._returned_at[mac] = when
+                continue
+            if mac in self._dismissed:
+                continue
+            since = self._returned_at.pop(mac, None)
+            if since is not None and now - since < DELIBERATE_WINDOW_S:
+                _log.info("bluetooth: %s dropped out %.0fs after being reconnected "
+                          "— taking that as deliberate, leaving it alone until "
+                          "it comes back on its own", node, now - since)
+                self._dismissed.add(mac)
                 continue
             if now < self._next_try.get(mac, 0.0):
                 continue
@@ -84,10 +119,10 @@ class BluetoothReconnector:
             delay = self._delay.get(mac, BACKOFF_FIRST_S)
             self._delay[mac] = min(delay * 2, BACKOFF_MAX_S)
             self._next_try[mac] = now + delay
-            threading.Thread(target=self._connect, args=(mac, node, delay),
+            threading.Thread(target=self._connect, args=(mac, node, delay, now),
                              name=f"bt-reconnect-{mac}", daemon=True).start()
 
-    def _connect(self, mac: str, node: str, delay: float) -> None:
+    def _connect(self, mac: str, node: str, delay: float, now: float) -> None:
         try:
             paired, connected = device_state(mac)
             if not paired or connected:
@@ -101,6 +136,8 @@ class BluetoothReconnector:
                 timeout=CONNECT_TIMEOUT_S, check=False)
             if "Connection successful" in res.stdout:
                 _log.info("bluetooth: %s reconnected", mac)
+                with self._lock:
+                    self._reconnected_at[mac] = now
             else:
                 tail = (res.stdout + res.stderr).strip().splitlines()[-1:]
                 _log.info("bluetooth: %s did not reconnect (%s) — next try in %.0fs",

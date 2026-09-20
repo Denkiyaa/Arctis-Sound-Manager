@@ -56,7 +56,10 @@ def test_attempts_back_off_and_reset_when_the_node_returns(monkeypatch):
     r.tick(saved, lambda n: False, now=40.0)
     assert sum(c[1] == "connect" for c in calls) == 2
     r.tick(saved, lambda n: True, now=41.0)       # back: backoff forgotten
-    r.tick(saved, lambda n: False, now=42.0)
+    # Gone again well outside the "sent away on purpose" window (see below):
+    # the first try is immediate, not the 60 s the backoff had reached.
+    later = 41.0 + br.DELIBERATE_WINDOW_S + 1
+    r.tick(saved, lambda n: False, now=later)
     assert sum(c[1] == "connect" for c in calls) == 3
 
 
@@ -74,3 +77,27 @@ def test_non_bluetooth_outputs_cost_nothing(monkeypatch):
     probed = []
     r.tick({"game": "alsa_output.x"}, lambda n: probed.append(n) or True, now=0.0)
     assert not calls and not probed
+
+
+def test_a_device_sent_away_after_a_reconnect_is_left_alone(monkeypatch):
+    r, calls = _reconnector(monkeypatch)
+    saved = {"chat": "bluez_output.30_96_10_49_54_E2.1"}
+    r.tick(saved, lambda n: False, now=0.0)       # transport failed: reconnect
+    assert sum(c[1] == "connect" for c in calls) == 1
+    r.tick(saved, lambda n: True, now=5.0)        # back
+    r.tick(saved, lambda n: False, now=60.0)      # the user pressed Disconnect
+    r.tick(saved, lambda n: False, now=120.0)
+    r.tick(saved, lambda n: False, now=900.0)
+    assert sum(c[1] == "connect" for c in calls) == 1
+    r.tick(saved, lambda n: True, now=1000.0)     # the user connected it again
+    r.tick(saved, lambda n: False, now=2000.0)    # much later: a failure again
+    assert sum(c[1] == "connect" for c in calls) == 2
+
+
+def test_a_drop_long_after_a_reconnect_is_still_a_failure(monkeypatch):
+    r, calls = _reconnector(monkeypatch)
+    saved = {"chat": "bluez_output.30_96_10_49_54_E2.1"}
+    r.tick(saved, lambda n: False, now=0.0)
+    r.tick(saved, lambda n: True, now=5.0)
+    r.tick(saved, lambda n: False, now=5.0 + br.DELIBERATE_WINDOW_S + 1)
+    assert sum(c[1] == "connect" for c in calls) == 2
