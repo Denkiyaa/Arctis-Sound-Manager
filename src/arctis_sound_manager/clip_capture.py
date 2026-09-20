@@ -56,6 +56,7 @@ TOKEN_FILE = CONFIG_DIR / "clip_screencast_token.json"
 # cheap (json/shutil/subprocess), which matters because this module is
 # imported at ASM start-up.
 from arctis_sound_manager.clip_library import clip_dir
+from arctis_sound_manager.pw_utils import CLIP_STREAM_PREFIX
 
 # How long a portal request may wait for its Response — long enough for a
 # person to find the window in the picker, short enough that a dismissed
@@ -157,6 +158,31 @@ NO_SONAR_TRACKS = [("game", "@DEFAULT_MONITOR@")]
 # The output of ASM's microphone chain (Micro EQ + noise suppression) — what
 # every application hears as "the microphone" while the daemon runs.
 PROCESSED_MIC_SOURCE = "effect_output.sonar-micro-eq"
+
+# What each capture stream calls itself on the PipeWire graph. Left to
+# pulsesrc, all of them were "python / Record Stream": four identical
+# entries in the mixer, and — worse — one identity to WirePlumber, which
+# remembers a stream's last target under `application.name` and re-applies
+# it. One stream ending up on Arctis_Game while the Sonar sinks were being
+# recreated taught it "python → Arctis_Game", and from then on the chat and
+# media tracks were byte-for-byte copies of game: Discord and music never
+# reached a clip again. A distinct application.id per track gives each its
+# own memory, and state.restore-target=false keeps that memory from ever
+# overriding the device we asked for (the loopbacks opt out the same way).
+#
+# The node.name prefix is what ASM's own media router keys on to leave these
+# alone: its capture pass moves any stream it finds reading a monitor onto
+# the Game monitor (#225), which is right for Steam's recorder and exactly
+# wrong for a recorder that reads each channel on purpose.
+CAPTURE_CLIENT_NAME = "Arctis Sound Manager"
+CAPTURE_APP_ID = "com.github.loteran.arctis-sound-manager.clip"
+
+
+def capture_stream_properties(track: str) -> str:
+    """The pulsesrc `stream-properties` structure for one audio track."""
+    return (f"props,application.id=(string){CAPTURE_APP_ID}.{track},"
+            f"node.name=(string){CLIP_STREAM_PREFIX}{track},"
+            f"state.restore-target=(string)false")
 
 
 class ClipCaptureUnavailable(RuntimeError):
@@ -1072,6 +1098,8 @@ class ClipCapture:
         for name, source in self.audio_tracks:
             parts.append(
                 f"pulsesrc device={source} provide-clock=false "
+                f'client-name="{CAPTURE_CLIENT_NAME}" '
+                f'stream-properties="{capture_stream_properties(name)}" '
                 f"! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2 "
                 f"! opusenc bitrate=128000 "
                 f"! appsink name=audio_{name} emit-signals=true sync=false "

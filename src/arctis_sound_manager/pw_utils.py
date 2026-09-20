@@ -892,7 +892,12 @@ def pw_node_exists(name: str, data: list | None = None) -> bool:
 # filter-chain outputs (effect_output.sonar-*-eq, effect_output.virtual-
 # surround-*) and the playback half of each channel loopback
 # (Arctis_<Channel>_sink_out). None of them carries application.name.
-_ASM_STREAM_PREFIXES = ("effect_output.", "effect_input.")
+# node.name prefix of the clip recorder's own capture streams (clip_capture
+# names them asm-clip-game/chat/media/mic). They are ASM reading its own
+# channels, one stream per channel by design — not a recorder to be steered.
+CLIP_STREAM_PREFIX = "asm-clip-"
+
+_ASM_STREAM_PREFIXES = ("effect_output.", "effect_input.", CLIP_STREAM_PREFIX)
 _ASM_STREAM_NAMES = frozenset(
     f"Arctis_{ch}_sink_out" for ch in ("Game", "Chat", "Media", "Aux"))
 
@@ -909,6 +914,11 @@ def is_asm_internal_stream(node_name: str) -> bool:
     start. Every clip and every game then stuttered, and cleaning the
     override file was the only way out. Mirrors home_page's
     ``_is_asm_internal_node`` for the mixer cards.
+
+    The clip recorder's capture streams are here too: the router's capture
+    pass (#225) steers every stream found reading a monitor onto the Game
+    monitor, and took the recorder's Chat and Media streams with it — every
+    clip then carried three copies of Game and no Discord or music at all.
     """
     return (node_name.startswith(_ASM_STREAM_PREFIXES)
             or node_name in _ASM_STREAM_NAMES)

@@ -640,6 +640,11 @@ def _route_capture_streams(pulse: pulsectl.Pulse,
         app = props.get("application.name", "")
         if not app:
             continue
+        # ASM's own clip recorder reads Game, Chat, Media and the mic as four
+        # streams, each on the channel it is named after. Herding them onto
+        # Game made every clip three copies of Game — Discord and music gone.
+        if is_asm_internal_stream(props.get("node.name", "")):
+            continue
 
         current = src_name.get(so.source, "")
         if not _is_monitor_source(current):

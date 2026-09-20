@@ -280,3 +280,54 @@ def test_without_the_chain_the_chosen_raw_input_still_wins():
                return_value=SimpleNamespace(
                    micro_input_source="alsa_input.usb-HyperX.analog-stereo")):
         assert _default_microphone(pulse) == "alsa_input.usb-HyperX.analog-stereo"
+
+
+def test_each_capture_stream_has_its_own_identity_on_the_graph():
+    """WirePlumber remembers a stream's last target under the first of
+    application.id / application.name / media.name / node.name it finds,
+    and re-applies it. Four pulsesrc streams that all say "python" share one
+    memory — one of them landing on Arctis_Game once made chat and media
+    record game forever. Each track needs its own application.id, and must
+    opt out of target restore so the memory can never override the device
+    it asked for."""
+    import pytest
+    gi = pytest.importorskip("gi")
+    gi.require_version("Gst", "1.0")
+    from gi.repository import Gst
+    from arctis_sound_manager.clip_capture import (
+        CAPTURE_APP_ID,
+        capture_stream_properties,
+    )
+    Gst.init(None)
+
+    chat = Gst.Structure.from_string(capture_stream_properties("chat"))[0]
+    media = Gst.Structure.from_string(capture_stream_properties("media"))[0]
+    assert chat.get_string("application.id") == f"{CAPTURE_APP_ID}.chat"
+    assert media.get_string("application.id") == f"{CAPTURE_APP_ID}.media"
+    assert chat.get_string("application.id") != media.get_string("application.id")
+    assert chat.get_string("node.name") == "asm-clip-chat"
+    assert chat.get_string("state.restore-target") == "false"
+
+
+def test_capture_pipeline_names_its_streams():
+    """The structure has to survive parse_launch's quoting: a pulsesrc built
+    from the pipeline string carries the client name and the per-track
+    properties, or the mixer shows four "python"s again."""
+    import pytest
+    gi = pytest.importorskip("gi")
+    gi.require_version("Gst", "1.0")
+    from gi.repository import Gst
+    Gst.init(None)
+    if Gst.ElementFactory.find("pulsesrc") is None:
+        pytest.skip("pulsesrc not available")
+    from arctis_sound_manager.clip_capture import (
+        CAPTURE_CLIENT_NAME,
+        capture_stream_properties,
+    )
+    desc = (f'pulsesrc name=a device=x client-name="{CAPTURE_CLIENT_NAME}" '
+            f'stream-properties="{capture_stream_properties("game")}" ! fakesink')
+    src = Gst.parse_launch(desc).get_by_name("a")
+    assert src.get_property("client-name") == CAPTURE_CLIENT_NAME
+    props = src.get_property("stream-properties")
+    assert props.get_string("node.name") == "asm-clip-game"
+    assert props.get_string("state.restore-target") == "false"
