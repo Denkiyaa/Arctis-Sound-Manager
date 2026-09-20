@@ -712,6 +712,9 @@ class ClipsPage(QWidget):
         broken, so it reports that state rather than doing nothing silently.
         """
         if self._capture is None:
+            # The window is behind a game when this happens; the log is the
+            # only place the press leaves a trace.
+            logger.warning("clip shortcut pressed, but the capture is off")
             self._status.setText(_tr(
                 "clips_shortcut_idle",
                 "Shortcut pressed, but capture is off — start it first."))
