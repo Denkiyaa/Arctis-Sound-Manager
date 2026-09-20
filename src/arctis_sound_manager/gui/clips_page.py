@@ -388,6 +388,21 @@ class ClipsPage(QWidget):
         self._save_btn.clicked.connect(self._on_save)
         actions.addWidget(self._save_btn)
 
+        # Up here with Start and Save, not in the settings under the gear.
+        # It sat beside the "Capture:" kind for a while, which was tidy and
+        # wrong: it is not a setting, it is the thing you reach for when the
+        # picker chose the wrong monitor or the game moved to another window
+        # — and it was found by nobody who went looking for it.
+        self._source_btn = QPushButton(_tr("clips_change_source", "Change source…"))
+        self._source_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._source_btn.setToolTip(_tr(
+            "clips_source_hint",
+            "Ask again which screen or window to record. The picker is shown "
+            "once and the answer is remembered, so this is the way to change "
+            "it."))
+        self._source_btn.clicked.connect(self._on_change_source)
+        actions.addWidget(self._source_btn)
+
         actions.addStretch(1)
 
         # Everything you set once, in one place, out of the way of the two
@@ -470,21 +485,12 @@ class ClipsPage(QWidget):
             "an exact rate when you export it."))
         _row("clips_fps", "Frame rate:", self._fps)
 
-        # What is being captured cannot be *shown* — the choice lives in the
-        # portal and Wayland never tells the app what was picked — so this
-        # offers the only honest thing: the way back to the picker.
-        self._source_btn = QPushButton(_tr("clips_change_source", "Change…"))
-        self._source_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._source_btn.setToolTip(_tr(
-            "clips_source_hint",
-            "Ask again which screen or window to record. The picker is shown "
-            "once and the answer is remembered, so this is the way to change "
-            "it."))
-        self._source_btn.clicked.connect(self._on_change_source)
-
-        # Which *kind* of source the picker is allowed to offer. This is not
-        # the same question as the button beside it: the button reopens the
-        # picker, this decides what the picker will have in it. Asking for a
+        # Which *kind* of source the picker is allowed to offer. What is being
+        # captured cannot be *shown* — the choice lives in the portal and
+        # Wayland never tells the app what was picked — so this is not that
+        # question; the "Change source…" button up in the actions row is the
+        # way back to the picker, and this decides what the picker will have
+        # in it. Asking for a
         # window narrows the portal to windows only, which is the only way to
         # keep a panel or an overlay out of a clip when the game is not
         # covering the screen — the app cannot crop what it was handed.
@@ -499,7 +505,7 @@ class ClipsPage(QWidget):
             "next game is a different window. A screen keeps working across "
             "games."))
         self._source_kind.currentIndexChanged.connect(self._on_source_kind_changed)
-        _row("clips_source", "Capture:", self._source_kind, self._source_btn)
+        _row("clips_source", "Capture:", self._source_kind)
 
         # Where clips land. Shown rather than assumed: the default follows the
         # desktop's own video folder, whatever it is called in the user's
