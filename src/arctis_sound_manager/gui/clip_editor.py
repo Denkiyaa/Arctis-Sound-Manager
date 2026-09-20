@@ -281,9 +281,18 @@ class _ChannelMixer:
                 player.setPosition(ms)
 
     def release(self) -> None:
+        """Let the players go — by deletion, never by stop()/setSource().
+
+        See ClipEditor._release_players for why: a stop from Python holds
+        the GIL while it waits on the playback thread, and that thread needs
+        the GIL to tear its renderer down. The players go first and their
+        outputs after, in that order, so no renderer is left pointing at an
+        output that is already gone.
+        """
         for player in self._players:
-            player.stop()
-            player.setSource(QUrl())
+            player.deleteLater()
+        for output in self._outputs:
+            output.deleteLater()
         self._players.clear()
         self._outputs.clear()
         self._positions.clear()
@@ -495,6 +504,7 @@ class ClipEditor(QDialog):
         # _ChannelMixer.resync for why a query per tick is a hang waiting to
         # happen.
         self._playing = False
+        self._position = 0
         self._player.playbackStateChanged.connect(self._on_playback_state)
         self._player.positionChanged.connect(self._on_position)
         self._player.durationChanged.connect(self._on_media_duration)
@@ -511,7 +521,9 @@ class ClipEditor(QDialog):
         # Play the selection. Starting from wherever the playhead was left —
         # usually outside the trim — plays the part being thrown away.
         band = getattr(self, "_band", None)
-        position = player.position()
+        # The last reported position, not player.position(): that is one
+        # more blocking round trip into the playback thread (see resync).
+        position = self._position
         if band is not None and not (band.start_s <= position / 1000.0 < band.end_s):
             position = int(band.start_s * 1000)
             player.setPosition(position)
@@ -528,6 +540,7 @@ class ClipEditor(QDialog):
         self._mixer.seek(ms)
 
     def _on_position(self, ms: int) -> None:
+        self._position = ms
         band = getattr(self, "_band", None)
         if band is not None:
             band.set_position(ms / 1000.0)
@@ -942,15 +955,33 @@ class ClipEditor(QDialog):
         QTimer.singleShot(0, self._release_players)
 
     def _release_players(self) -> None:
-        """Stop and unload the players once the window is gone."""
+        """Let go of the players once the window is gone.
+
+        Deleted, not stopped. This used to call stop() and setSource(QUrl())
+        here, on the next turn of the loop, and that was the third hang out
+        of this file — a core dump finally showed the shape of all of them.
+        Every call from Python into the ffmpeg backend is a blocking round
+        trip into a playback thread, made while this thread holds the GIL.
+        The playback thread, meanwhile, was tearing down its audio renderer,
+        and ~QObject cutting the renderer's connections calls
+        disconnectNotify() on the sender — our QAudioOutput, a Python-made
+        object, so shiboken looks for a Python override, which needs the
+        GIL. Each side waits for the other, for good.
+
+        deleteLater() runs the destructor from the event loop with no Python
+        frame on the stack and the GIL released, so the playback thread gets
+        what it needs while ~QMediaPlayer waits for it. The outputs are
+        deleted after the players, in posting order, so the renderer is gone
+        before the output it listens to.
+        """
         player = getattr(self, "_player", None)
         if player is not None:
-            try:
-                player.setVideoOutput(None)
-                player.stop()
-                player.setSource(QUrl())
-            except Exception:  # noqa: BLE001 — the window is already closed
-                logger.debug("video player did not release cleanly", exc_info=True)
+            player.deleteLater()
+            self._player = None
+        output = getattr(self, "_video_audio", None)
+        if output is not None:
+            output.deleteLater()
+            self._video_audio = None
         try:
             self._mixer.release()
         except Exception:  # noqa: BLE001

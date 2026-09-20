@@ -85,3 +85,24 @@ def test_preview_falls_back_to_the_default_without_a_media_channel(monkeypatch):
         def audioOutputs(): return []
     monkeypatch.setattr(qm, "QMediaDevices", _Devices)
     assert clip_editor.preview_output_device() is None
+
+
+def test_releasing_the_mixer_deletes_instead_of_stopping():
+    """stop()/setSource() from Python deadlock with the playback thread
+    over the GIL (see _release_players); deletion is the only safe way out."""
+    from arctis_sound_manager.gui.clip_editor import _ChannelMixer
+
+    class _Fake:
+        def __init__(self):
+            self.calls = []
+
+        def __getattr__(self, name):
+            return lambda *a: self.calls.append(name)
+
+    mixer = _ChannelMixer(None)
+    player, output = _Fake(), _Fake()
+    mixer._players, mixer._outputs, mixer._positions = [player], [output], [0]
+    mixer.release()
+    assert player.calls == ["deleteLater"]
+    assert output.calls == ["deleteLater"]
+    assert not mixer.ready
