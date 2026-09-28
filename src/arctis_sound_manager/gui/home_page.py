@@ -9,8 +9,10 @@ import json
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import (QMimeData, QPoint, QRect, QSize, Qt, QTimer, QUrl,
+                            Signal, Slot)
+from PySide6.QtGui import (QColor, QDesktopServices, QDrag, QIcon, QPainter, QPen,
+                           QPixmap)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -514,7 +516,7 @@ class AudioCard(QWidget):
 
         self._on_change_callback = None
         self._on_drop_callback = None  # fn(si_index, app_name, pid)
-        self.setAcceptDrops(False)
+        self.setAcceptDrops(True)
 
     # ── Style helpers ──────────────────────────────────────────────────────────
 
@@ -583,6 +585,29 @@ class AudioCard(QWidget):
 
     def set_on_drop(self, callback):
         self._on_drop_callback = callback
+
+    # Master has no callback and so takes nothing: it is a volume, not a
+    # place a stream can play.
+    def dragEnterEvent(self, event):
+        if self._on_drop_callback is not None and event.mimeData().hasFormat(_STREAM_MIME):
+            event.acceptProposedAction()
+            self.set_highlight(True)
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.set_highlight(False)
+
+    def dropEvent(self, event):
+        self.set_highlight(False)
+        stream = _stream_from_mime(event.mimeData())
+        if stream is None or self._on_drop_callback is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        # After the drag has returned, not inside it: the move talks to
+        # PulseAudio and must not run in the middle of Qt's drag loop.
+        QTimer.singleShot(0, lambda: self._on_drop_callback(*stream))
 
     def set_on_change(self, callback):
         self._on_change_callback = callback
@@ -737,6 +762,62 @@ class AudioCard(QWidget):
 
 _APP_ICON_SIZE = 22
 
+# An application dragged from a card or from "Other applications" onto a card.
+_STREAM_MIME = "application/x-asm-stream"
+
+
+def _stream_from_mime(mime: QMimeData) -> tuple[int, str, int] | None:
+    """(si_index, app_name, pid) carried by a drag, or None if it is not ours."""
+    if not mime.hasFormat(_STREAM_MIME):
+        return None
+    try:
+        data = json.loads(bytes(mime.data(_STREAM_MIME)).decode())
+        return int(data["si"]), str(data["app"]), int(data["pid"])
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+class _StreamDragSource:
+    """Mixin: start dragging an application once the mouse has moved far enough.
+
+    A click still opens the move menu; only a press followed by a real drag
+    becomes one. The mixer is rebuilt on a 500 ms poll, so ``dragging`` holds
+    the rebuilds off until the drop — deleting the widget a drag started from,
+    while Qt is still inside that drag, is a crash.
+    """
+    dragging = False
+
+    def _init_drag(self, si_index: int, app_name: str, pid: int, pixmap: QPixmap):
+        self._drag_stream = (si_index, app_name, pid)
+        self._drag_pixmap = pixmap
+        self._press_pos: QPoint | None = None
+
+    def _drag_press(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position().toPoint()
+
+    def _drag_move(self, event) -> bool:
+        """Start the drag if due. True when it ran, so the caller stops there."""
+        if (self._press_pos is None
+                or not event.buttons() & Qt.MouseButton.LeftButton
+                or (event.position().toPoint() - self._press_pos).manhattanLength()
+                < QApplication.startDragDistance()):
+            return False
+        self._press_pos = None
+        si, app, pid = self._drag_stream
+        mime = QMimeData()
+        mime.setData(_STREAM_MIME, json.dumps({"si": si, "app": app, "pid": pid}).encode())
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.setPixmap(self._drag_pixmap)
+        drag.setHotSpot(QPoint(self._drag_pixmap.width() // 2, self._drag_pixmap.height() // 2))
+        _StreamDragSource.dragging = True
+        try:
+            drag.exec(Qt.DropAction.MoveAction)
+        finally:
+            _StreamDragSource.dragging = False
+        return True
+
 
 def _app_pixmap(app_name: str, hint: tuple, color: str, size: int) -> QPixmap:
     """The application's icon, or its initial on a disc of *color* when no
@@ -766,7 +847,7 @@ def _app_pixmap(app_name: str, hint: tuple, color: str, size: int) -> QPixmap:
     return pixmap
 
 
-class _AppTag(QPushButton):
+class _AppTag(_StreamDragSource, QPushButton):
     """One application on a channel card, shown as its icon.
 
     The name is in the tooltip; clicking opens a menu of the channels the
@@ -798,6 +879,20 @@ class _AppTag(QPushButton):
             f"QPushButton:hover {{ background-color: {color}; }}"
         )
         self.clicked.connect(self._show_move_menu)
+        self._init_drag(si_index, app_name, pid,
+                        _app_pixmap(app_name, hint, color, _APP_ICON_SIZE))
+
+    def mousePressEvent(self, event):
+        self._drag_press(event)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_move(event):
+            # The drag swallowed the release: without this the button stays
+            # pressed, and no click — so no menu — follows a drag.
+            self.setDown(False)
+            return
+        super().mouseMoveEvent(event)
 
     def _show_move_menu(self) -> None:
         menu = QMenu(self)
@@ -887,7 +982,7 @@ class _FlowLayout(QLayout):
         return max(0, y - gap - rect.y())
 
 
-class _UnassignedRow(QWidget):
+class _UnassignedRow(_StreamDragSource, QWidget):
     """One application that is playing but is not on any ASM channel.
 
     Same move buttons as :class:`_AppTag`, plus two things that only make sense
@@ -965,6 +1060,19 @@ class _UnassignedRow(QWidget):
         btn_layout.addWidget(dismiss)
 
         layout.addWidget(btns)
+
+        # The buttons keep their own clicks; the rest of the row drags.
+        self._init_drag(si_index, app_name, pid,
+                        _app_pixmap(app_name, hint, color, _APP_ICON_SIZE))
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def mousePressEvent(self, event):
+        self._drag_press(event)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not self._drag_move(event):
+            super().mouseMoveEvent(event)
 
 
 # ── Toggle switch widget ────────────────────────────────────────────────────────
@@ -1362,6 +1470,7 @@ class HomePage(QWidget):
         # External output card (HDMI, sound card, USB speakers, etc.)
         self._ext_card = AudioCard(I18n.translate("ui", "output"), _theme.c("COLOR_HDMI"), HDMI_ICON)
         self._ext_card.set_on_change(self._on_ext_volume_changed)
+        self._ext_card.set_on_drop(self._on_stream_drop_ext)
         self._cards_layout.addWidget(self._ext_card, stretch=1)
 
         # EQ preset picker on every card but Master, keyed by Sonar channel
@@ -2348,7 +2457,7 @@ class HomePage(QWidget):
         listed three times after you closed it.
         """
         signature = tuple(rows)
-        if card._app_sig == signature:
+        if card._app_sig == signature or _StreamDragSource.dragging:
             return
         card.clear_apps()
         for app_name, si_index, pid, hint in rows:
@@ -2511,7 +2620,7 @@ class HomePage(QWidget):
         # whatever they are doing on top of it.
         signature = tuple((r["key"], r["label"], r["where"], r["si_index"], r["pid"])
                           for r in rows)
-        if signature == self._unassigned_sig:
+        if signature == self._unassigned_sig or _StreamDragSource.dragging:
             return
         self._unassigned_sig = signature
 
