@@ -32,6 +32,12 @@ logo: https://loteran.github.io/Arctis-Sound-Manager/images/asm-logo.png
 author: loteran
 lang: en
 
+# Proves ownership of the site to Google Search Console; jekyll-seo-tag renders
+# it as a <meta name="google-site-verification"> tag. Removing it unverifies
+# the property.
+webmaster_verifications:
+  google: kQGCVJbqHewF91E2jvoOVHhqxrr7HHZX1njhmKw-FQ0
+
 # Nothing is excluded on purpose. install.sh in particular MUST keep being
 # published: the documented one-liner is
 #   curl -fsSL https://loteran.github.io/Arctis-Sound-Manager/install.sh | bash
