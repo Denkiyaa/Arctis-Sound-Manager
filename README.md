@@ -23,7 +23,7 @@
 >
 > Not affected: AUR, COPR, PPA, PyPI users.
 
-A Linux GUI for SteelSeries Arctis headsets — device settings, 4-channel audio mixer (Game / Chat / Media / Output), automatic media routing, and a full **Sonar EQ** system powered by PipeWire filter-chain.
+The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Arctis headset on Linux** — device settings, 4-channel audio mixer (Game / Chat / Media / Output), automatic media routing, and a full **Sonar EQ** system powered by PipeWire filter-chain. New here? [What works on Linux out of the box, and what ASM adds](https://loteran.github.io/Arctis-Sound-Manager/steelseries-headset-linux.html).
 
 <p align="center">
   <a href="https://github.com/loteran/Arctis-Sound-Manager/blob/main/docs/images/asm-demo.mp4">

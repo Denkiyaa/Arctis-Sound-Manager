@@ -21,6 +21,9 @@ baseurl: /Arctis-Sound-Manager
 theme: jekyll-theme-primer
 plugins:
   - jekyll-seo-tag
+  # Publishes /sitemap.xml so search engines find every page, not just the
+  # ones something happens to link to. Submit it in Google Search Console.
+  - jekyll-sitemap
 
 # Used for the preview card when a link is shared. Absolute because Open Graph
 # consumers do not resolve relative paths.

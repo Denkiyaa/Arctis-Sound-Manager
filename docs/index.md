@@ -41,6 +41,8 @@ headset is listed with its USB Product ID.
 
 ## What it replaces
 
+- **[SteelSeries headset on Linux](steelseries-headset-linux.md)** — what works
+  out of the box, what needs GG, and which headsets are supported.
 - **[SteelSeries Sonar on Linux](steelseries-sonar-linux.md)** — what Sonar
   actually does, what is reproduced, and what is not.
 - **[Arctis ChatMix on Linux](arctis-chatmix-linux.md)** — why the dial does
