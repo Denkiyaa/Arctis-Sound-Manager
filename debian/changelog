@@ -1,3 +1,13 @@
+arctis-sound-manager (1.4.31-1) noble; urgency=medium
+
+  * asm-cli status shows the headset state: battery, power, mic and
+  * Drag an application onto a channel card to move it, from its icon on
+  * New documentation pages: SteelSeries headsets on Linux, one page per
+  * The Settings page was blank in generic device mode, including the
+  * Games that only name their audio stream by node (Stardew Valley launched
+
+ -- loteran <axel.valadon@gmail.com>  Tue, 29 Sep 2026 00:00:00 +0000
+
 arctis-sound-manager (1.4.30-1) noble; urgency=medium
 
   * Applications are shown as icons under each channel slider, centred
