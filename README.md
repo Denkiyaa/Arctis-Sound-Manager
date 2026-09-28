@@ -67,6 +67,7 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
     - [Importing a preset](#importing-a-preset)
     - [Community site — ASM Presets](#community-site--asm-presets)
   - [Controlling channels from a key](#controlling-channels-from-a-key)
+  - [Headset status in scripts and status bars](#headset-status-in-scripts-and-status-bars)
   - [Virtual surround 7.1](#virtual-surround-71)
   - [Themes](#themes)
     - [Custom themes](#custom-themes)
@@ -148,6 +149,7 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
 - **Check for updates** — in-app button forces an immediate GitHub check; installs via terminal (pacman / dnf / apt) or in-app wheel (pipx)
 - **One-click bug reports** — auto-uploads a full diagnostic as a GitHub gist and opens a pre-filled issue
 - **Built-in diagnostics** — `asm-daemon --verify-setup` and `asm-cli diagnose -o file.txt`
+- **Status for scripts and bars** — `asm-cli status --json` gives battery, power, mic and channel levels to Waybar, Polybar or any script ([details](#headset-status-in-scripts-and-status-bars))
 - **Themes** — 5 built-in color themes plus a custom theme editor with live preview; share your own on the [community site](https://loteran.github.io/asm-presets/) or import one in a click ([details](#themes))
 - **Community translations** — new languages from [Crowdin](https://crowdin.com/project/arctis-sound-manager) download automatically on startup, no release needed
 - **Help page** — built-in manual in English, French and Spanish
@@ -709,6 +711,42 @@ same on X11, Wayland, and any desktop.
 The volume is applied straight to PipeWire, so a bound key works whether or
 not the ASM window is open, and the new level is remembered the same way the
 sliders' are.
+
+---
+
+## Headset status in scripts and status bars
+
+`asm-cli status` prints the headset's state; `--json` makes it readable by
+Waybar, Polybar, i3blocks, desktop widgets or any script:
+
+```bash
+asm-cli status --json | jq .status.headset_battery_charge   # 90
+```
+
+```json
+{"schema": 1, "daemon": true,
+ "device": {"name": "Arctis Nova Pro Wireless", "vendor_id": "0x1038", "product_id": "0x12e0"},
+ "power": "on",
+ "status": {"headset_battery_charge": 90, "mic_status": "muted", "...": "..."},
+ "channels": {"game": {"present": true, "volume": 100, "muted": false}, "...": {}}}
+```
+
+- `power` is `on`, `off` or `unknown`, the same on every headset family.
+- `status` holds whatever your headset reports (battery, mic, ANC, base
+  station…), under the variable names of its profile.
+- The exit code is `1` when `asm-daemon` is not running; the JSON is printed
+  anyway, with `"daemon": false`.
+
+Example Waybar module showing the battery, hidden when the headset is off:
+
+```jsonc
+"custom/headset": {
+    "exec": "asm-cli status --json | jq -c 'if .power == \"on\" then {text: \"🎧 \\(.status.headset_battery_charge)%\", tooltip: .device.name} else {text: \"\"} end'",
+    "return-type": "json",
+    "interval": 30,
+    "on-click": "asm-gui"
+}
+```
 
 ---
 

@@ -642,6 +642,14 @@ def main():
         '--list', action='store_true',
         help='Show each channel with its current level instead of changing it')
 
+    # Status — the headset's state for scripts and status bars (Waybar,
+    # Polybar, i3blocks, desktop widgets): battery, power, mic, channel levels.
+    status_parser = subparsers.add_parser(
+        'status',
+        help='Show the headset state (battery, power, mic, channel levels)')
+    status_parser.add_argument('--json', action='store_true',
+                               help='Print machine-readable JSON (for scripts and status bars)')
+
     # USB reset / reenumerate (#238) — manual escalation when ChatMix stays
     # dead after a resume the automatic resume-time reset did not fix.
     usb_parser = subparsers.add_parser('usb', help='USB reset / re-enumeration tools')
@@ -675,6 +683,19 @@ def main():
             print(f'asm-cli volume: {exc}', file=sys.stderr)
             sys.exit(2)
         return
+
+    if args.command == 'status':
+        from arctis_sound_manager.status_report import collect_status, format_status
+        result = collect_status()
+        if args.json:
+            import json
+            print(json.dumps(result))
+        else:
+            print('\n'.join(format_status(result)))
+        # Non-zero when the daemon is down, so `asm-cli status && …` means
+        # something. The JSON is still printed: a bar module wants to show
+        # "daemon stopped", not an empty block.
+        sys.exit(0 if result['daemon'] else 1)
 
     if args.command == 'usb':
         from arctis_sound_manager.cli_tools import (
