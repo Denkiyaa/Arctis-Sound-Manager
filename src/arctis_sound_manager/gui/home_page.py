@@ -116,6 +116,7 @@ from arctis_sound_manager.power_status import HeadsetPower, normalize_power_valu
 from arctis_sound_manager.pw_utils import (
     app_override_key,
     get_native_streams,
+    is_asm_internal_stream,
     is_external_output_sink,
 )
 
@@ -2331,7 +2332,7 @@ class HomePage(QWidget):
         binary = binary.rsplit("/", 1)[-1]
         if binary:
             return binary[:1].upper() + binary[1:]
-        return name or "Audio"
+        return name or (proplist.get("node.name", "") or "").strip() or "Audio"
 
     def _apply_app_rows(self, card: "AudioCard", rows: list) -> None:
         """Draw a card's application tags, rebuilding only when they changed.
@@ -2449,10 +2450,18 @@ class HomePage(QWidget):
             if si.sink in on_cards:
                 continue
             props = si.proplist
-            app = props.get("application.name", "")
+            binary = props.get("application.process.binary", "")
+            node_name = props.get("node.name", "")
+            # Native PipeWire clients show up here too, and some never set
+            # application.name — SMAPI-launched Stardew Valley only carries
+            # node.name (#243, #289). Same fallback as get_native_streams(),
+            # or the stream stays invisible whenever the default output is
+            # not a channel.
+            if is_asm_internal_stream(node_name):
+                continue
+            app = props.get("application.name", "") or binary or node_name
             if not app:
                 continue
-            binary = props.get("application.process.binary", "")
             if binary in self._INTERNAL_BINARIES:
                 continue
             media = props.get("media.name", "")
@@ -2679,9 +2688,15 @@ class HomePage(QWidget):
             # "Chromium" (e.g. Vesktop and Pear Desktop) otherwise collide.
             si = next((x for x in pulse.sink_input_list() if x.index == si_index), None)
             if si is not None:
+                # Same identity fallback as get_native_streams(), which the
+                # router keys its lookup on. Falling back to the label saved
+                # "Dotnet" where the router looks for "dotnet" — a stream with
+                # no application.name (#289) forgot its channel every restart.
+                binary = si.proplist.get("application.process.binary", "")
                 key = app_override_key(
-                    si.proplist.get("application.name", "") or app_name,
-                    si.proplist.get("application.process.binary", ""),
+                    si.proplist.get("application.name", "") or binary
+                    or si.proplist.get("node.name", "") or app_name,
+                    binary,
                 )
             else:
                 # Native/PipeWire stream without a matching PA sink-input:

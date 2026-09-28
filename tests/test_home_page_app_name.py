@@ -204,3 +204,33 @@ def test_update_native_apps_excludes_loopback_playback_node():
     per_card = HomePage._update_native_apps(fake_self, pulse_sinks=[], rescan=False)
 
     assert not per_card.get(id(fake_self._media_card))
+
+
+# ── #289: a stream with no application.name must be saved under the router's key
+# The router identifies native streams as application.name, else binary, else
+# node.name (get_native_streams). Saving under the display label instead —
+# "Dotnet" for binary "dotnet" — meant the override was never found again.
+
+def test_on_stream_drop_without_app_name_uses_the_binary(monkeypatch):
+    saved, _ = _drop_and_capture(
+        monkeypatch,
+        {"application.process.binary": "dotnet", "node.name": "StardewModdingAPI"},
+    )
+    assert saved == {"dotnet": "Arctis_Chat"}
+
+
+def test_on_stream_drop_without_app_name_or_binary_uses_node_name(monkeypatch):
+    saved, _ = _drop_and_capture(monkeypatch, {"node.name": "StardewModdingAPI"})
+    assert saved == {"StardewModdingAPI": "Arctis_Chat"}
+
+
+def test_on_stream_drop_key_matches_what_the_router_looks_up(monkeypatch):
+    from arctis_sound_manager.pw_utils import app_override_key, get_native_streams
+
+    props = {"media.class": "Stream/Output/Audio",
+             "application.process.binary": "dotnet", "node.name": "StardewModdingAPI"}
+    [stream] = get_native_streams([{"id": 42, "info": {"props": props}}])
+    router_key = app_override_key(stream["app_name"], "dotnet")
+
+    saved, _ = _drop_and_capture(monkeypatch, props)
+    assert list(saved) == [router_key]

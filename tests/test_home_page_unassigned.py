@@ -246,3 +246,28 @@ def test_a_native_stream_is_not_added_once_per_tick():
 
     assert card.tags == [("RocketLeague.exe", 42, 1234)]
     assert card.cleared == 1
+
+
+def test_native_stream_without_application_name_is_listed():
+    """#289: SMAPI-launched Stardew Valley sets only node.name.
+
+    With the speakers as default output nothing moves it onto a channel, so
+    this area is the only place it can show up — and it was dropped for
+    lacking application.name, the same gap #243 closed on the cards.
+    """
+    page = _page()
+    stardew = _stream(70, 10, "")
+    stardew.proplist["node.name"] = "StardewModdingAPI"
+    rows = page._collect_unassigned([stardew], _SINKS, None)
+    assert [r["label"] for r in rows] == ["StardewModdingAPI"]
+
+
+def test_asm_chain_nodes_without_application_name_stay_hidden():
+    """The node.name fallback must not turn ASM's own nodes into apps."""
+    page = _page()
+    streams = []
+    for i, name in enumerate(("effect_output.sonar-game-eq", "Arctis_Game_sink_out")):
+        s = _stream(80 + i, 10, "")
+        s.proplist["node.name"] = name
+        streams.append(s)
+    assert page._collect_unassigned(streams, _SINKS, None) == []
