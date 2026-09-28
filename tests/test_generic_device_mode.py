@@ -361,3 +361,50 @@ def test_every_headset_profile_has_something_to_listen_on():
             assert c.listen_interface_indexes == [], f"{c.name} has none by design"
         else:
             assert c.listen_interface_indexes, f"{c.name} declares no listen interface"
+
+
+def test_generic_mode_leaves_no_device_settings_to_read():
+    """#259/#290: generic mode fills device_config but never device_settings.
+
+    The attribute was only annotated, so reading it raised AttributeError —
+    GetSettings died on it and the GUI Settings page came up blank, including
+    the very setting that picks the generic output device.
+    """
+    engine = _engine(generic_mode=True)
+    with patch("arctis_sound_manager.sonar_to_pipewire.check_and_fix_stale_configs",
+               return_value=(False, False)):
+        engine._setup_generic_device()
+    try:
+        assert engine.device_config is not None and engine.device_config.generic
+        assert engine.device_settings is None
+    finally:
+        from arctis_sound_manager import device_state
+        device_state.clear()
+
+
+def test_get_settings_answers_in_generic_mode(tmp_path):
+    """The D-Bus side of the same bug: the general settings must come back."""
+    import json
+    import logging
+
+    from arctis_sound_manager.dbus_service import ArctisManagerDbusSettingsService
+    from arctis_sound_manager.settings import GeneralSettings
+
+    engine = _engine(generic_mode=True)
+    with patch("arctis_sound_manager.sonar_to_pipewire.check_and_fix_stale_configs",
+               return_value=(False, False)):
+        engine._setup_generic_device()
+    try:
+        with patch("arctis_sound_manager.settings.SETTINGS_FOLDER", tmp_path):
+            engine.general_settings = GeneralSettings()
+        svc = ArctisManagerDbusSettingsService.__new__(ArctisManagerDbusSettingsService)
+        svc.core_engine = engine
+        svc.logger = logging.getLogger("test_generic_device_mode")
+
+        get_settings = ArctisManagerDbusSettingsService.get_settings.__dict__["__DBUS_METHOD"].fn
+        settings = json.loads(get_settings(svc))
+        assert settings["general"], "general settings missing"
+        assert settings["device"] == {}
+    finally:
+        from arctis_sound_manager import device_state
+        device_state.clear()

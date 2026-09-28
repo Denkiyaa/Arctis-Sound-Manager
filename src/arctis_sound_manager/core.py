@@ -278,7 +278,11 @@ class CoreEngine:
     device_config: DeviceConfiguration | None = None
     usb_device: TypedDevice | None = None
     general_settings: GeneralSettings
-    device_settings: DeviceSettings
+    # None until a headset has been set up — and for good in generic mode
+    # (#189), which has no headset to hold settings for. A bare annotation
+    # left the attribute missing there, so GetSettings raised AttributeError
+    # and the GUI Settings page came up blank (#259/#290).
+    device_settings: DeviceSettings | None = None
 
     # Set to True when kernel_detach hits EACCES on a USB interface — read by
     # the GUI (via D-Bus GetSettings) to surface UdevRulesDialog(mode="reload").
@@ -2422,6 +2426,7 @@ class CoreEngine:
         self.device_config = device_config
         self.usb_device = None          # nothing to claim, detach or write to
         self.device_status = None
+        self.device_settings = None     # nor any headset settings to hold
 
         source = self._resolve_sink_name(
             getattr(settings, "generic_input_device", None) or "")
