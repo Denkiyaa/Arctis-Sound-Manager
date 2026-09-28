@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.31] - 29 September 2026
+
+### Added
+
+- **`asm-cli status`** shows the headset state: battery, power, mic and
+  everything else your headset reports, plus each channel's level. With
+  `--json` it feeds Waybar, Polybar, i3blocks or any script (see the README
+  for a ready-made Waybar module).
+- **Drag an application onto a channel card** to move it, from its icon on
+  a card or from "Other applications". A click still opens the menu.
+- New documentation pages: SteelSeries headsets on Linux, one page per
+  headset, and troubleshooting.
+
+### Fixed
+
+- The Settings page was blank in generic device mode, including the
+  setting that picks the output. (#290, #259)
+- Games that only name their audio stream by node (Stardew Valley launched
+  through SMAPI) did not appear in "Other applications", and moving them
+  to a channel was forgotten on restart. (#289, #243)
+
 ## [1.4.30] - 27 September 2026
 
 ### Added
