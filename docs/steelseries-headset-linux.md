@@ -52,6 +52,10 @@ something provides it.
   Pro with GameDAC
 - Arctis GameBuds
 
+Model pages go into more detail:
+[Nova Pro Wireless](arctis-nova-pro-wireless-linux.md),
+[Nova 7](arctis-nova-7-linux.md), [Arctis 7](arctis-7-linux.md).
+
 Each headset is described in a YAML profile, so adding one is data rather than
 code; the [device configuration specs](device_configuration_file_specs.md)
 explain the format. A headset ASM cannot talk to — or another brand entirely —
@@ -68,6 +72,8 @@ its derivatives (AUR), Fedora and Nobara (COPR), Debian and Ubuntu (PPA / .deb),
 and Bazzite, SteamOS and Silverblue through Distrobox. The
 [project page](https://github.com/loteran/Arctis-Sound-Manager#installation) has
 the per-distribution commands if you would rather run them yourself.
+
+Something not working? See [troubleshooting](arctis-linux-troubleshooting.md).
 
 Missing a model, or a setting that does nothing on yours? Open an
 [issue](https://github.com/loteran/Arctis-Sound-Manager/issues) — the

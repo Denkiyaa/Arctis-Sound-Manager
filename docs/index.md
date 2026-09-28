@@ -48,9 +48,16 @@ headset is listed with its USB Product ID.
 - **[Arctis ChatMix on Linux](arctis-chatmix-linux.md)** — why the dial does
   nothing out of the box, and how it is made to work again.
 
+By headset:
+[Arctis Nova Pro Wireless](arctis-nova-pro-wireless-linux.md) ·
+[Arctis Nova 7](arctis-nova-7-linux.md) ·
+[Arctis 7](arctis-7-linux.md)
+
 ## Documentation
 
 - [Supported devices](device_support.md) — every supported headset, with its USB Product ID.
+- [Troubleshooting](arctis-linux-troubleshooting.md) — no sound, ChatMix doing nothing, headset
+  not recognised, the GUI failing to start.
 - [Video Clips](clips.md) — the opt-in screen recorder: installing it, removing it, and what
   its per-channel audio tracks are for.
 - [Device configuration file specs](device_configuration_file_specs.md) — how a headset is described
