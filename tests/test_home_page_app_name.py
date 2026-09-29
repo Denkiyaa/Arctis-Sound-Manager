@@ -206,6 +206,25 @@ def test_update_native_apps_excludes_loopback_playback_node():
     assert not per_card.get(id(fake_self._media_card))
 
 
+# ── #291: a native tag must carry the pipewire-pulse index, not the node id
+# The tag's index goes to sink_input_move(). pipewire-pulse numbers streams by
+# object.serial; the PipeWire id is a different number, so moving Stardew from
+# its tag did nothing.
+
+def test_update_native_apps_passes_object_serial_as_index():
+    fake_self = _fake_home_page_for_native_apps([
+        _fake_native_stream(
+            "StardewModdingAPI", "Arctis_Media", sid=291,
+            app_props={"object.serial": "705"},
+        ),
+    ])
+
+    per_card = HomePage._update_native_apps(fake_self, pulse_sinks=[], rescan=False)
+
+    [row] = per_card[id(fake_self._media_card)]
+    assert row[1] == 705
+
+
 # ── #289: a stream with no application.name must be saved under the router's key
 # The router identifies native streams as application.name, else binary, else
 # node.name (get_native_streams). Saving under the display label instead —

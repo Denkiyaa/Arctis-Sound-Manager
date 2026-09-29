@@ -2713,9 +2713,15 @@ class HomePage(QWidget):
             card = card_map.get(sink_name)
             if card is None:
                 continue
+            # The tag hands this index to sink_input_move(), which takes
+            # pipewire-pulse's index: the node's object.serial, not its
+            # PipeWire id. Passing the id moved nothing, or another stream
+            # whose serial happened to match (#291).
+            props = s.get("props", {})
+            si_index = int(props.get("object.serial") or s["id"])
             per_card.setdefault(id(card), []).append(
-                (s["app_name"], s["id"], int(s["pid"] or 0),
-                 icon_hint(s.get("props", {}))))
+                (s["app_name"], si_index, int(s["pid"] or 0),
+                 icon_hint(props)))
         return per_card
 
     def _refresh_eq_presets(self):
