@@ -189,6 +189,15 @@ install -Dm644 src/arctis_sound_manager/desktop/ArctisManager.desktop \
 install -Dm644 src/arctis_sound_manager/gui/images/steelseries_logo.svg \
     "${PKGDIR}/usr/share/icons/hicolor/scalable/apps/arctis-manager.svg"
 
+# ── Plasma 6 widget (headset status over D-Bus) ─────────────
+install -Dm644 src/arctis_sound_manager/desktop/plasmoid/metadata.json \
+    "${PKGDIR}/usr/share/plasma/plasmoids/com.github.loteran.arctis-sound-manager/metadata.json"
+python3 scripts/generate_plasmoid_i18n.py
+for f in main.qml plasma5.qml tr.js strings.js; do
+    install -Dm644 "src/arctis_sound_manager/desktop/plasmoid/contents/ui/$f" \
+        "${PKGDIR}/usr/share/plasma/plasmoids/com.github.loteran.arctis-sound-manager/contents/ui/$f"
+done
+
 # ── AppStream metainfo ──────────────────────────────────────
 install -Dm644 src/arctis_sound_manager/desktop/com.github.loteran.arctis-sound-manager.metainfo.xml \
     "${PKGDIR}/usr/share/metainfo/com.github.loteran.arctis-sound-manager.metainfo.xml"

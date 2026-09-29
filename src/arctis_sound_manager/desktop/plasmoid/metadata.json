@@ -1,0 +1,23 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "loteran"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "Headset battery, power and microphone status from Arctis Sound Manager",
+        "Icon": "audio-headset",
+        "Id": "com.github.loteran.arctis-sound-manager",
+        "License": "GPL-3.0-or-later",
+        "Name": "Arctis Sound Manager",
+        "Website": "https://github.com/loteran/Arctis-Sound-Manager",
+        "ServiceTypes": [
+            "Plasma/Applet"
+        ]
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-API": "declarativeappletscript",
+    "X-Plasma-MainScript": "ui/plasma5.qml"
+}

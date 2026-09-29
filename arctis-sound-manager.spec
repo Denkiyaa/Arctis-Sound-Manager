@@ -154,6 +154,15 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/ArctisManager.desktop
 install -Dm644 src/arctis_sound_manager/gui/images/steelseries_logo.svg \
     %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/arctis-manager.svg
 
+# Plasma 6 widget (headset status over D-Bus)
+install -Dm644 src/arctis_sound_manager/desktop/plasmoid/metadata.json \
+    %{buildroot}%{_datadir}/plasma/plasmoids/com.github.loteran.arctis-sound-manager/metadata.json
+python3 scripts/generate_plasmoid_i18n.py
+for f in main.qml plasma5.qml tr.js strings.js; do
+    install -Dm644 "src/arctis_sound_manager/desktop/plasmoid/contents/ui/$f" \
+        %{buildroot}%{_datadir}/plasma/plasmoids/com.github.loteran.arctis-sound-manager/contents/ui/$f
+done
+
 # AppStream metainfo (releases injected from CHANGELOG.md — never hardcode)
 python3 scripts/generate_metainfo_releases.py --in-place
 install -Dm644 src/arctis_sound_manager/desktop/com.github.loteran.arctis-sound-manager.metainfo.xml \
@@ -321,6 +330,7 @@ fi
 %{_datadir}/swcatalog/xml/%{name}.xml.gz
 %{_datadir}/applications/ArctisManager.desktop
 %{_datadir}/icons/hicolor/scalable/apps/arctis-manager.svg
+%{_datadir}/plasma/plasmoids/com.github.loteran.arctis-sound-manager/
 %{_metainfodir}/com.github.loteran.arctis-sound-manager.metainfo.xml
 %{_datadir}/%{name}/
 /etc/xdg/autostart/asm-first-run.desktop

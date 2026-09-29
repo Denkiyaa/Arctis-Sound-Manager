@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 from dbus_next.aio.message_bus import MessageBus
 from dbus_next.constants import RequestNameReply
-from dbus_next.service import ServiceInterface, method
+from dbus_next.service import ServiceInterface, method, signal
 
 from arctis_sound_manager.config import parsed_status
 from arctis_sound_manager.constants import (DBUS_BUS_NAME,
@@ -176,6 +176,19 @@ class ArctisManagerDbusStatusService(ServiceInterface):
 
     @method('GetStatus')
     def get_status(self) -> 's': # type: ignore
+        return self.status_json()
+
+    @signal('StatusChanged')
+    def status_changed(self, payload: str) -> 's': # type: ignore
+        """Carries the new GetStatus payload, so a listener (the Plasma
+        widget) does not have to call back. Emitted by
+        DbusManager._watch_status, only when that payload changed."""
+        return payload
+
+    def status_json(self) -> str:
+        """GetStatus's payload. Separate from the D-Bus method because
+        dbus_next's @method wrapper drops the return value when called from
+        Python, and the watcher needs it."""
         status, config = self.core_engine.device_status, self.core_engine.device_config
         if not config:
             return json.dumps({})
@@ -852,6 +865,8 @@ class DbusManager:
         ]:
             interface = tpl[0](self.core_engine)
             bus.export(tpl[1], interface)
+            if isinstance(interface, ArctisManagerDbusStatusService):
+                status_interface = interface
 
         # ── Bus name acquisition ──────────────────────────────────────────
         # An old daemon left running (e.g. via systemd + manual launch) will
@@ -878,6 +893,27 @@ class DbusManager:
                 f"`{stop_cmd}` or `pkill -f asm-daemon` and retry."
             )
         self.log.info(f"D-Bus name {DBUS_BUS_NAME!r} acquired ({reply.name}).")
+
+        self._status_watch = asyncio.create_task(self._watch_status(status_interface))
+
+    # The status is refreshed by threads deep in core.py, from several code
+    # paths. Diffing the payload here, once a second, catches every one of
+    # them without touching any: the comparison is a string check on data
+    # already in memory, no USB or PipeWire involved.
+    STATUS_WATCH_INTERVAL = 1.0
+
+    async def _watch_status(self, status_interface: 'ArctisManagerDbusStatusService') -> None:
+        last: str | None = None
+        while not getattr(self, '_stopping', False):
+            try:
+                current = status_interface.status_json()
+                if current != last:
+                    if last is not None:
+                        status_interface.status_changed(current)
+                    last = current
+            except Exception as e:
+                self.log.debug(f"StatusChanged watcher: {e!r}")
+            await asyncio.sleep(self.STATUS_WATCH_INTERVAL)
 
     async def wait_for_stop(self) -> None:
         while not getattr(self, '_stopping', False):

@@ -27,3 +27,6 @@ NOTES.md
 # Claude Code context (not versioned)
 CLAUDE.md
 .claude/worktrees/
+
+# Plasma widget strings, generated at build from lang/*.ini
+src/arctis_sound_manager/desktop/plasmoid/contents/ui/strings.js

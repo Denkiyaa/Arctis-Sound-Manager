@@ -111,6 +111,15 @@ package() {
     install -Dm644 src/arctis_sound_manager/gui/images/steelseries_logo.svg \
         "$pkgdir/usr/share/icons/hicolor/scalable/apps/arctis-manager.svg"
 
+    # Plasma 6 widget (headset status over D-Bus)
+    install -Dm644 src/arctis_sound_manager/desktop/plasmoid/metadata.json \
+        "$pkgdir/usr/share/plasma/plasmoids/com.github.loteran.arctis-sound-manager/metadata.json"
+    python scripts/generate_plasmoid_i18n.py
+    for f in main.qml plasma5.qml tr.js strings.js; do
+        install -Dm644 "src/arctis_sound_manager/desktop/plasmoid/contents/ui/$f" \
+            "$pkgdir/usr/share/plasma/plasmoids/com.github.loteran.arctis-sound-manager/contents/ui/$f"
+    done
+
     # Systemd user services (single source of truth in systemd/, not heredocs)
     install -Dm644 systemd/arctis-manager.service \
         "$pkgdir/usr/lib/systemd/user/arctis-manager.service"

@@ -171,6 +171,15 @@ python3Packages.buildPythonApplication {
     install -Dm644 src/arctis_sound_manager/gui/images/steelseries_logo.svg \
       "$out/share/icons/hicolor/scalable/apps/arctis-manager.svg"
 
+    # Plasma 6 widget (headset status over D-Bus)
+    install -Dm644 src/arctis_sound_manager/desktop/plasmoid/metadata.json \
+      "$out/share/plasma/plasmoids/com.github.loteran.arctis-sound-manager/metadata.json"
+    ${udevGenPython}/bin/python scripts/generate_plasmoid_i18n.py
+    for f in main.qml plasma5.qml tr.js strings.js; do
+      install -Dm644 "src/arctis_sound_manager/desktop/plasmoid/contents/ui/$f" \
+        "$out/share/plasma/plasmoids/com.github.loteran.arctis-sound-manager/contents/ui/$f"
+    done
+
     # Default HeSuVi HRIR — seeded by the NixOS module into each user's
     # ~/.local/share/pipewire/hrir_hesuvi/hrir.wav (only if absent), giving
     # working surround out of the box without asm-setup or a network download.
