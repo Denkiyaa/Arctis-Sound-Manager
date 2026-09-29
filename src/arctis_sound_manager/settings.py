@@ -457,7 +457,11 @@ class GeneralSettings(JsonSerializable):
     oled_show_mic_status: bool = True
     oled_show_sonar_mode: bool = True
     oled_show_eq_chat: bool = False
+    oled_show_media: bool = True
     oled_show_weather_city: bool = True
+
+    # Darken the OLED while the desktop session is locked or idle (burn-in)
+    oled_off_when_away: bool = True
 
     # Clock format for the OLED time element: True = 24-hour, False = 12-hour (AM/PM)
     oled_time_24h: bool = True
@@ -472,6 +476,7 @@ class GeneralSettings(JsonSerializable):
     oled_font_profile: int = 8
     oled_font_eq: int = 8
     oled_font_eq_chat: int = 8
+    oled_font_media: int = 8
     oled_font_sonar_mode: int = 8
     oled_font_weather_temp: int = 20
 
@@ -533,6 +538,7 @@ class GeneralSettings(JsonSerializable):
         ConfigSetting('oled_custom_display', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
         ConfigSetting('oled_brightness', SettingType.SLIDER, 8, min=0, max=10, step=1),
         ConfigSetting('oled_screen_timeout', SettingType.SLIDER, 30, min=0, max=300, step=10, values_mapping={'0': 'never'}),
+        ConfigSetting('oled_off_when_away', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
         ConfigSetting('oled_scroll_speed', SettingType.SLIDER, 2, min=0, max=5, step=1),
         ConfigSetting('oled_eq_scroll_speed', SettingType.SLIDER, 2, min=0, max=5, step=1),
         ConfigSetting('oled_show_time', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
@@ -543,10 +549,11 @@ class GeneralSettings(JsonSerializable):
         ConfigSetting('oled_show_mic_status', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
         ConfigSetting('oled_show_sonar_mode', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
         ConfigSetting('oled_show_eq_chat', SettingType.TOGGLE, False, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
+        ConfigSetting('oled_show_media', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
         ConfigSetting('oled_show_weather_city', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
     ]
 
-    _DEFAULT_DISPLAY_ORDER = ['sonar_mode', 'profile', 'eq', 'eq_chat', 'weather']
+    _DEFAULT_DISPLAY_ORDER = ['sonar_mode', 'profile', 'eq', 'eq_chat', 'media', 'weather']
 
     def __init__(self, **kwargs):
         self.oled_display_order = list(self._DEFAULT_DISPLAY_ORDER)

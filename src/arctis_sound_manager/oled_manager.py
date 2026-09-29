@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from pathlib import Path
 
+from arctis_sound_manager.desktop_session import DesktopSession
 from arctis_sound_manager.oled_protocol import OledProtocol
 from arctis_sound_manager.power_status import (HeadsetPower,
                                                normalize_power_value)
@@ -114,6 +115,11 @@ _OLED_SEND_TIMEOUT_UNACKED_MS = 20
 _OLED_UNACKED_STREAK = 2
 
 _BURN_IN_INTERVAL_S = 60.0
+
+# While the session is locked or idle the panel stays dark, except for this
+# long after a settings change from the GUI — so adjusting the screen from a
+# remote session, or right before locking, still shows the result.
+_AWAY_WAKE_S = 30.0
 _BURN_IN_POSITIONS: list[tuple[int, int]] = [
     (0, 0), (1, 0), (1, 1), (0, 1), (-1, 1),
     (-1, 0), (-1, -1), (0, -1), (1, -1),
@@ -206,6 +212,14 @@ class OledManager:
         self._eq_chat_scroll_offset: int = 0
         self._eq_chat_reset_event = threading.Event()
         self._eq_chat_scroll_thread: threading.Thread | None = None
+        self._media_scroll_offset: int = 0
+        self._media_reset_event = threading.Event()
+        self._media_scroll_thread: threading.Thread | None = None
+        self._session = DesktopSession()
+        self._now_playing: str = ""
+        # True while the panel is dark because nobody is at the desktop, as
+        # opposed to the fixed timeout: only this one lights up on its own.
+        self._off_for_away: bool = False
 
         # How long to wait for a SET_REPORT acknowledgement, and how many writes
         # in a row have gone unacknowledged (issue #196). Starts optimistic and
@@ -259,11 +273,17 @@ class OledManager:
             name="OledEqChatScroll",
             daemon=True,
         )
+        self._media_scroll_thread = threading.Thread(
+            target=self._media_scroll_loop,
+            name="OledMediaScroll",
+            daemon=True,
+        )
         self._thread.start()
         self._scroll_thread.start()
         self._eq_scroll_thread.start()
         self._profile_scroll_thread.start()
         self._eq_chat_scroll_thread.start()
+        self._media_scroll_thread.start()
         self.set_brightness(self._core.general_settings.oled_brightness)
         self._show_splash()
         logger.info("OledManager started (interval=%.1fs)", _REFRESH_INTERVAL_S)
@@ -338,6 +358,10 @@ class OledManager:
         if self._eq_chat_scroll_thread is not None:
             self._eq_chat_scroll_thread.join(timeout=2.0)
             self._eq_chat_scroll_thread = None
+        if self._media_scroll_thread is not None:
+            self._media_scroll_thread.join(timeout=2.0)
+            self._media_scroll_thread = None
+        self._session.close()
         logger.info("OledManager stopped")
 
     def _reset_scroll(self) -> None:
@@ -345,10 +369,12 @@ class OledManager:
         self._eq_scroll_offset = 0
         self._profile_scroll_offset = 0
         self._eq_chat_scroll_offset = 0
+        self._media_scroll_offset = 0
         self._reset_scroll_event.set()
         self._eq_reset_event.set()
         self._profile_reset_event.set()
         self._eq_chat_reset_event.set()
+        self._media_reset_event.set()
 
     def update_display(self, activity: bool = True) -> None:
         if datetime.now().timestamp() < self._splash_until:
@@ -360,6 +386,7 @@ class OledManager:
         if activity:
             if self._screen_off:
                 self._screen_off = False
+                self._off_for_away = False
                 self.set_brightness(self._core.general_settings.oled_brightness)
             self._last_update_time = datetime.now().timestamp()
 
@@ -417,6 +444,13 @@ class OledManager:
         eq_mode_file = _CFG / ".eq_mode"
         eq_mode = eq_mode_file.read_text().strip() if eq_mode_file.exists() else "custom"
 
+        # Only asked when shown: the MPRIS lookup is a few D-Bus round trips.
+        now_playing = self._session.now_playing() if gs.oled_show_media else ""
+        if now_playing != self._now_playing:
+            self._now_playing = now_playing
+            self._media_scroll_offset = 0
+            self._media_reset_event.set()
+
         weather_data: WeatherData | None = None
         if gs.weather_enabled and gs.weather_lat and gs.weather_lon:
             weather_data = self._weather.get(
@@ -450,6 +484,8 @@ class OledManager:
             mic_status=mic_status,
             eq_mode=eq_mode,
             eq_chat_preset=eq_chat_preset,
+            show_media=gs.oled_show_media,
+            now_playing=now_playing,
             display_order=gs.oled_display_order,
             font_sizes={
                 'time':         gs.oled_font_time,
@@ -458,6 +494,7 @@ class OledManager:
                 'profile':      gs.oled_font_profile,
                 'eq':           gs.oled_font_eq,
                 'eq_chat':      gs.oled_font_eq_chat,
+                'media':        gs.oled_font_media,
                 'sonar_mode':   gs.oled_font_sonar_mode,
                 'weather_temp': gs.oled_font_weather_temp,
             },
@@ -467,6 +504,7 @@ class OledManager:
             eq_scroll_offset=self._eq_scroll_offset,
             profile_scroll_offset=self._profile_scroll_offset,
             eq_chat_scroll_offset=self._eq_chat_scroll_offset,
+            media_scroll_offset=self._media_scroll_offset,
         )
 
         with self._image_lock:
@@ -494,6 +532,10 @@ class OledManager:
             self._suspend_until = 0.0
 
     def _send_current_frame(self) -> None:
+        if self._off_for_away:
+            # Dark on purpose: the marquee threads keep ticking, the panel
+            # does not need their frames.
+            return
         self._check_usb_device_reattached()
 
         now = datetime.now().timestamp()
@@ -666,6 +708,8 @@ class OledManager:
             try:
                 self._advance_burn_in()
                 gs = self._core.general_settings
+                if self._apply_away(gs):
+                    continue
                 timeout = gs.oled_screen_timeout
                 if timeout > 0 and not self._screen_off and not gs.oled_custom_display:
                     elapsed = datetime.now().timestamp() - self._last_update_time
@@ -687,6 +731,35 @@ class OledManager:
             except Exception as e:
                 logger.warning("OLED refresh error: %s", e)
 
+    def _apply_away(self, gs) -> bool:
+        """Dark panel while nobody is at the desktop. True = skip this tick.
+
+        The fixed timeout only ever counts from the last settings change, so
+        with Custom Display on — where it does not apply at all — the panel
+        drew the same header all night, and burn-in on this base station is
+        the complaint owners raise first. A locked or idle session is a far
+        better answer to "is anyone looking" than any timer.
+        """
+        away = gs.oled_off_when_away and self._session.user_away()
+        if not away:
+            if self._off_for_away:
+                logger.info("OLED: user is back — screen on")
+                self._off_for_away = False
+                self._screen_off = False
+                self._last_update_time = datetime.now().timestamp()
+                self.set_brightness(gs.oled_brightness)
+                self._reset_scroll()
+            return False
+        if self._screen_off:
+            return True
+        if datetime.now().timestamp() - self._last_update_time < _AWAY_WAKE_S:
+            return False
+        logger.info("OLED: session locked or idle — screen off")
+        self._screen_off = True
+        self._off_for_away = True
+        self._send_oled_packet(self._protocol.build_brightness_packet(0), control=True)
+        return True
+
     def _update_scroll_frame(self) -> None:
         """Re-render _current_image with current eq/profile scroll offsets and send it."""
         params = self._last_render_params
@@ -697,6 +770,7 @@ class OledManager:
             eq_scroll_offset=self._eq_scroll_offset,
             profile_scroll_offset=self._profile_scroll_offset,
             eq_chat_scroll_offset=self._eq_chat_scroll_offset,
+            media_scroll_offset=self._media_scroll_offset,
         )
         with self._image_lock:
             self._current_image = image
@@ -954,4 +1028,62 @@ class OledManager:
 
             except Exception as e:
                 logger.warning("OLED EQ Chat scroll error: %s", e)
+                self._stop_event.wait(0.5)
+
+    def _media_scroll_wait(self, seconds: float) -> bool:
+        deadline = datetime.now().timestamp() + seconds
+        while True:
+            if self._stop_event.is_set():
+                return True
+            if self._media_reset_event.is_set():
+                return True
+            remaining = deadline - datetime.now().timestamp()
+            if remaining <= 0:
+                return False
+            self._stop_event.wait(min(remaining, 0.05))
+
+    def _media_scroll_loop(self) -> None:
+        """Horizontal marquee thread for the now-playing line when it overflows 128px."""
+        while not self._stop_event.is_set():
+            try:
+                self._media_reset_event.clear()
+                self._media_scroll_offset = 0
+
+                gs = self._core.general_settings
+                speed = gs.oled_eq_scroll_speed
+                now_playing = self._now_playing
+                if (not gs.oled_show_media or not gs.oled_custom_display or speed == 0
+                        or not now_playing or self._screen_off):
+                    if self._media_scroll_wait(0.5):
+                        continue
+                    continue
+
+                text_w = self._renderer.measure_media_text(now_playing, gs.oled_font_media)
+                max_offset = text_w - (self._renderer.WIDTH - 1)
+
+                if max_offset <= 0:
+                    if self._media_scroll_wait(0.5):
+                        continue
+                    continue
+
+                if self._media_scroll_wait(_EQ_SCROLL_PAUSE_START_S):
+                    continue
+
+                interval = _SPEED_TO_INTERVAL.get(speed, 0.2)
+                while self._media_scroll_offset < max_offset:
+                    if self._stop_event.is_set() or self._media_reset_event.is_set():
+                        break
+                    self._media_scroll_offset += 1
+                    self._update_scroll_frame()
+                    if self._media_scroll_wait(interval):
+                        break
+                    interval = _SPEED_TO_INTERVAL.get(gs.oled_eq_scroll_speed, 0.2)
+                else:
+                    if self._media_scroll_wait(_EQ_SCROLL_PAUSE_END_S):
+                        continue
+                    self._media_scroll_offset = 0
+                    self._update_scroll_frame()
+
+            except Exception as e:
+                logger.warning("OLED media scroll error: %s", e)
                 self._stop_event.wait(0.5)

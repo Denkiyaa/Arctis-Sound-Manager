@@ -225,7 +225,7 @@ class OledRenderer:
             pts = [(cx + 2, cy + 3), (cx - 3, cy + 9), (cx + 1, cy + 9), (cx - 4, y + s - 1)]
             draw.line(pts, fill=1, width=3)
 
-    _DEFAULT_DISPLAY_ORDER = ['sonar_mode', 'profile', 'eq', 'eq_chat', 'weather']
+    _DEFAULT_DISPLAY_ORDER = ['sonar_mode', 'profile', 'eq', 'eq_chat', 'media', 'weather']
 
     @staticmethod
     def _measure_text_pixels(font: "ImageFont.FreeTypeFont", text: str) -> int:
@@ -261,6 +261,11 @@ class OledRenderer:
         font = _load_font(max(7, min(30, sz_eq_chat)))
         return self._measure_text_pixels(font, f"Chat: {eq_chat_preset}")
 
+    def measure_media_text(self, now_playing: str, sz_media: int) -> int:
+        """Return pixel width of the now-playing line at the given font size."""
+        font = _load_font(max(7, min(30, sz_media)))
+        return self._measure_text_pixels(font, now_playing)
+
     def render_status_image(
         self,
         battery_percent: int,
@@ -283,6 +288,9 @@ class OledRenderer:
         eq_mode: str = "custom",
         eq_chat_preset: str = "",
         eq_chat_scroll_offset: int = 0,
+        show_media: bool = False,
+        now_playing: str = "",
+        media_scroll_offset: int = 0,
         display_order: "list[str] | None" = None,
         font_sizes: "dict[str, int] | None" = None,
         eq_scroll_offset: int = 0,
@@ -304,6 +312,7 @@ class OledRenderer:
         sz_weather_tmp = max(7, min(30, fs.get('weather_temp', _FONT_BIG_SIZE)))
         sz_eq_chat    = max(7, min(30, fs.get('eq_chat',      8)))
         sz_sonar_mode = max(7, min(30, fs.get('sonar_mode',    8)))
+        sz_media      = max(7, min(30, fs.get('media',         8)))
 
         font_time    = _load_font(sz_time)
         font_battery = _load_font(sz_battery)
@@ -311,12 +320,14 @@ class OledRenderer:
         font_eq      = _load_font(sz_eq)
         font_wtmp    = _load_font(sz_weather_tmp)
         font_eq_chat  = _load_font(sz_eq_chat)
+        font_media    = _load_font(sz_media)
         font_small   = self._font  # city / labels always small
 
         natural_h = self._natural_height(
             show_time, show_battery, show_profile, show_eq, weather,
             show_sonar_mode=show_sonar_mode,
             show_eq_chat=show_eq_chat, eq_chat_preset=eq_chat_preset,
+            show_media=show_media, now_playing=now_playing, sz_media=sz_media,
             sz_time=sz_time, sz_battery=sz_battery, sz_profile=sz_profile,
             sz_eq=sz_eq, sz_weather_tmp=sz_weather_tmp,
             sz_sonar_mode=sz_sonar_mode, sz_eq_chat=sz_eq_chat,
@@ -417,6 +428,11 @@ class OledRenderer:
             elif element == 'eq_chat' and show_eq_chat and eq_chat_preset:
                 draw.text((1 - eq_chat_scroll_offset, y), f"Chat: {eq_chat_preset}", font=font_eq_chat, fill=1)
                 y += sz_eq_chat + 3
+            elif element == 'media' and show_media and now_playing:
+                # No row at all when nothing plays: an empty line would only
+                # push the elements below it off the panel.
+                draw.text((1 - media_scroll_offset, y), now_playing, font=font_media, fill=1)
+                y += sz_media + 3
 
         return image, header_h
 
@@ -429,6 +445,7 @@ class OledRenderer:
         sz_time: int = _FONT_BIG_SIZE, sz_battery: int = _FONT_MED_SIZE,
         sz_profile: int = 8, sz_eq: int = 8, sz_weather_tmp: int = _FONT_BIG_SIZE,
         sz_sonar_mode: int = 8, sz_eq_chat: int = 8,
+        show_media: bool = False, now_playing: str = "", sz_media: int = 8,
         display_order: "list[str] | None" = None,
     ) -> int:
         y = 1
@@ -450,6 +467,8 @@ class OledRenderer:
                 pass
             elif element == 'eq_chat' and show_eq_chat and eq_chat_preset:
                 y += sz_eq_chat + 3
+            elif element == 'media' and show_media and now_playing:
+                y += sz_media + 3
         return y
 
     def render_splash_image(self) -> bytes:

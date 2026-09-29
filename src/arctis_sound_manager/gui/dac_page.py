@@ -55,6 +55,7 @@ _ORDERABLE_ITEMS = [
     ('profile',     'oled_show_profile',     'oled_show_profile',     'oled_font_profile',        8),
     ('eq',          'oled_show_eq',          'oled_show_eq',          'oled_font_eq',             8),
     ('eq_chat',     'oled_show_eq_chat',     'oled_show_eq_chat',     'oled_font_eq_chat',        8),
+    ('media',       'oled_show_media',       'oled_show_media',       'oled_font_media',          8),
     ('weather',     'weather_enabled',       'weather_enabled',       'oled_font_weather_temp',  20),
 ]
 
@@ -62,7 +63,7 @@ _DAC_WIDGET_EXCLUDE = {
     'oled_custom_display',
     'oled_show_time', 'oled_time_24h', 'oled_show_battery', 'oled_show_profile',
     'oled_show_eq', 'oled_show_mic_status',
-    'oled_show_sonar_mode', 'oled_show_eq_chat',
+    'oled_show_sonar_mode', 'oled_show_eq_chat', 'oled_show_media',
     'oled_show_weather_city',
 }
 
