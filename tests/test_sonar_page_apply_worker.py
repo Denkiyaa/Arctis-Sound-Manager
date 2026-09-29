@@ -261,12 +261,13 @@ def test_apply_worker_spatial_toggle_skips_restart(monkeypatch, tmp_path):
     assert ("game",) in link_calls, "toggle must move the ASM-owned EQ→target link"
 
 
-def test_apply_worker_live_apply_refused_reports_failure(monkeypatch, tmp_path):
+def test_apply_worker_live_apply_refused_falls_back_to_restart(monkeypatch, tmp_path):
     """#181 (Props variant): when set_filter_controls() cannot push the new
-    values to a node that IS present in the graph (e.g. PipeWire still
-    refuses set-param after grant_props_permissions()'s retry), the worker
-    must heal the links but report failure — not claim "Applied" while the
-    running graph and the on-disk conf disagree."""
+    values to a node that IS present in the graph (PipeWire still refuses
+    set-param after grant_props_permissions()'s retry, as on SteamOS), the
+    running graph would keep the old curve for good. The worker must restart
+    filter-chain so the conf already on disk is loaded, like a structural
+    change — not heal and leave the EQ unchanged."""
     _prepare_conf_dir(monkeypatch, tmp_path)
     _stub_settings(monkeypatch)
 
@@ -280,17 +281,23 @@ def test_apply_worker_live_apply_refused_reports_failure(monkeypatch, tmp_path):
         lambda node, controls: False,
     )
     monkeypatch.setattr("arctis_sound_manager.pw_utils.pw_node_exists", lambda name, data=None: True)
-    healed = []
-    monkeypatch.setattr(sp, "ensure_filter_chain_healthy", lambda *a, **kw: healed.append(True))
+    monkeypatch.setattr(sp._ApplyWorker, "_wait_for_node", staticmethod(lambda *a, **kw: True))
+    monkeypatch.setattr(
+        "arctis_sound_manager.gui.dbus_wrapper.DbusWrapper.recreate_loopback_single_sync",
+        lambda *a, **kw: None,
+    )
+    monkeypatch.setattr(
+        "arctis_sound_manager.pw_utils.reapply_routing_overrides",
+        lambda *a, **kw: 0,
+    )
 
     worker = sp._ApplyWorker("chat", bands, 3.0, 0.0, 0.0)
     results = []
     worker.done.connect(lambda ok: results.append(ok))
     worker.run()
 
-    assert results == [False], "a refused live-apply on a present node must not report success"
-    assert restart_calls == [], "still no raw restart — healing only"
-    assert healed == [True]
+    assert results == [True]
+    assert len(restart_calls) == 1, "a refused live-apply must fall back to a full restart"
 
 
 def test_apply_worker_live_apply_node_missing_reports_success(monkeypatch, tmp_path):

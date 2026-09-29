@@ -605,19 +605,24 @@ class _ApplyWorker(QThread):
                     node_missing = not pw_node_exists(sink_name)
                     log.warning(
                         "_ApplyWorker: live-apply could not reach channel=%s "
-                        "(filter-chain node %s) — healing instead of a raw "
-                        "restart", self._channel,
+                        "(filter-chain node %s) — %s", self._channel,
                         "missing" if node_missing else "present but refused",
+                        "healing instead of a raw restart" if node_missing
+                        else "restarting filter-chain to load the new conf",
                     )
-                    ensure_filter_chain_healthy()
-                    if self._channel in ("game", "media", "aux"):
-                        from arctis_sound_manager.sonar_to_pipewire import ensure_spatial_eq_links
-                        ensure_spatial_eq_links((self._channel,))
-                    elif self._channel == "micro":
-                        from arctis_sound_manager.sonar_to_pipewire import ensure_micro_capture_link
-                        ensure_micro_capture_link()
-                    self.done.emit(node_missing)
-                    return
+                    if node_missing:
+                        ensure_filter_chain_healthy()
+                        if self._channel in ("game", "media", "aux"):
+                            from arctis_sound_manager.sonar_to_pipewire import ensure_spatial_eq_links
+                            ensure_spatial_eq_links((self._channel,))
+                        elif self._channel == "micro":
+                            from arctis_sound_manager.sonar_to_pipewire import ensure_micro_capture_link
+                            ensure_micro_capture_link()
+                        self.done.emit(True)
+                        return
+                    # Refused (#181, SteamOS): the running graph will not take
+                    # the values, but a restart loads the conf already on disk.
+                    # Falling through is what a structural change does anyway.
                 # else: a real structural change (band added/removed/retyped,
                 # preset switch, spatial/channel-count change, …) — fall
                 # through to the full restart path below.

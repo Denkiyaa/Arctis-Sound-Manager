@@ -371,8 +371,9 @@ def test_set_filter_controls_retries_after_permission_repair():
             set_param_calls.append(argv)
             if len(set_param_calls) == 1:
                 # set_filter_controls runs pw-cli with text=True.
+                # Real pw-cli exits 0 on a failed command; only stderr says so.
                 return SimpleNamespace(
-                    returncode=1, stdout='',
+                    returncode=0, stdout='',
                     stderr='Error: set-param failed: Operation not permitted')
             return SimpleNamespace(returncode=0, stdout='', stderr='')
         grant_calls.append(argv)
@@ -397,7 +398,7 @@ def test_set_filter_controls_gives_up_when_repair_does_not_help():
         if argv[:2] == ['pw-cli', 'set-param']:
             set_param_calls.append(argv)
             return SimpleNamespace(
-                returncode=1, stdout='',
+                returncode=0, stdout='',
                 stderr='Error: set-param failed: Operation not permitted')
         return SimpleNamespace(returncode=1, stdout=b'', stderr=b'denied')
 
@@ -408,3 +409,19 @@ def test_set_filter_controls_gives_up_when_repair_does_not_help():
 
     assert ok is False
     assert len(set_param_calls) == 1, 'a failed grant must not be followed by a retry'
+
+
+def test_set_filter_controls_reports_pw_cli_error_despite_exit_0():
+    """pw-cli exits 0 even when set-param fails (#181): an error on stderr
+    must still count as a failed apply, not a silent success."""
+    def run(argv, **_k):
+        return SimpleNamespace(
+            returncode=0, stdout='',
+            stderr='Error: "set-param: unknown global \'42\'"')
+
+    with patch.object(pw_utils, '_pw_dump', _dump), \
+         patch.object(pw_utils, '_pw_run', run), \
+         patch.object(pw_utils.shutil, 'which', lambda _: '/usr/bin/pw-cli'):
+        ok = pw_utils.set_filter_controls('effect_input.sonar-game-eq', {'bq0:Gain': 3.0})
+
+    assert ok is False

@@ -831,7 +831,10 @@ def set_filter_controls(node_name: str, controls: dict[str, float]) -> bool:
         # that starts our clients restricted, PipeWire refuses set-param the
         # same way it refuses pw-link. Raise the owning client's permission
         # once and retry before giving up — see grant_props_permissions().
-        if r.returncode != 0 and _LINK_DENIED in err.lower():
+        # Unlike pw-link, pw-cli exits 0 when a command fails and only prints
+        # the error on stderr, so the returncode alone never saw a refusal:
+        # every preset looked applied while the graph kept the old curve.
+        if _LINK_DENIED in err.lower():
             if grant_props_permissions(node_name, data):
                 r = _pw_run(
                     ["pw-cli", "set-param", str(node_id), "Props",
@@ -840,7 +843,7 @@ def set_filter_controls(node_name: str, controls: dict[str, float]) -> bool:
                 )
                 err = (r.stderr or "").strip()
 
-        if r.returncode != 0:
+        if r.returncode != 0 or "error" in err.lower():
             logger.warning(
                 "set_filter_controls: pw-cli set-param on '%s' (%s) failed: %s",
                 node_name, params, err,
