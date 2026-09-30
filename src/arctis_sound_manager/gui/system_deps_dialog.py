@@ -24,6 +24,7 @@ import re
 import shlex
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QProcess, QThread, QTimer, Signal
@@ -172,6 +173,35 @@ def _is_user_run(argv: list[str] | None) -> bool:
     if head == "python3" and "pip" in argv and "--user" in argv:
         return True
     return False
+
+
+def _batch_by_pkgmgr(commands: list[list[str]]) -> list[list[str]]:
+    """Fold package installs into one command per package manager, so a
+    single elevation prompt covers them all."""
+    groups: dict[str, list[str]] = {}  # pkgmgr -> packages list
+    batches: list[list[str]] = []      # multi-step bash cmds + per-pkgmgr groups
+    for argv in commands:
+        # head is dnf / apt-get / pacman — the package name(s) are
+        # the trailing positional args (after subcommand + flags). To keep
+        # this robust we re-build the argv from scratch per pkgmgr.
+        head = argv[0]
+        if head == "bash":
+            # Multi-step command (e.g. COPR enable + package install) —
+            # cannot be batched with other packages; pass through as-is.
+            batches.append(argv)
+        else:
+            groups.setdefault(head, []).append(argv[-1])
+
+    for mgr, pkgs in groups.items():
+        if mgr == "dnf":
+            batches.append(["dnf", "install", "-y", *pkgs])
+        elif mgr == "apt-get":
+            batches.append(["apt-get", "install", "-y", *pkgs])
+        elif mgr == "pacman":
+            batches.append(["pacman", "-S", "--noconfirm", *pkgs])
+        else:
+            batches.append([mgr, "install", "-y", *pkgs])
+    return batches
 
 
 _SKIP_MARKER = Path.home() / ".config" / "arctis_manager" / ".skip_deps_check"
@@ -353,16 +383,19 @@ class _DepRow(QFrame):
                 copy_btn.setStyleSheet(
                     _btn_ss(_theme.c('BG_BUTTON'), _theme.c('TEXT_PRIMARY'), _theme.c('BG_BUTTON_HOVER'))
                 )
-                _scripted_argv = [
-                    "distrobox-host-exec",
-                    "bash",
-                    "-c",
-                    (
-                        f"bash <(curl -fsSL https://raw.githubusercontent.com/"
-                        f"loteran/Arctis-Sound-Manager/main/scripts/distrobox/{immutable_script})"
-                    ),
-                ]
-                copy_btn.clicked.connect(lambda a=_scripted_argv, b=copy_btn: self._copy_command(a, b, is_host_scope=True))
+                # The README's own host-side line, as is: the script runs as the
+                # user on the host and elevates by itself. Going through
+                # _copy_command wrapped it into "distrobox-host-exec sudo
+                # distrobox-host-exec bash -c …" (#181).
+                _script_line = (
+                    f"bash <(curl -fsSL https://raw.githubusercontent.com/"
+                    f"loteran/Arctis-Sound-Manager/main/scripts/distrobox/{immutable_script})"
+                )
+                # No default arguments on this lambda: clicked(bool) fills the
+                # first one with `checked`, and the old `a=_scripted_argv`
+                # received False — the button copied nothing (#181).
+                copy_btn.clicked.connect(
+                    lambda: self._copy_line(_script_line, copy_btn))
                 copy_btn.setEnabled(True)
                 layout.addWidget(copy_btn)
             else:
@@ -419,6 +452,9 @@ class _DepRow(QFrame):
                 # package actually needs to land. distrobox-host-exec is
                 # the standard escape hatch to the host.
                 line = "distrobox-host-exec " + line
+        self._copy_line(line, button)
+
+    def _copy_line(self, line: str, button: QPushButton | None = None) -> None:
         # Under Wayland the clipboard belongs to the focused window: a
         # compositor drops setText() from a window that does not have keyboard
         # focus, silently. This dialog used to open behind the main window
@@ -430,8 +466,11 @@ class _DepRow(QFrame):
         # a copy that worked from one the compositor refused.
         if button is not None:
             button.setText(I18n.translate('ui', 'copy_cmd_done'))
+            # Bound to the button: a refresh (e.g. Install all finishing)
+            # deletes the rows, and a free-standing timer then hit a dead
+            # C++ object.
             QTimer.singleShot(
-                1500, lambda: button.setText(I18n.translate('ui', 'copy_cmd')))
+                1500, button, lambda: button.setText(I18n.translate('ui', 'copy_cmd')))
 
 
 class SystemDepsDialog(QDialog):
@@ -602,7 +641,8 @@ class SystemDepsDialog(QDialog):
                 f"No automatic install path for '{result.check.name}' on this distro."
             )
             return
-        self._run_with_pkexec([argv], context=result.check.name)
+        self._run_with_pkexec([argv], context=result.check.name,
+                              host=result.check.scope is Scope.HOST)
 
     def _install_all(self) -> None:
         """Group all package-install commands by package manager and run
@@ -611,11 +651,11 @@ class SystemDepsDialog(QDialog):
         if not bad:
             return
 
-        groups: dict[str, list[str]] = {}  # pkgmgr -> packages list
         internals: list[list[str]] = []    # asm-setup / asm-cli / systemctl
         skipped: list[str] = []
         immutable_blocked: list[str] = []  # needs the host, but it's immutable
-        batches: list[list[str]] = []      # multi-step bash cmds + per-pkgmgr groups
+        host_side: list[list[str]] = []    # elevated on the host (or natively)
+        container_side: list[list[str]] = []  # elevated inside the container
 
         for r in bad:
             argv = install_command_for(r.check)
@@ -631,42 +671,15 @@ class SystemDepsDialog(QDialog):
                 if script:
                     immutable_blocked.append(r.check.name)
                     continue
-            head = argv[0]
             if _is_user_run(argv):
                 # asm-setup / asm-cli / systemctl --user / paru / pip --user —
                 # run un-elevated after the pkexec batch (#175).
                 internals.append(argv)
                 continue
-            # head is dnf / apt-get / pacman — the package name(s) are
-            # the trailing positional args (after subcommand + flags). To keep
-            # this robust we re-build the argv from scratch per pkgmgr.
-            if head == "dnf":
-                groups.setdefault("dnf", []).append(argv[-1])
-            elif head == "apt-get":
-                groups.setdefault("apt-get", []).append(argv[-1])
-            elif head == "pacman":
-                groups.setdefault("pacman", []).append(argv[-1])
-            elif head == "paru":
-                # paru must run as the user (not via pkexec) — fall back to
-                # individual sudo run; the user will get its own prompt.
-                internals.append(argv)
-            elif head == "bash":
-                # Multi-step command (e.g. COPR enable + package install) —
-                # cannot be batched with other packages; pass through as-is.
-                batches.append(argv)
+            if r.check.scope is Scope.CONTAINER and _running_in_container():
+                container_side.append(argv)
             else:
-                # unknown pkgmgr — run as-is
-                groups.setdefault(head, []).append(argv[-1])
-
-        for mgr, pkgs in groups.items():
-            if mgr == "dnf":
-                batches.append(["dnf", "install", "-y", *pkgs])
-            elif mgr == "apt-get":
-                batches.append(["apt-get", "install", "-y", *pkgs])
-            elif mgr == "pacman":
-                batches.append(["pacman", "-S", "--noconfirm", *pkgs])
-            else:
-                batches.append([mgr, "install", "-y", *pkgs])
+                host_side.append(argv)
 
         notices = []
         if skipped:
@@ -687,22 +700,40 @@ class SystemDepsDialog(QDialog):
         if notices:
             self._status_lbl.setText(' '.join(notices))
 
-        all_cmds = batches + internals
-        if not all_cmds:
+        runs = [(cmds, host) for cmds, host in (
+            (_batch_by_pkgmgr(container_side), False),
+            (_batch_by_pkgmgr(host_side), True),
+        ) if cmds]
+        if not runs:
+            if internals:
+                self._run_with_pkexec(internals, context="all missing deps")
             return
-        self._run_with_pkexec(all_cmds, context="all missing deps")
+        # The un-elevated commands ride with the last elevated run, as before.
+        runs[-1] = (runs[-1][0] + internals, runs[-1][1])
+
+        def _start(i: int) -> None:
+            cmds, host = runs[i]
+            self._run_with_pkexec(
+                cmds, context="all missing deps", host=host,
+                then=(lambda: _start(i + 1)) if i + 1 < len(runs) else None)
+        _start(0)
 
     def _run_with_pkexec(
         self,
         commands: list[list[str]],
         context: str,
         *,
+        host: bool = True,
+        then: Callable[[], None] | None = None,
         _mirror_retry: bool = False,
     ) -> None:
         """Run the commands sequentially via pkexec (or directly if the
         head is an internal helper that shouldn't be elevated). The dialog
         stays alive; on completion of the last command we re-run the
-        checker to refresh the rows.
+        checker to refresh the rows — or call *then* instead, on success.
+
+        *host* False means the commands install CONTAINER-scope deps: inside
+        a container they are elevated there, with sudo, not on the host.
 
         On pacman 404 mirror errors the method retries once automatically
         with `pacman -Syy` prepended to the elevated batch (_mirror_retry
@@ -747,7 +778,14 @@ class SystemDepsDialog(QDialog):
         # container question entirely and ran pkexec inside the container —
         # elevating nothing on the host, with no message at all.
         pkexec_prefix = ["pkexec"]
-        if _running_in_container():
+        if _running_in_container() and not host:
+            # The container's own package manager, the one that is writable
+            # even on an immutable host. Routing these through the host's
+            # pkexec ran e.g. pacman on SteamOS's read-only rootfs (#181).
+            # distrobox gives the user passwordless sudo; -n makes any other
+            # setup fail at once instead of waiting on a prompt nobody sees.
+            pkexec_prefix = ["sudo", "-n"]
+        elif _running_in_container():
             host_prefix = _host_exec()
             if not host_prefix:
                 # No way out of the container (distrobox-host-exec missing,
@@ -806,6 +844,8 @@ class SystemDepsDialog(QDialog):
                     self._run_with_pkexec(
                         [resync_cmd, *elevated] + user_local,
                         context,
+                        host=host,
+                        then=then,
                         _mirror_retry=True,
                     )
                     return
@@ -820,6 +860,8 @@ class SystemDepsDialog(QDialog):
             else:
                 if user_local:
                     self._start_user_cmds(user_local)
+                elif then is not None:
+                    then()
                 else:
                     self._set_busy(False)
                     self._refresh()

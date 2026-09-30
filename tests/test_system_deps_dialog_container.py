@@ -440,3 +440,76 @@ def test_row_keeps_install_button_on_a_mutable_host(monkeypatch, qt_app):
     finally:
         row.deleteLater()
         dialog.deleteLater()
+
+
+# ── #181: SteamOS — container-side installs, copy button ────────────────────
+
+def test_container_scope_install_elevates_inside_the_container(monkeypatch, qt_app):
+    """#181: a CONTAINER-scope dep (rnnoise, staged into ~/.ladspa for the
+    host) must install with the container's package manager. Routing it
+    through the host's pkexec ran pacman on SteamOS's read-only rootfs."""
+    argv = ["pacman", "-S", "--noconfirm", "noise-suppression-for-voice"]
+    check = _make_failing_check(argv, name="rnnoise LADSPA plugin", scope=Scope.CONTAINER)
+    monkeypatch.setattr(sdd, "run_all_checks", lambda: [check])
+    monkeypatch.setattr(sdd, "_running_in_container", lambda: True)
+    monkeypatch.setattr(sdd, "_host_exec", lambda: ["distrobox-host-exec"])
+    monkeypatch.setattr(sdd, "QProcess", _NoSpawnQProcess)
+
+    dialog = sdd.SystemDepsDialog()
+    try:
+        dialog._install_one(check)
+        assert _NoSpawnQProcess.last_program == "sudo"
+        assert _NoSpawnQProcess.last_arguments == ["-n", *argv]
+    finally:
+        dialog.deleteLater()
+
+
+def test_install_all_runs_container_side_then_host_side(monkeypatch, qt_app):
+    """Install all on a mutable host: container deps elevate in the container,
+    host deps through distrobox-host-exec pkexec — one after the other."""
+    c_argv = ["pacman", "-S", "--noconfirm", "noise-suppression-for-voice"]
+    h_argv = ["pacman", "-S", "--noconfirm", "polkit"]
+    checks = [
+        _make_failing_check(c_argv, name="rnnoise LADSPA plugin", scope=Scope.CONTAINER),
+        _make_failing_check(h_argv, name="pkexec (polkit)", scope=Scope.HOST),
+    ]
+    monkeypatch.setattr(sdd, "run_all_checks", lambda: checks)
+    monkeypatch.setattr(sdd, "_running_in_container", lambda: True)
+    monkeypatch.setattr(sdd, "_host_is_immutable", lambda: False)
+    monkeypatch.setattr(sdd, "_host_exec", lambda: ["distrobox-host-exec"])
+    monkeypatch.setattr(sdd, "QProcess", _NoSpawnQProcess)
+
+    dialog = sdd.SystemDepsDialog()
+    try:
+        dialog._install_all()
+        assert _NoSpawnQProcess.last_program == "sudo"
+        assert _NoSpawnQProcess.last_arguments == ["-n", *c_argv]
+
+        dialog._running_processes[-1].finished.emit(0, QProcess.ExitStatus.NormalExit)
+        assert _NoSpawnQProcess.last_program == "distrobox-host-exec"
+        assert _NoSpawnQProcess.last_arguments == ["pkexec", *h_argv]
+    finally:
+        dialog.deleteLater()
+
+
+def test_immutable_host_copy_button_copies_the_host_script_line(monkeypatch, qt_app):
+    """#181: the button is clicked through its real signal. clicked(bool) used
+    to land in the lambda's first default argument, so the argv was False and
+    nothing was copied. The line is the README's host-side one, unwrapped."""
+    argv = ["pacman", "-S", "--noconfirm", "polkit"]
+    monkeypatch.setattr(sdd, "run_all_checks", lambda: [])
+    monkeypatch.setattr(sdd, "_running_in_container", lambda: True)
+    monkeypatch.setattr(sdd, "_host_is_immutable", lambda: True)
+
+    check = _make_failing_check(argv, name="pkexec (polkit)", scope=Scope.HOST)
+    row = sdd._DepRow(check, parent=None, host_distro_id="steamos")
+    try:
+        QGuiApplication.clipboard().setText("sentinel")
+        copy_btn = next(b for b in row.findChildren(QPushButton) if b.text() == "Copy cmd")
+        copy_btn.click()
+        assert QGuiApplication.clipboard().text() == (
+            "bash <(curl -fsSL https://raw.githubusercontent.com/"
+            "loteran/Arctis-Sound-Manager/main/scripts/distrobox/steamos.sh)"
+        )
+    finally:
+        row.deleteLater()

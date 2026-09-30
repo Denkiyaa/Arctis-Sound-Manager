@@ -65,8 +65,10 @@ class Scope(Enum):
                 host does NOT block installing these — the container's
                 package manager is writable even when the host's is not.
     HOST      — the dependency is consumed by a process on the HOST: udev
-                rules (host's udevd), pkexec (host's polkit agent), LADSPA
-                plugins (host's pipewire filter-chain). These CANNOT be
+                rules (host's udevd), pkexec (host's polkit agent). (LADSPA
+                plugins are loaded by the host too, but ASM stages the
+                container's copy into ~/.ladspa, so they install as
+                CONTAINER — see _ladspa_plugin_ref.) These CANNOT be
                 installed from inside a container on an immutable host; the
                 distrobox scripts handle them, or the user must run a command
                 on the host directly.
@@ -246,6 +248,8 @@ _LADSPA_DIRS = (
 
 # Cache for host LADSPA listing when running in a container. Populated once
 # per check pass by _host_ladspa_files(), consumed by all LADSPA detect calls.
+# Holds absolute host paths, so a hit can be written straight into a
+# filter-chain `plugin =` directive (the host's pipewire is what loads it).
 _host_ladspa_cache: set[str] | None = None
 
 
@@ -268,7 +272,7 @@ def _host_exec_prefix() -> list[str] | None:
 
 
 def _host_ladspa_files() -> set[str]:
-    """List of .so filenames found in host LADSPA directories.
+    """Absolute paths of the .so files found in host LADSPA directories.
 
     When NOT in a container, returns an empty set (the local filesystem IS
     the host's, and _find_ladspa_plugin already scans it). When in a container,
@@ -293,7 +297,7 @@ def _host_ladspa_files() -> set[str]:
     script = (
         f"for d in {quoted_dirs}; do "
         "if [ -d \"$d\" ]; then "
-        "find \"$d\" -maxdepth 1 -type f -name '*.so' -printf '%f\\n' 2>/dev/null; "
+        "find \"$d\" -maxdepth 1 -type f -name '*.so' -printf '%p\\n' 2>/dev/null; "
         "fi; "
         "done"
     )
@@ -340,20 +344,21 @@ def _find_ladspa_plugin(name_pattern: str) -> str | None:
 
     In a container, the host's LADSPA plugins are what matters — the host's
     pipewire loads the filter-chain. This function checks the host's system
-    dirs via distrobox-host-exec first, then falls back to the local scan
-    (which covers ~/.ladspa, bind-mounted and shared between both sides).
+    dirs via distrobox-host-exec first and returns the host path, then falls
+    back to the local scan. A plugin found only in the container is a real
+    answer too: sonar_to_pipewire._ladspa_plugin_ref stages it into
+    ~/.ladspa, shared with the host (#100).
     """
     import fnmatch
 
-    # In a container, the host's system LADSPA dirs are authoritative.
-    # A .so present only in the container and not on the host is a false OK.
+    # In a container, the host's system LADSPA dirs come first.
     if _running_in_container():
-        host_files = _host_ladspa_files()
-        for fname in host_files:
-            if fnmatch.fnmatch(fname, name_pattern):
-                # The file exists on the host; report it as found. The exact
-                # path is not needed for the boolean check.
-                return f"(host:{fname})"
+        for path in sorted(_host_ladspa_files()):
+            if fnmatch.fnmatch(os.path.basename(path), name_pattern):
+                # A real host path, not a marker: _ladspa_plugin_ref writes it
+                # into the filter-chain config as is. The "(host:…)" marker
+                # this used to return ended up there verbatim (#181).
+                return path
 
     # Local scan (covers ~/.ladspa which is shared, and is the only scan
     # when not in a container).
@@ -528,6 +533,28 @@ def _can_import(module: str) -> bool:
 
 def _which(binary: str) -> bool:
     return shutil.which(binary) is not None
+
+
+def _host_which(binary: str) -> bool:
+    """`_which` on the host when we run in a container.
+
+    The container's PATH says nothing about the host's: SteamOS ships pkexec,
+    the Arch distrobox on top of it does not, and the dialog flagged a missing
+    pkexec that the install path (distrobox-host-exec pkexec) never needed
+    (#181). Unreachable host → False, as there is then no host pkexec to use.
+    """
+    if not _running_in_container():
+        return _which(binary)
+    prefix = _host_exec_prefix()
+    if not prefix:
+        return False
+    try:
+        result = subprocess.run(
+            [*prefix, "sh", "-c", 'command -v "$1" >/dev/null', "sh", binary],
+            capture_output=True, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
 
 
 def _pip_user(pkg: str) -> list[str]:
@@ -774,12 +801,12 @@ def _build_checks() -> list[DepCheck]:
             # package. A referenced-but-missing .so can SEGV the whole
             # filter-chain (issue #88), so require all three, not just plate.
             #
-            # HOST scope: the LADSPA plugin is loaded by the HOST's pipewire
-            # filter-chain.service, not by any process inside the container.
-            # When in a container the check must look at the host's LADSPA
-            # directories, not the container's (a .so present only in the
-            # container is a false OK because the host's pipewire won't find
-            # it).
+            # The plugin is loaded by the HOST's pipewire filter-chain, so in
+            # a container the host's LADSPA dirs are looked at first. It is
+            # still installed in the CONTAINER: a plugin found only there is
+            # staged into ~/.ladspa, which the host shares, and the config
+            # points at that copy (_ladspa_plugin_ref, #100). On an immutable
+            # host (SteamOS, Bazzite) that is the only install path there is.
             name="LADSPA SWH plugins (plate_1423 / sc4m_1916 / gate_1410)",
             severity=Severity.BLOCKING,
             feature="Spatial Audio, Smart Volume, mic noise gate",
@@ -792,14 +819,16 @@ def _build_checks() -> list[DepCheck]:
                 "debian": ["apt-get", "install", "-y", "swh-plugins"],
                 "arch":   ["pacman", "-S", "--noconfirm", "swh-plugins"],
             },
-            scope=Scope.HOST,
+            scope=Scope.CONTAINER,
         ),
         DepCheck(
             # Optional ClearCast mic noise suppression — the rest of ASM works
             # without it, so this is DEGRADED, not BLOCKING (issue #65).
             #
-            # HOST scope: same reasoning as LADSPA SWH — the plugin is loaded
-            # by the host's pipewire filter-chain.
+            # Scope: same reasoning as LADSPA SWH. Keep the `lib` prefix in
+            # the pattern: SteamOS ships NoiseTorch's rnnoise_ladspa.so, whose
+            # only label is "nt-filter" — not the noise_suppressor_mono the
+            # micro chain loads (#181).
             name="rnnoise LADSPA plugin",
             severity=Severity.DEGRADED,
             feature="ClearCast mic noise suppression",
@@ -831,7 +860,7 @@ def _build_checks() -> list[DepCheck]:
                 "the LADSPA plugin only — takes a moment). Without it, only ClearCast "
                 "mic noise suppression is unavailable."
             ),
-            scope=Scope.HOST,
+            scope=Scope.CONTAINER,
         ),
         DepCheck(
             # udev rules live on the HOST: udevd only ever reads the host's
@@ -1190,11 +1219,11 @@ def _build_checks() -> list[DepCheck]:
             # the HOST, not inside the container. Inside a container `which
             # pkexec` may succeed (polkit is often pulled as a dependency)
             # but the container's pkexec cannot elevate on the host. The
-            # real authority is the host's pkexec.
+            # real authority is the host's pkexec, so that is what we look for.
             name="pkexec (polkit)",
             severity=Severity.BLOCKING,
             feature="install missing system packages from the GUI",
-            detect=lambda: _which("pkexec"),
+            detect=lambda: _host_which("pkexec"),
             install_commands={
                 "fedora": ["dnf", "install", "-y", "polkit"],
                 "debian": ["apt-get", "install", "-y", "policykit-1"],

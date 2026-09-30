@@ -1552,15 +1552,41 @@ def test_ladspa_ref_container_bare_name_fallback_on_copy_failure(tmp_path):
 
     home = tmp_path / "home"
     home.mkdir()
+    sysdir = tmp_path / "usr_lib_ladspa"
+    sysdir.mkdir()
+    src = sysdir / "sc4m_1916.so"
+    src.write_bytes(b"\x7fELF-fake-plugin")
     with patch("arctis_sound_manager.system_deps_checker._find_ladspa_plugin",
-               return_value="/nonexistent/ladspa/sc4m_1916.so"), \
+               return_value=str(src)), \
+         patch("arctis_sound_manager.bug_reporter._detect_container_env",
+               return_value="distrobox (container=podman, CONTAINER_ID=asm)"), \
+         patch("arctis_sound_manager.sonar_to_pipewire.Path.home",
+               return_value=home), \
+         patch("shutil.copy", side_effect=PermissionError("unreadable")):
+        ref = _ladspa_plugin_ref("sc4m_1916.so")
+
+    assert ref == "sc4m_1916"
+
+
+def test_ladspa_ref_container_keeps_host_path(tmp_path):
+    """#181: a plugin _find_ladspa_plugin found on the HOST does not exist in
+    the container's filesystem. It is what the host's filter-chain loads, so
+    its absolute path goes into the config as is — no staging, no bare name."""
+    from arctis_sound_manager.sonar_to_pipewire import _ladspa_plugin_ref
+
+    home = tmp_path / "home"
+    home.mkdir()
+    host_path = str(tmp_path / "host-only" / "librnnoise_ladspa.so")
+    with patch("arctis_sound_manager.system_deps_checker._find_ladspa_plugin",
+               return_value=host_path), \
          patch("arctis_sound_manager.bug_reporter._detect_container_env",
                return_value="distrobox (container=podman, CONTAINER_ID=asm)"), \
          patch("arctis_sound_manager.sonar_to_pipewire.Path.home",
                return_value=home):
-        ref = _ladspa_plugin_ref("sc4m_1916.so")
+        ref = _ladspa_plugin_ref("librnnoise_ladspa.so")
 
-    assert ref == "sc4m_1916"
+    assert ref == host_path
+    assert not (home / ".ladspa").exists()
 
 
 def test_conf_has_bare_ladspa_detects_bare_plugin():

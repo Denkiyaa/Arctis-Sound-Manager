@@ -208,13 +208,13 @@ def test_host_ladspa_files_queries_host_in_container(monkeypatch):
     mock_result = subprocess.CompletedProcess(
         args=["distrobox-host-exec", "sh", "-c", "…"],
         returncode=0,
-        stdout="plate_1423.so\nsc4m_1916.so\n",
+        stdout="/usr/lib/ladspa/plate_1423.so\n/usr/lib/ladspa/sc4m_1916.so\n",
         stderr="",
     )
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
     files = sdc._host_ladspa_files()
-    assert files == {"plate_1423.so", "sc4m_1916.so"}
+    assert files == {"/usr/lib/ladspa/plate_1423.so", "/usr/lib/ladspa/sc4m_1916.so"}
     sdc._reset_host_ladspa_cache()
 
 
@@ -236,14 +236,14 @@ def test_find_ladspa_plugin_uses_host_listing_in_container(monkeypatch, tmp_path
     monkeypatch.setattr(sdc, "_host_exec_prefix", lambda: ["distrobox-host-exec"])
     mock_result = subprocess.CompletedProcess(
         args=[], returncode=0,
-        stdout="plate_1423.so\n", stderr="",
+        stdout="/usr/lib/ladspa/plate_1423.so\n", stderr="",
     )
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: mock_result)
 
-    # Plugin on host → found via host listing.
+    # Plugin on host → found via host listing, as the host's absolute path:
+    # it is written into the filter-chain config as is (#181).
     result = sdc._find_ladspa_plugin("plate_1423.so")
-    assert result is not None
-    assert result.startswith("(host:"), f"expected host-prefixed path, got {result!r}"
+    assert result == "/usr/lib/ladspa/plate_1423.so"
 
     # Host listing is cached: second call must NOT re-spawn distrobox-host-exec.
     before = mock_result
@@ -562,3 +562,44 @@ def test_ensure_deepfilter_rejects_non_elf(tmp_path, monkeypatch):
     assert sdc.ensure_deepfilter_plugin() is None
     assert not (tmp_path / ".ladspa" /
                 "libdeep_filter_ladspa-0.5.6-x86_64-unknown-linux-gnu.so").exists()
+
+
+def test_rnnoise_pattern_skips_noisetorch_plugin_on_host(monkeypatch):
+    """#181: SteamOS ships NoiseTorch's rnnoise_ladspa.so, whose only label is
+    "nt-filter". The micro chain loads noise_suppressor_mono, so that file must
+    not satisfy the rnnoise check."""
+    monkeypatch.setattr(sdc, "_running_in_container", lambda: True)
+    monkeypatch.setattr(sdc, "_host_exec_prefix", lambda: ["distrobox-host-exec"])
+    monkeypatch.setattr(sdc, "_ladspa_search_dirs", lambda: ())
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="/usr/lib/ladspa/rnnoise_ladspa.so\n", stderr=""))
+    sdc._reset_host_ladspa_cache()
+    try:
+        assert sdc._find_ladspa_plugin("librnnoise*.so") is None
+    finally:
+        sdc._reset_host_ladspa_cache()
+
+
+@pytest.mark.parametrize("rc, found", [(0, True), (1, False)])
+def test_host_which_asks_the_host_in_a_container(monkeypatch, rc, found):
+    """#181: pkexec lives on the SteamOS host, not in the Arch distrobox — the
+    container's PATH must not decide."""
+    calls = []
+    monkeypatch.setattr(sdc, "_running_in_container", lambda: True)
+    monkeypatch.setattr(sdc, "_host_exec_prefix", lambda: ["distrobox-host-exec"])
+    monkeypatch.setattr(sdc.shutil, "which", lambda name: None)
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(args=argv, returncode=rc)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert sdc._host_which("pkexec") is found
+    assert calls and calls[0][0] == "distrobox-host-exec" and calls[0][-1] == "pkexec"
+
+
+def test_host_which_unreachable_host_is_false(monkeypatch):
+    monkeypatch.setattr(sdc, "_running_in_container", lambda: True)
+    monkeypatch.setattr(sdc, "_host_exec_prefix", lambda: None)
+    monkeypatch.setattr(sdc.shutil, "which", lambda name: "/usr/bin/pkexec")
+    assert sdc._host_which("pkexec") is False

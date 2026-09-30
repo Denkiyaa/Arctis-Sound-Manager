@@ -164,6 +164,11 @@ def _ladspa_plugin_ref(name_pattern: str, resolved: str | None = None) -> str | 
     except ValueError:
         pass
 
+    if not resolved_path.exists():
+        # Not in our filesystem: _find_ladspa_plugin found it on the host,
+        # which is where the filter-chain runs — nothing to stage (#181).
+        return resolved
+
     # System-wide container path: not guaranteed to exist on the host. Stage a
     # copy into ~/.ladspa (shared with the host) and return that absolute path
     # so the host's filter-chain loads it directly instead of searching its own
