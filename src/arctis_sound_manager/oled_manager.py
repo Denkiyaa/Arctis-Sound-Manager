@@ -189,8 +189,17 @@ class OledManager:
         # passed to ctrl_transfer is recomputed per-packet in _send_oled_packet.
         self._oled_frame_report_type: int = (self._oled_wvalue >> 8) & 0xFF
 
-        self._protocol = OledProtocol(report_id=_report_id, width=_width, height=_height)
-        self._renderer = OledRenderer()
+        if oled_cfg is not None:
+            self._protocol = OledProtocol(
+                report_id=_report_id, width=_width, height=_height,
+                frame_report_size=oled_cfg.frame_report_size,
+                control_report_size=oled_cfg.control_report_size,
+                min_brightness=oled_cfg.min_brightness,
+                transpose=oled_cfg.transpose,
+            )
+        else:
+            self._protocol = OledProtocol(report_id=_report_id, width=_width, height=_height)
+        self._renderer = OledRenderer(_width, _height)
         self._weather = WeatherService()
         self._stop_event = threading.Event()
         self._reset_scroll_event = threading.Event()
@@ -324,6 +333,20 @@ class OledManager:
     def set_brightness(self, level: int) -> None:
         packet = self._protocol.build_brightness_packet(level)
         self._send_oled_packet(packet, control=True)
+
+    def _go_dark(self) -> None:
+        """Turn the panel off: brightness 0, or a black frame where 0 is refused.
+
+        The Nova Elite family's brightness range is 1-10 (its spec); a 0 is
+        out of range, and out-of-range writes are dropped without an error, so
+        the panel would simply stay lit. Drawing black takes the screen from
+        the firmware UI, which is what waking hands back.
+        """
+        if self._protocol.can_go_dark:
+            self._send_oled_packet(self._protocol.build_brightness_packet(0), control=True)
+            return
+        for packet in self._protocol.build_blank_frame_packets():
+            self._send_oled_packet(packet)
 
     def set_custom_display(self, enabled: bool) -> None:
         if not enabled:
@@ -726,7 +749,7 @@ class OledManager:
                     elapsed = datetime.now().timestamp() - self._last_update_time
                     if elapsed >= timeout:
                         self._screen_off = True
-                        self._send_oled_packet(self._protocol.build_brightness_packet(0), control=True)
+                        self._go_dark()
                         continue
 
                 if not self._screen_off:
@@ -768,7 +791,7 @@ class OledManager:
         logger.info("OLED: session locked or idle — screen off")
         self._screen_off = True
         self._off_for_away = True
-        self._send_oled_packet(self._protocol.build_brightness_packet(0), control=True)
+        self._go_dark()
         return True
 
     def on_status_changed(self, key: str, value: object) -> None:

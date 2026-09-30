@@ -31,6 +31,10 @@ class OledProtocol:
         report_id: int = _DEFAULT_REPORT_ID,
         width: int = _DEFAULT_DISPLAY_WIDTH,
         height: int = _DEFAULT_DISPLAY_HEIGHT,
+        frame_report_size: int = REPORT_SIZE,
+        control_report_size: int = CONTROL_REPORT_SIZE,
+        min_brightness: int = 0,
+        transpose: bool = False,
     ) -> None:
         """Initialise the protocol with per-device parameters.
 
@@ -39,10 +43,29 @@ class OledProtocol:
                        Nova Pro Wireless = 0x06, Nova Pro Omni = 0x01.
             width:     OLED panel width in pixels (default 128).
             height:    OLED panel height in pixels (default 64).
+            frame_report_size / control_report_size:
+                       HID chunk sizes from the device's spec, report id byte
+                       included (Nova Elite/Omni: 1036 for draw_bitmap).
+                       Report id 0x00 means unnumbered reports: that byte is
+                       dropped from what goes on the wire.
+            min_brightness: lowest level the firmware accepts; the Elite
+                       family's range is 1-10, so 0 cannot darken it.
+            transpose: the controller addresses the panel rotated 90°
+                       (Arctis Pro GameDAC: a 128x52 panel drawn as 52
+                       columns of 128 rows).
         """
         self.report_id = report_id
         self.DISPLAY_WIDTH = width
         self.DISPLAY_HEIGHT = height
+        self.REPORT_SIZE = frame_report_size
+        self.CONTROL_REPORT_SIZE = control_report_size
+        self.min_brightness = min_brightness
+        self.transpose = transpose
+
+    @property
+    def can_go_dark(self) -> bool:
+        """Whether brightness 0 is a level the panel accepts."""
+        return self.min_brightness == 0
 
     # ------------------------------------------------------------------
     # Legacy class-attribute aliases so callers that access REPORT_ID as
@@ -54,6 +77,8 @@ class OledProtocol:
     def build_frame_packets(
         self, pixel_data: bytes, width: int, height: int
     ) -> list[list[int]]:
+        if self.transpose:
+            pixel_data, width, height = self._transpose(pixel_data, width, height)
         padded_height = self._pad_height(height)
         packets: list[list[int]] = []
 
@@ -77,15 +102,37 @@ class OledProtocol:
         return packets
 
     def build_brightness_packet(self, level: int) -> list[int]:
-        clamped = max(0, min(self.MAX_BRIGHTNESS, level))
+        clamped = max(self.min_brightness, min(self.MAX_BRIGHTNESS, level))
         header = [self.report_id, self.CMD_BRIGHTNESS, clamped, 0, 0, 0]
-        # 64-byte Output report — matches ggoled; Wired GameDAC rejects 1024 bytes here.
+        # Short Output report — matches ggoled; Wired GameDAC rejects 1024 bytes here.
         return self._build_packet(header, [], size=self.CONTROL_REPORT_SIZE)
 
     def build_return_to_ui_packet(self) -> list[int]:
         header = [self.report_id, self.CMD_RETURN_UI, 0, 0, 0, 0]
         # 64-byte Output report — same rationale as build_brightness_packet.
         return self._build_packet(header, [], size=self.CONTROL_REPORT_SIZE)
+
+    def build_blank_frame_packets(self) -> list[list[int]]:
+        """An all-dark frame, for panels that cannot be dimmed to 0."""
+        size = ((self.DISPLAY_WIDTH + 7) // 8) * self.DISPLAY_HEIGHT
+        return self.build_frame_packets(
+            bytes(size), self.DISPLAY_WIDTH, self.DISPLAY_HEIGHT
+        )
+
+    @staticmethod
+    def _transpose(
+        pixel_data: bytes, width: int, height: int
+    ) -> tuple[bytes, int, int]:
+        """Swap axes of a row-major MSB-first 1-bpp image: pixel (x, y) → (y, x)."""
+        src_stride = (width + 7) // 8
+        dst_stride = (height + 7) // 8
+        out = bytearray(dst_stride * width)
+        for y in range(height):
+            for x in range(width):
+                idx = y * src_stride + x // 8
+                if idx < len(pixel_data) and (pixel_data[idx] >> (7 - x % 8)) & 1:
+                    out[x * dst_stride + y // 8] |= 1 << (7 - y % 8)
+        return bytes(out), height, width
 
     def _pad_height(self, height: int) -> int:
         return math.ceil(height / 8) * 8
@@ -132,4 +179,10 @@ class OledProtocol:
         padding = target - len(payload)
         if padding > 0:
             payload.extend([0] * padding)
-        return payload[:target]
+        payload = payload[:target]
+        # Report id 0x00 = the device uses no report ids. The spec still
+        # counts that byte in its chunk size (hidapi's convention), but it is
+        # not part of the report: the device would read 0x93 at offset 1.
+        if self.report_id == 0x00:
+            return payload[1:]
+        return payload

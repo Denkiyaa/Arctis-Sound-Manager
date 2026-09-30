@@ -95,6 +95,31 @@ device:
       headset:
         - chat_mix
         - media_mix
+      # Nothing of the base station's own to report, but its presence is what
+      # gives the device a DAC page and an OLED manager.
+      gamedac: []
+
+  # The 128x52 OLED, from arctis-pro-gameDac.device (draw_bitmap,
+  # reload_display, screen_brightness). Unlike the Nova Pro's panel, the
+  # spec gives a fixed header — x 0, y 0, width 52, height 128 — and an
+  # 832-byte image in one HIDFEATURE chunk of 1025 bytes: the controller
+  # addresses the panel rotated, 52 columns of 128 rows. Control reports
+  # are HIDIO 65. Report id 0x00 means unnumbered, so each report is one
+  # byte shorter on the wire than the spec's chunk.
+  #
+  # Not verified on hardware: which of the two landscape orientations
+  # `transpose` lands on (the spec's pixel conversion is an engine
+  # primitive, not in the file), and the interface — the spec names a
+  # usage page, not an interface number; 2 is the command interface above.
+  oled:
+    interface: 2
+    report_id: 0x00
+    wvalue: 0x0300
+    width: 128
+    height: 52
+    frame_report_size: 1025
+    control_report_size: 65
+    transpose: true
 
   audio:
     spatial_engine: hesuvi

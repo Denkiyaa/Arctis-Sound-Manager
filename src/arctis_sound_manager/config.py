@@ -194,6 +194,13 @@ class OledConfig:
     wvalue: int = 0x0300       # SET_REPORT wValue (0x0300 feature / 0x0200 output)
     width: int = 128           # Screen width in pixels
     height: int = 64           # Screen height in pixels
+    # Sizes of the draw_bitmap and brightness/return-to-UI reports, counted
+    # as the spec's HID chunks are: report id byte included. With report id
+    # 0x00 (unnumbered reports) that byte never goes on the wire.
+    frame_report_size: int = 1024
+    control_report_size: int = 64
+    min_brightness: int = 0    # lowest level the panel accepts (0 = can go dark)
+    transpose: bool = False    # controller addresses the panel rotated 90°
 
 
 @dataclass
@@ -534,6 +541,10 @@ class DeviceConfiguration:
                 wvalue=raw_oled.get('wvalue', 0x0300),
                 width=raw_oled.get('width', 128),
                 height=raw_oled.get('height', 64),
+                frame_report_size=raw_oled.get('frame_report_size', 1024),
+                control_report_size=raw_oled.get('control_report_size', 64),
+                min_brightness=raw_oled.get('min_brightness', 0),
+                transpose=bool(raw_oled.get('transpose', False)),
             )
         else:
             self.oled = None

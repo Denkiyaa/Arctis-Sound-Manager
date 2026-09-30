@@ -62,7 +62,11 @@ class OledRenderer:
     WIDTH = 128
     HEIGHT = 64
 
-    def __init__(self) -> None:
+    def __init__(self, width: int = WIDTH, height: int = HEIGHT) -> None:
+        # Instance attributes shadow the class defaults: the Arctis Pro
+        # GameDAC's panel is 128x52, not the Nova's 128x64.
+        self.WIDTH = width
+        self.HEIGHT = height
         # Sized like the others rather than left unsized: the renderer measures
         # this font with getlength(), which the unsized bitmap font lacks before
         # Pillow 9.2 (#154).
