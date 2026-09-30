@@ -329,8 +329,8 @@ device:
         min: 0x01
         max: 0x0a
         step: 1
-        min_label: 10%
-        max_label: 100%
+        min_label: perc_10
+        max_label: perc_100
         default: 0x08
         update_sequence: [0x01, 0xb9, 'value']
     equalizer:
@@ -340,7 +340,7 @@ device:
         update_sequence: [0x01, 0x2d, 'value']
         values_mapping:
           0x00: Flat
-          0x01: Bass boost
+          0x01: bass_boost
           0x02: Focus
           0x03: Smiley
           0x04: Custom
@@ -350,7 +350,7 @@ device:
         update_sequence: [0x01, 0x2f, 'value']
         values_mapping:
           0x00: Flat
-          0x01: Bass boost
+          0x01: bass_boost
           0x02: Focus
           0x03: Smiley
           0x04: Custom
@@ -371,12 +371,12 @@ device:
         values_mapping:
           0x00: flat
           0x01: balanced
-          0x02: broadcast high pitch
-          0x03: broadcast low pitch
-          0x04: clarity low pitch
-          0x05: clarity high pitch
-          0x06: deep voice
-          0x07: less nasal
+          0x02: broadcast_high_pitch
+          0x03: broadcast_low_pitch
+          0x04: clarity_low_pitch
+          0x05: clarity_high_pitch
+          0x06: deep_voice
+          0x07: less_nasal
           0x08: custom
       mic_sidetone_boom:
         # Byte 2 is the on/off state and byte 3 the level 1-10, exactly as on
@@ -555,7 +555,7 @@ device:
         update_sequence: [0x01, 0xb3, 'value']
         values_mapping:
           0x00: off
-          0x01: -12db
+          0x01: -12_db
           0x02: on
     power:
       auto_off_time_minutes:
@@ -620,7 +620,7 @@ device:
       type: int_str_mapping
       values:
         0x00: flat
-        0x01: bass boost
+        0x01: bass_boost
         0x02: focus
         0x03: smiley
         0x04: custom
@@ -629,18 +629,18 @@ device:
       values:
         0x00: flat
         0x01: balanced
-        0x02: broadcast high pitch
-        0x03: broadcast low pitch
-        0x04: clarity low pitch
-        0x05: clarity high pitch
-        0x06: deep voice
-        0x07: less nasal
+        0x02: broadcast_high_pitch
+        0x03: broadcast_low_pitch
+        0x04: clarity_low_pitch
+        0x05: clarity_high_pitch
+        0x06: deep_voice
+        0x07: less_nasal
         0x08: custom
     equalizer_wireless:
       type: int_str_mapping
       values:
         0x00: flat
-        0x01: bass boost
+        0x01: bass_boost
         0x02: focus
         0x03: smiley
         0x04: custom
