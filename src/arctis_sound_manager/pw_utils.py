@@ -903,6 +903,10 @@ CLIP_STREAM_PREFIX = "asm-clip-"
 _ASM_STREAM_PREFIXES = ("effect_output.", "effect_input.", CLIP_STREAM_PREFIX)
 _ASM_STREAM_NAMES = frozenset(
     f"Arctis_{ch}_sink_out" for ch in ("Game", "Chat", "Media", "Aux"))
+# Not ASM's, but plumbing all the same: SteamOS's WirePlumber wraps every ALSA
+# device in a loopback pair, and the alsa_loopback_stream.* half is what
+# actually feeds the headset. It carries no application.name either (#181).
+_SYSTEM_STREAM_PREFIXES = ("alsa_loopback_stream.", "alsa_loopback_device.")
 
 
 def is_asm_internal_stream(node_name: str) -> bool:
@@ -922,8 +926,13 @@ def is_asm_internal_stream(node_name: str) -> bool:
     pass (#225) steers every stream found reading a monitor onto the Game
     monitor, and took the recorder's Chat and Media streams with it — every
     clip then carried three copies of Game and no Discord or music at all.
+
+    SteamOS's device loopbacks are here too (#181): the router learned
+    ``alsa_loopback_stream.<headset> -> Arctis_Media``, which feeds the
+    headset's own output back into a channel that plays into it. WirePlumber
+    cannot activate that cycle, so the headset received nothing at all.
     """
-    return (node_name.startswith(_ASM_STREAM_PREFIXES)
+    return (node_name.startswith(_ASM_STREAM_PREFIXES + _SYSTEM_STREAM_PREFIXES)
             or node_name in _ASM_STREAM_NAMES)
 
 

@@ -1097,6 +1097,41 @@ def test_overrides_keyed_by_asm_chain_nodes_are_pruned():
                             "Arctis_Game_sink_out"}
 
 
+# ── SteamOS device loopbacks are never applications (#181) ─────────────────
+#
+# SteamOS's WirePlumber puts a loopback pair in front of every ALSA device;
+# alsa_loopback_stream.<device> is what plays into the hardware. Taken for an
+# app, it was pinned to Arctis_Media — a cycle WirePlumber refuses to activate,
+# so the headset went fully silent after every ASM start.
+
+_STEAMOS_HEADSET_STREAM = (
+    "alsa_loopback_stream.alsa_output.usb-SteelSeries_Arctis_Nova_Pro_Wireless-00.analog-stereo")
+
+
+def test_native_stream_scan_skips_steamos_device_loopbacks():
+    from arctis_sound_manager.pw_utils import get_native_streams
+    data = [
+        {"id": 1, "type": "PipeWire:Interface:Node", "info": {"props": {
+            "media.class": "Stream/Output/Audio", "node.name": _STEAMOS_HEADSET_STREAM}}},
+        {"id": 2, "type": "PipeWire:Interface:Node", "info": {"props": {
+            "media.class": "Stream/Output/Audio", "node.name": "Stardew Valley"}}},
+    ]
+    names = [s["app_name"] for s in get_native_streams(data)]
+    assert names == ["Stardew Valley"]
+
+
+def test_overrides_keyed_by_steamos_device_loopbacks_are_pruned():
+    overrides = {
+        "Spotify": "Arctis_Media",
+        _STEAMOS_HEADSET_STREAM: "Arctis_Media",
+        "alsa_loopback_stream.alsa_output.pci-0000_00_05.0.analog-stereo":
+            "alsa_output.pci-0000_00_05.0.analog-stereo",
+    }
+    pruned, dropped = video_router._prune_dead_overrides(overrides, {"Arctis_Media"})
+    assert pruned == {"Spotify": "Arctis_Media"}
+    assert len(dropped) == 2
+
+
 def test_dont_reconnect_streams_are_left_alone():
     """plasmashell's volume feedback carries node.dont-reconnect=true and is
     pinned to the device sink; WirePlumber ignores target.node for it, so the
