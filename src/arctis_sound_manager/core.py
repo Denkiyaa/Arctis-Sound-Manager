@@ -3380,6 +3380,9 @@ class CoreEngine:
 
         self._auto_switch_mic(key)
 
+        if self.oled_manager is not None:
+            self.oled_manager.on_status_changed(key, value)
+
     def _auto_switch_mic(self, key: str) -> None:
         """Flip the Sonar Micro EQ input between the headset mic and a configured
         alternate mic when the armed trigger fires (community request).

@@ -120,6 +120,12 @@ _BURN_IN_INTERVAL_S = 60.0
 # long after a settings change from the GUI — so adjusting the screen from a
 # remote session, or right before locking, still shows the result.
 _AWAY_WAKE_S = 30.0
+
+# Status keys the DAC reports when its wheel (or the headset's) is turned:
+# volume, and the ChatMix balance on the same wheel. A dark panel lights up
+# on any of them — someone who reaches for the wheel is looking at the screen,
+# even with the PC locked while they play on the console plugged into USB-2.
+_WHEEL_KEYS = frozenset({'station_volume', 'chat_mix', 'media_mix'})
 _BURN_IN_POSITIONS: list[tuple[int, int]] = [
     (0, 0), (1, 0), (1, 1), (0, 1), (-1, 1),
     (-1, 0), (-1, -1), (0, -1), (1, -1),
@@ -220,6 +226,11 @@ class OledManager:
         # True while the panel is dark because nobody is at the desktop, as
         # opposed to the fixed timeout: only this one lights up on its own.
         self._off_for_away: bool = False
+        # Last wheel value seen per key. The first report of a key only
+        # records it: it is the initial read after start or re-attach, not
+        # a hand on the wheel.
+        self._wheel_seen: dict[str, object] = {}
+        self._wake_pending = threading.Event()
 
         # How long to wait for a SET_REPORT acknowledgement, and how many writes
         # in a row have gone unacknowledged (issue #196). Starts optimistic and
@@ -759,6 +770,42 @@ class OledManager:
         self._off_for_away = True
         self._send_oled_packet(self._protocol.build_brightness_packet(0), control=True)
         return True
+
+    def on_status_changed(self, key: str, value: object) -> None:
+        """Wheel turned → light the panel back up. Called on the USB listen loop."""
+        if key not in _WHEEL_KEYS:
+            return
+        first = key not in self._wheel_seen
+        self._wheel_seen[key] = value
+        if first:
+            return
+        self._last_update_time = datetime.now().timestamp()
+        if not self._screen_off or self._wake_pending.is_set():
+            return
+        # Waking redraws, which asks MPRIS for the current track: keep that
+        # off the listen loop, it must not stall the next wheel report.
+        self._wake_pending.set()
+        threading.Thread(target=self._wake, name="OledWake", daemon=True).start()
+
+    def _wake(self) -> None:
+        try:
+            if not self._screen_off:
+                return
+            logger.info("OLED: wheel turned — screen on")
+            gs = self._core.general_settings
+            self._screen_off = False
+            self._off_for_away = False
+            self._last_update_time = datetime.now().timestamp()
+            self.set_brightness(gs.oled_brightness)
+            if gs.oled_custom_display:
+                self._reset_scroll()
+                self.update_display(activity=False)
+            else:
+                self._send_oled_packet(self._protocol.build_return_to_ui_packet(), control=True)
+        except Exception as e:
+            logger.warning("OLED wake error: %s", e)
+        finally:
+            self._wake_pending.clear()
 
     def _update_scroll_frame(self) -> None:
         """Re-render _current_image with current eq/profile scroll offsets and send it."""

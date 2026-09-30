@@ -169,3 +169,76 @@ def test_saved_display_order_gains_media():
     gs = GeneralSettings(oled_display_order=["weather", "eq", "profile"])
     assert "media" in gs.oled_display_order
     assert gs.oled_display_order[:3] == ["weather", "eq", "profile"]
+
+
+# ── wheel wake ──────────────────────────────────────────────────────────────
+
+def _wheel_manager(monkeypatch, *, custom: bool):
+    manager, levels = _manager(monkeypatch)
+    manager._core.general_settings.oled_custom_display = custom
+    redraws: list[bool] = []
+    monkeypatch.setattr(manager, "update_display",
+                        lambda activity=True: redraws.append(activity))
+    # Run the wake inline instead of on its own thread.
+    monkeypatch.setattr(oled_mod.threading, "Thread",
+                        lambda target, **k: SimpleNamespace(start=target))
+    return manager, levels, redraws
+
+
+def test_turning_the_wheel_lights_a_dark_panel(monkeypatch):
+    manager, levels, redraws = _wheel_manager(monkeypatch, custom=True)
+    manager.on_status_changed("station_volume", 20)  # initial read
+    manager._screen_off = True
+    manager._off_for_away = True
+
+    manager.on_status_changed("station_volume", 21)
+
+    assert not manager._screen_off and not manager._off_for_away
+    assert levels == [7]
+    assert redraws == [False]
+
+
+def test_the_first_report_after_start_is_not_a_hand_on_the_wheel(monkeypatch):
+    manager, levels, _ = _wheel_manager(monkeypatch, custom=True)
+    manager._screen_off = True
+
+    manager.on_status_changed("chat_mix", 50)
+
+    assert manager._screen_off
+    assert levels == []
+
+
+def test_other_status_keys_do_not_wake(monkeypatch):
+    manager, levels, _ = _wheel_manager(monkeypatch, custom=True)
+    manager.on_status_changed("headset_battery_charge", 5)
+    manager._screen_off = True
+
+    manager.on_status_changed("headset_battery_charge", 4)
+
+    assert manager._screen_off
+    assert levels == []
+
+
+def test_with_the_dac_ui_the_wheel_hands_the_panel_back_to_the_firmware(monkeypatch):
+    manager, levels, redraws = _wheel_manager(monkeypatch, custom=False)
+    manager.on_status_changed("media_mix", 100)
+    manager._screen_off = True
+
+    manager.on_status_changed("media_mix", 90)
+
+    assert levels == [7]
+    assert redraws == []
+    assert len(manager._sent) == 1  # the return-to-UI packet
+
+
+def test_a_wheel_turn_while_away_keeps_the_panel_lit_for_the_grace_period(monkeypatch):
+    manager, _, _ = _wheel_manager(monkeypatch, custom=True)
+    manager._session.away = True
+    manager.on_status_changed("station_volume", 20)
+    manager._screen_off = True
+    manager._off_for_away = True
+
+    manager.on_status_changed("station_volume", 22)
+
+    assert manager._apply_away(manager._core.general_settings) is False
+    assert not manager._screen_off
