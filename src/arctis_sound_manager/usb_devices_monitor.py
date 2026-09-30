@@ -23,6 +23,33 @@ _STEELSERIES_VENDOR_ID = 0x1038
 _WATCHDOG_INTERVAL_SECONDS = 5.0
 
 
+def _host_root_unmapped(uid_map_path: str = '/proc/self/uid_map') -> bool:
+    """Whether the host's root is invisible from our user namespace.
+
+    libudev drops every netlink message whose sender uid is not 0. Inside a
+    rootless container (Distrobox on SteamOS, Bazzite…) udevd's and the
+    kernel's messages arrive from an unmapped uid, so the monitor sets up
+    fine and then never delivers a single event: the headset plugged in
+    after ASM started was simply never seen (#181).
+    """
+    try:
+        with open(uid_map_path) as f:
+            lines = f.read().split('\n')
+    except OSError:
+        return False
+    for line in lines:
+        fields = line.split()
+        if len(fields) != 3:
+            continue
+        try:
+            _inside, outside, count = (int(x) for x in fields)
+        except ValueError:
+            continue
+        if outside <= 0 < outside + count:
+            return False
+    return True
+
+
 class USBDevicesMonitor:
     """USB hotplug monitor with pyudev event backend and a polling fallback.
 
@@ -56,7 +83,13 @@ class USBDevicesMonitor:
         self._watchdog_thread: threading.Thread | None = None
         self._known_devices: dict[tuple[int, int], str] = {}
 
-        if _PYUDEV_AVAILABLE:
+        if _PYUDEV_AVAILABLE and _host_root_unmapped():
+            self.logger.info(
+                "Host root is not mapped in this user namespace (rootless "
+                "container) — libudev would drop every event, using polling."
+            )
+            self._backend = 'polling'
+        elif _PYUDEV_AVAILABLE:
             try:
                 self.context = pyudev.Context()
                 self.monitor = pyudev.Monitor.from_netlink(self.context)
