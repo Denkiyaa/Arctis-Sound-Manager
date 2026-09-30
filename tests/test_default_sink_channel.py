@@ -112,10 +112,13 @@ def _make_pactl(sink_names: list[str]):
     mgr = PulseAudioManager.__new__(PulseAudioManager)
     mgr.logger = MagicMock()
     mgr.pulse = MagicMock()
-    sinks = [MagicMock(proplist={"node.name": n}) for n in sink_names]
-    mgr.sink_list_wrapper = MagicMock(return_value=sinks)
+    streams = [
+        MagicMock(proplist={"node.name": f"{n}_sink_out"}, volume=MagicMock(value_flat=1.0))
+        for n in sink_names
+    ]
+    mgr.pulse.sink_input_list = MagicMock(return_value=streams)
     mgr._chatmix_channels = MagicMock(return_value=["game"])
-    return mgr, {s.proplist["node.name"]: s for s in sinks}
+    return mgr, {s.proplist["node.name"].removesuffix("_sink_out"): s for s in streams}
 
 
 def test_chatmix_still_drives_game_not_media():

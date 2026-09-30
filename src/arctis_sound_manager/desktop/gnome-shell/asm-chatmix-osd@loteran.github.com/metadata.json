@@ -1,0 +1,7 @@
+{
+  "uuid": "asm-chatmix-osd@loteran.github.com",
+  "name": "Arctis Sound Manager ChatMix OSD",
+  "description": "Shows Arctis Sound Manager's ChatMix bar at the bottom of the screen when the headset's ChatMix dial moves, over fullscreen games too. Needs Arctis Sound Manager running.",
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
+  "url": "https://github.com/loteran/Arctis-Sound-Manager"
+}

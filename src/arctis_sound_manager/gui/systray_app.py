@@ -25,6 +25,8 @@ from arctis_sound_manager.constants import (DBUS_BUS_NAME,
                                             DBUS_STATUS_OBJECT_PATH,
                                             SETTINGS_FOLDER)
 from arctis_sound_manager.gui.base_app import QBaseDesktopApp
+from arctis_sound_manager.gui.chatmix_osd import (ChatMixWatcher,
+                                                  enable_gnome_extension_once)
 from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
 from arctis_sound_manager.gui.main_app import QMainApp
 from arctis_sound_manager.gui.tray_eq_presets import (
@@ -62,6 +64,18 @@ def _show_battery_in_tray() -> bool:
     except Exception:
         pass
     return True
+
+
+def _read_general_settings_file() -> dict:
+    try:
+        from arctis_sound_manager.constants import SETTINGS_FOLDER
+        from ruamel.yaml import YAML
+        f = SETTINGS_FOLDER / 'general_settings.yaml'
+        if f.is_file():
+            return YAML(typ='safe').load(f.read_text(encoding='utf-8')) or {}
+    except Exception:
+        pass
+    return {}
 
 
 def _tray_icon_color() -> str:
@@ -197,6 +211,21 @@ class QSystrayApp(QBaseDesktopApp):
         self._staleness_timer.timeout.connect(self._check_upgraded_under_us)
         self._staleness_timer.start()
 
+        # ChatMix OSD: the tray is the one ASM process that is always running,
+        # so it is the one that can show the dial moving mid-game. Settings are
+        # cached here and refreshed by the settings watcher above, rather than
+        # re-parsed on every volume event a turning dial fires.
+        self._refresh_chatmix_osd_settings()
+        self._chatmix_watcher = ChatMixWatcher(
+            self.is_stopping,
+            lambda: self._chatmix_osd_enabled,
+            lambda: self._chatmix_channels,
+            parent=self,
+        )
+        self._chatmix_watcher.start()
+        if self._chatmix_osd_enabled:
+            enable_gnome_extension_once()
+
         self.new_status.connect(self.on_new_status)
         self.dbus_poll_thread = Thread(target=self.poll_dbus_thread, daemon=True)
         self.dbus_poll_thread.start()
@@ -273,6 +302,13 @@ class QSystrayApp(QBaseDesktopApp):
         if path not in self._settings_watcher.files() and Path(path).is_file():
             self._settings_watcher.addPath(path)
         self._update_tray_icon(self.last_device_status)
+        self._refresh_chatmix_osd_settings()
+
+    def _refresh_chatmix_osd_settings(self) -> None:
+        data = _read_general_settings_file()
+        self._chatmix_osd_enabled = bool(data.get('systray_chatmix_osd', True))
+        channels = data.get('chatmix_channels')
+        self._chatmix_channels = list(channels) if isinstance(channels, list) and channels else ['game']
 
     def _update_tray_icon(self, status: dict) -> None:
         """Repaint the single tray item: the ASM logo, with the battery % under

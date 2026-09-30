@@ -198,6 +198,12 @@ for f in main.qml plasma5.qml tr.js strings.js; do
         "${PKGDIR}/usr/share/plasma/plasmoids/com.github.loteran.arctis-sound-manager/contents/ui/$f"
 done
 
+# ── GNOME Shell extension (ChatMix OSD on GNOME Wayland) ────
+for f in metadata.json extension.js; do
+    install -Dm644 "src/arctis_sound_manager/desktop/gnome-shell/asm-chatmix-osd@loteran.github.com/$f" \
+        "${PKGDIR}/usr/share/gnome-shell/extensions/asm-chatmix-osd@loteran.github.com/$f"
+done
+
 # ── AppStream metainfo ──────────────────────────────────────
 install -Dm644 src/arctis_sound_manager/desktop/com.github.loteran.arctis-sound-manager.metainfo.xml \
     "${PKGDIR}/usr/share/metainfo/com.github.loteran.arctis-sound-manager.metainfo.xml"

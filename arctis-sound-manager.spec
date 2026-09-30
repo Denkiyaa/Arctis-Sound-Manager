@@ -163,6 +163,12 @@ for f in main.qml plasma5.qml tr.js strings.js; do
         %{buildroot}%{_datadir}/plasma/plasmoids/com.github.loteran.arctis-sound-manager/contents/ui/$f
 done
 
+# GNOME Shell extension (ChatMix OSD over fullscreen games on GNOME Wayland)
+for f in metadata.json extension.js; do
+    install -Dm644 "src/arctis_sound_manager/desktop/gnome-shell/asm-chatmix-osd@loteran.github.com/$f" \
+        %{buildroot}%{_datadir}/gnome-shell/extensions/asm-chatmix-osd@loteran.github.com/$f
+done
+
 # AppStream metainfo (releases injected from CHANGELOG.md — never hardcode)
 python3 scripts/generate_metainfo_releases.py --in-place
 install -Dm644 src/arctis_sound_manager/desktop/com.github.loteran.arctis-sound-manager.metainfo.xml \
@@ -331,6 +337,7 @@ fi
 %{_datadir}/applications/ArctisManager.desktop
 %{_datadir}/icons/hicolor/scalable/apps/arctis-manager.svg
 %{_datadir}/plasma/plasmoids/com.github.loteran.arctis-sound-manager/
+%{_datadir}/gnome-shell/extensions/asm-chatmix-osd@loteran.github.com/
 %{_metainfodir}/com.github.loteran.arctis-sound-manager.metainfo.xml
 %{_datadir}/%{name}/
 /etc/xdg/autostart/asm-first-run.desktop

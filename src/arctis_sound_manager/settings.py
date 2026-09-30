@@ -494,6 +494,9 @@ class GeneralSettings(JsonSerializable):
     # Systray icon color: 0 = auto (follow desktop theme), 1 = white, 2 = black (#130)
     systray_icon_color: int = 0
 
+    # Float the ChatMix bar at the bottom of the screen when the mix moves
+    systray_chatmix_osd: bool = True
+
     # UI theme
     theme: str = "steelseries"
 
@@ -524,6 +527,7 @@ class GeneralSettings(JsonSerializable):
         ConfigSetting('micro_autoswitch', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'micro_autoswitch_off', 1: 'micro_autoswitch_connection', 2: 'micro_autoswitch_mute', 3: 'micro_autoswitch_both'}, option_requires_status={2: 'mic_status'}),
         ConfigSetting('pipewire_quantum', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'pipewire_quantum_auto', 1024: 'pipewire_quantum_1024', 2048: 'pipewire_quantum_2048'}),
         ConfigSetting('systray_show_battery', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
+        ConfigSetting('systray_chatmix_osd', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
         ConfigSetting('systray_icon_color', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'systray_icon_color_auto', 1: 'systray_icon_color_white', 2: 'systray_icon_color_black'}),
         # On by default (issue #228): a preset library that grows on its own is
         # worth saying out loud once, otherwise people wonder whether the list

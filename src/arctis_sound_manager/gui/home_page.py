@@ -114,6 +114,7 @@ from arctis_sound_manager.gui.tray_eq_presets import (SonarPresetApplier,
                                                       get_sonar_active_preset,
                                                       list_sonar_channel_presets)
 from arctis_sound_manager.i18n import I18n
+from arctis_sound_manager.pactl import apply_mix_to_streams, mix_stream_levels
 from arctis_sound_manager.power_status import HeadsetPower, normalize_power_value
 from arctis_sound_manager.pw_utils import (
     app_override_key,
@@ -302,15 +303,33 @@ def chatmix_bar_to_percentages(position: int) -> tuple[int, int]:
 def chatmix_percentages_to_bar_position(channels_pct: int, chat_pct: int) -> int:
     """Inverse of :func:`chatmix_bar_to_percentages`.
 
-    The hardware dial writes straight to the sinks rather than going through
-    the bar, so the bar needs this to catch up to whatever position produced
-    the (channels_pct, chat_pct) it now reads back (#269).
+    The hardware dial writes straight to the mix streams rather than going
+    through the bar, so the bar needs this to catch up to whatever position
+    produced the (channels_pct, chat_pct) it now reads back (#269).
     """
     channels_pct = max(0, min(100, channels_pct))
     chat_pct = max(0, min(100, chat_pct))
     if chat_pct <= channels_pct:
         return round(chat_pct / 2)
     return round(100 - channels_pct / 2)
+
+
+def chatmix_bar_position(pct_by_channel: dict, chat_pct, channels: list[str]) -> int | None:
+    """Where the ChatMix bar sits for the current mix levels, or None when
+    there is nothing to place it from.
+
+    *pct_by_channel* maps 'game'/'media'/'aux' to a 0-100 mix level (None for
+    a missing stream, see pactl.mix_stream_levels); the included *channels*
+    are averaged into the bar's
+    non-chat side. Shared by the mixer page and the ChatMix OSD so both
+    always show the same position.
+    """
+    if chat_pct is None:
+        return None
+    values = [pct_by_channel[ch] for ch in channels if pct_by_channel.get(ch) is not None]
+    if not values:
+        return None
+    return chatmix_percentages_to_bar_position(round(sum(values) / len(values)), chat_pct)
 
 
 # What one channel card needs, and what it may be squeezed to when the optional
@@ -2250,13 +2269,14 @@ class HomePage(QWidget):
         # subprocess — see the timer's construction and #182.
         self._timer.stop()
 
-    def _sync_chatmix_bar(self, game_pct, chat_pct, media_pct, aux_pct) -> None:
-        """Follow the hardware dial: it writes straight to the sinks (via the
-        daemon's set_mix), bypassing the bar, so without this the bar would
-        sit still while the vertical cards it mirrors visibly move (#269).
+    def _sync_chatmix_bar(self, levels: dict) -> None:
+        """Follow the hardware dial: it writes the mix straight to the
+        channels' loopback output streams (via the daemon's set_mix),
+        bypassing the bar, so without this the bar would sit still while
+        the dial moves (#269). *levels* is pactl.mix_stream_levels().
         """
         bar = getattr(self, "_chatmix_bar", None)
-        if bar is None or chat_pct is None or bar.isSliderDown():
+        if bar is None or bar.isSliderDown():
             return
 
         try:
@@ -2265,14 +2285,8 @@ class HomePage(QWidget):
         except Exception:  # noqa: BLE001 — a broken settings file just skips this tick
             channels = ["game"]
 
-        pct_by_channel = {"game": game_pct, "media": media_pct, "aux": aux_pct}
-        values = [pct_by_channel[ch] for ch in channels if pct_by_channel.get(ch) is not None]
-        if not values:
-            return
-
-        channels_pct = round(sum(values) / len(values))
-        position = chatmix_percentages_to_bar_position(channels_pct, chat_pct)
-        if position == bar.value():
+        position = chatmix_bar_position(levels, levels.get("chat"), channels)
+        if position is None or position == bar.value():
             return
 
         bar.blockSignals(True)
@@ -2325,7 +2339,10 @@ class HomePage(QWidget):
                 self._aux_card.set_volume(aux_pct)
                 self._sink_aux = sink_aux
 
-            self._sync_chatmix_bar(game_pct, chat_pct, media_pct, aux_pct)
+            try:
+                self._sync_chatmix_bar(mix_stream_levels(pulse))
+            except Exception:  # noqa: BLE001 — the bar just waits for the next tick
+                logger.debug("could not read the ChatMix streams", exc_info=True)
 
             # Master: the headset's own physical output, downstream of every
             # channel above — independent of whatever device is selected for
@@ -3023,12 +3040,9 @@ class HomePage(QWidget):
         self._apply_chatmix_bar(channels_pct, chat_pct)
 
     def _apply_chatmix_bar(self, channels_pct: int, chat_pct: int) -> None:
-        """Drive the configured channel(s) and Chat straight from the bar (#269).
-
-        Software-only for now: this goes through the same PipeWire calls the
-        vertical sliders already make from this process, without touching the
-        headset's own dial. The vertical sliders themselves catch up on the
-        next _poll_volumes() tick, at most half a second later.
+        """Drive the crossfade straight from the bar (#269), on the same
+        loopback output streams the dial drives (pactl.apply_mix_to_streams),
+        so the channel cards' own volumes are left alone.
         """
         try:
             from arctis_sound_manager.settings import GeneralSettings
@@ -3036,18 +3050,13 @@ class HomePage(QWidget):
         except Exception:  # noqa: BLE001
             channels = ['game']
 
-        sink_by_channel = {
-            'game': self._sink_game,
-            'media': self._sink_media,
-            'aux': getattr(self, '_sink_aux', None),
-        }
-        for channel in channels:
-            sink = sink_by_channel.get(channel)
-            if sink is not None:
-                self._apply_volume(sink, channels_pct)
-
-        if self._sink_chat is not None:
-            self._apply_volume(self._sink_chat, chat_pct)
+        pulse = self._get_pulse()
+        if pulse is None:
+            return
+        try:
+            apply_mix_to_streams(pulse, channels_pct, chat_pct, channels)
+        except Exception:  # noqa: BLE001
+            logger.warning("could not apply the ChatMix bar", exc_info=True)
 
     def _fit_cards_to_row(self) -> None:
         """Give every card a minimum width the window can actually satisfy.

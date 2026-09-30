@@ -120,6 +120,12 @@ package() {
             "$pkgdir/usr/share/plasma/plasmoids/com.github.loteran.arctis-sound-manager/contents/ui/$f"
     done
 
+    # GNOME Shell extension (ChatMix OSD over fullscreen games on GNOME Wayland)
+    for f in metadata.json extension.js; do
+        install -Dm644 "src/arctis_sound_manager/desktop/gnome-shell/asm-chatmix-osd@loteran.github.com/$f" \
+            "$pkgdir/usr/share/gnome-shell/extensions/asm-chatmix-osd@loteran.github.com/$f"
+    done
+
     # Systemd user services (single source of truth in systemd/, not heredocs)
     install -Dm644 systemd/arctis-manager.service \
         "$pkgdir/usr/lib/systemd/user/arctis-manager.service"

@@ -296,27 +296,30 @@ def test_chatmix_percentages_to_bar_position_centre_when_both_full():
     assert chatmix_percentages_to_bar_position(100, 100) == 50
 
 
+def _fake_apply(monkeypatch):
+    from arctis_sound_manager.gui import home_page
+
+    calls = []
+    monkeypatch.setattr(
+        home_page, "apply_mix_to_streams",
+        lambda pulse, channels_pct, chat_pct, channels: calls.append(
+            (channels_pct, chat_pct, list(channels))),
+    )
+    return calls
+
+
 def test_apply_chatmix_bar_drives_configured_channels_and_chat(monkeypatch):
     from arctis_sound_manager import settings as settings_mod
 
     saved = settings_mod.GeneralSettings()
     saved.chatmix_channels = ["game", "media"]
     monkeypatch.setattr(settings_mod.GeneralSettings, "read_from_file", staticmethod(lambda: saved))
-
-    calls = []
-    fake_self = SimpleNamespace(
-        _sink_game="game-sink",
-        _sink_media="media-sink",
-        _sink_chat="chat-sink",
-        _apply_volume=lambda sink, value: calls.append((sink, value)),
-    )
+    calls = _fake_apply(monkeypatch)
+    fake_self = SimpleNamespace(_get_pulse=lambda: MagicMock())
 
     HomePage._apply_chatmix_bar(fake_self, 70, 100)
 
-    assert ("game-sink", 70) in calls
-    assert ("media-sink", 70) in calls
-    assert ("chat-sink", 100) in calls
-    assert len(calls) == 3
+    assert calls == [(70, 100, ["game", "media"])]
 
 
 def test_apply_chatmix_bar_falls_back_to_game_when_settings_unreadable(monkeypatch):
@@ -326,18 +329,21 @@ def test_apply_chatmix_bar_falls_back_to_game_when_settings_unreadable(monkeypat
         raise RuntimeError("no config file")
 
     monkeypatch.setattr(settings_mod.GeneralSettings, "read_from_file", staticmethod(_boom))
-
-    calls = []
-    fake_self = SimpleNamespace(
-        _sink_game="game-sink",
-        _sink_media="media-sink",
-        _sink_chat="chat-sink",
-        _apply_volume=lambda sink, value: calls.append((sink, value)),
-    )
+    calls = _fake_apply(monkeypatch)
+    fake_self = SimpleNamespace(_get_pulse=lambda: MagicMock())
 
     HomePage._apply_chatmix_bar(fake_self, 30, 100)
 
-    assert calls == [("game-sink", 30), ("chat-sink", 100)]
+    assert calls == [(30, 100, ["game"])]
+
+
+def test_apply_chatmix_bar_does_nothing_without_pulse(monkeypatch):
+    calls = _fake_apply(monkeypatch)
+    fake_self = SimpleNamespace(_get_pulse=lambda: None)
+
+    HomePage._apply_chatmix_bar(fake_self, 30, 100)
+
+    assert calls == []
 
 
 # ── HomePage: the ChatMix bar's static, split-in-half track (#269) ──────────
@@ -389,7 +395,7 @@ def test_sync_chatmix_bar_follows_the_dial(monkeypatch):
     bar = _fake_bar()
     fake_self = SimpleNamespace(_chatmix_bar=bar)
 
-    HomePage._sync_chatmix_bar(fake_self, 40, 100, None, None)
+    HomePage._sync_chatmix_bar(fake_self, {"game": 40, "chat": 100, "media": None, "aux": None})
 
     bar.setValue.assert_called_once_with(80)
 
@@ -404,7 +410,7 @@ def test_sync_chatmix_bar_averages_multiple_configured_channels(monkeypatch):
     bar = _fake_bar()
     fake_self = SimpleNamespace(_chatmix_bar=bar)
 
-    HomePage._sync_chatmix_bar(fake_self, 100, 40, 100, None)
+    HomePage._sync_chatmix_bar(fake_self, {"game": 100, "chat": 40, "media": 100, "aux": None})
 
     bar.setValue.assert_called_once_with(20)
 
@@ -414,7 +420,7 @@ def test_sync_chatmix_bar_skips_while_the_user_is_dragging():
     bar.isSliderDown.return_value = True
     fake_self = SimpleNamespace(_chatmix_bar=bar)
 
-    HomePage._sync_chatmix_bar(fake_self, 40, 100, None, None)
+    HomePage._sync_chatmix_bar(fake_self, {"game": 40, "chat": 100, "media": None, "aux": None})
 
     bar.setValue.assert_not_called()
 
@@ -430,7 +436,7 @@ def test_sync_chatmix_bar_skips_when_already_at_that_position(monkeypatch):
     bar.value.return_value = 80
     fake_self = SimpleNamespace(_chatmix_bar=bar)
 
-    HomePage._sync_chatmix_bar(fake_self, 40, 100, None, None)
+    HomePage._sync_chatmix_bar(fake_self, {"game": 40, "chat": 100, "media": None, "aux": None})
 
     bar.setValue.assert_not_called()
 
@@ -439,6 +445,6 @@ def test_sync_chatmix_bar_does_nothing_without_a_chat_reading():
     bar = _fake_bar()
     fake_self = SimpleNamespace(_chatmix_bar=bar)
 
-    HomePage._sync_chatmix_bar(fake_self, 40, None, None, None)
+    HomePage._sync_chatmix_bar(fake_self, {"game": 40, "chat": None, "media": None, "aux": None})
 
     bar.setValue.assert_not_called()

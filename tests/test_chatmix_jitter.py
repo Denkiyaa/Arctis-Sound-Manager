@@ -15,8 +15,11 @@ Fixed in two places, both covered here:
     noise and is dropped, without moving the reference the next reading is
     compared against (so a slow, real turn still accumulates past it).
   * PulseAudioManager.set_mix — only the channel that actually moved is
-    written; re-writing a sink the level it already has still makes the server
-    announce a volume change.
+    written; re-writing a stream the level it already has still makes the
+    server announce a volume change.
+
+The mix itself now lands on each channel's loopback output stream
+(Arctis_<Ch>_sink_out), never on the channel sink: see pactl.MIX_STREAM_NAMES.
 """
 
 import logging
@@ -38,6 +41,7 @@ def _engine(media_mix=100, chat_mix=100):
     engine.device_config = MagicMock()
     engine.device_status = {}
     engine.pa_audio_manager = MagicMock()
+    engine._mix_applied = True
     return engine
 
 
@@ -118,29 +122,49 @@ def test_unchanged_reading_writes_nothing(monkeypatch):
     engine.pa_audio_manager.set_mix.assert_not_called()
 
 
+def test_first_reading_is_written_even_at_the_default(monkeypatch):
+    """The streams come back at whatever WirePlumber remembered: the first
+    dial reading must land even if it matches the engine's 100/100 default,
+    and even if it is only a point away from it."""
+    engine = _engine()
+    engine._mix_applied = False
+
+    _feed(engine, monkeypatch, 99, 100)
+
+    engine.pa_audio_manager.set_mix.assert_called_once_with(99, 100)
+    engine.pa_audio_manager.set_mix.reset_mock()
+    _feed(engine, monkeypatch, 99, 100)
+    engine.pa_audio_manager.set_mix.assert_not_called()
+
+
 # ── PulseAudioManager.set_mix: no redundant writes ─────────────────────────
 
-def _sink(node_name, pct):
+def _stream(node_name, pct):
     s = MagicMock()
     s.proplist = {"node.name": node_name}
     s.volume.value_flat = pct / 100
     return s
 
 
-def _manager(sinks):
+def _manager(streams, channels=("game",)):
     from arctis_sound_manager.pactl import PulseAudioManager
 
     manager = PulseAudioManager.__new__(PulseAudioManager)
     manager.logger = logging.getLogger("test")
     manager.pulse = MagicMock()
-    manager.sink_list_wrapper = MagicMock(return_value=sinks)
-    manager._chatmix_channels = MagicMock(return_value=["game"])
+    manager.pulse.sink_input_list.return_value = streams
+    manager.sink_list_wrapper = MagicMock(return_value=[])
+    manager._chatmix_channels = MagicMock(return_value=list(channels))
     return manager
 
 
+def _touched(manager):
+    return [call.args[0] for call in manager.pulse.volume_set_all_chans.call_args_list]
+
+
 def test_set_mix_skips_the_channel_that_did_not_move():
-    game = _sink("Arctis_Game", 100)
-    chat = _sink("Arctis_Chat", 100)
+    game = _stream("Arctis_Game_sink_out", 100)
+    chat = _stream("Arctis_Chat_sink_out", 100)
     manager = _manager([game, chat])
 
     manager.set_mix(100, 40)
@@ -149,52 +173,53 @@ def test_set_mix_skips_the_channel_that_did_not_move():
 
 
 def test_set_mix_writes_both_when_both_moved():
-    game = _sink("Arctis_Game", 100)
-    chat = _sink("Arctis_Chat", 100)
-    manager = _manager([game, chat])
+    manager = _manager([_stream("Arctis_Game_sink_out", 100), _stream("Arctis_Chat_sink_out", 100)])
 
     manager.set_mix(70, 40)
 
     assert manager.pulse.volume_set_all_chans.call_count == 2
 
 
-def test_set_mix_writes_nothing_when_the_sinks_already_match():
-    manager = _manager([_sink("Arctis_Game", 80), _sink("Arctis_Chat", 20)])
+def test_set_mix_writes_nothing_when_the_streams_already_match():
+    manager = _manager([_stream("Arctis_Game_sink_out", 80), _stream("Arctis_Chat_sink_out", 20)])
 
     manager.set_mix(80, 20)
 
     manager.pulse.volume_set_all_chans.assert_not_called()
 
 
+def test_set_mix_never_touches_the_channel_sinks():
+    """The sinks carry the user's own channel levels, and one of them is the
+    desktop default output: writing it is what popped Plasma's volume OSD."""
+    game_sink = _stream("Arctis_Game", 100)
+    media_sink = _stream("Arctis_Media", 100)
+    manager = _manager([game_sink, media_sink, _stream("Arctis_Game_sink_out", 100)],
+                       channels=("game", "media"))
+    manager.sink_list_wrapper.return_value = [game_sink, media_sink]
+
+    manager.set_mix(30, 40)
+
+    assert game_sink not in _touched(manager)
+    assert media_sink not in _touched(manager)
+
+
 # ── PulseAudioManager.set_mix: ChatMix channels (#249/#269) ────────────────
-#
-# Game, Media and/or Aux can be configured to ride the dial's non-chat side.
-# Looked up against the full sink list (sink_list_wrapper) uniformly.
-
-def _manager_with_channels(all_sinks, channels):
-    manager = _manager(all_sinks)
-    manager._chatmix_channels = MagicMock(return_value=channels)
-    return manager
-
 
 def test_set_mix_moves_only_the_configured_channels():
-    game = _sink("Arctis_Game", 100)
-    chat = _sink("Arctis_Chat", 100)
-    media = _sink("Arctis_Media", 100)
-    manager = _manager_with_channels([game, chat, media], ["media"])
+    game = _stream("Arctis_Game_sink_out", 100)
+    media = _stream("Arctis_Media_sink_out", 100)
+    manager = _manager([game, _stream("Arctis_Chat_sink_out", 100), media], channels=["media"])
 
     manager.set_mix(70, 40)
 
     manager.pulse.volume_set_all_chans.assert_any_call(media, 0.7)
-    touched = [call.args[0] for call in manager.pulse.volume_set_all_chans.call_args_list]
-    assert game not in touched
+    assert game not in _touched(manager)
 
 
 def test_set_mix_moves_aux_alongside_game_when_configured():
-    game = _sink("Arctis_Game", 100)
-    chat = _sink("Arctis_Chat", 100)
-    aux = _sink("Arctis_Aux", 100)
-    manager = _manager_with_channels([game, chat, aux], ["game", "aux"])
+    game = _stream("Arctis_Game_sink_out", 100)
+    aux = _stream("Arctis_Aux_sink_out", 100)
+    manager = _manager([game, _stream("Arctis_Chat_sink_out", 100), aux], channels=["game", "aux"])
 
     manager.set_mix(55, 40)
 
@@ -202,30 +227,33 @@ def test_set_mix_moves_aux_alongside_game_when_configured():
     manager.pulse.volume_set_all_chans.assert_any_call(game, 0.55)
 
 
-def test_set_mix_leaves_media_and_aux_untouched_when_not_configured():
-    """Today's exact behaviour, as a regression guard: a Media/Aux channel
-    that isn't in the configured list must not move."""
-    game = _sink("Arctis_Game", 100)
-    chat = _sink("Arctis_Chat", 100)
-    media = _sink("Arctis_Media", 100)
-    aux = _sink("Arctis_Aux", 100)
-    manager = _manager_with_channels([game, chat, media, aux], ["game"])
+def test_set_mix_releases_a_channel_taken_off_the_dial():
+    """Unticking Media must not leave it stuck at the level the dial last
+    gave it: a channel off the dial plays at full mix level."""
+    media = _stream("Arctis_Media_sink_out", 30)
+    manager = _manager([_stream("Arctis_Game_sink_out", 70), media], channels=["game"])
 
-    manager.set_mix(70, 40)
+    manager.set_mix(70, 100)
 
-    touched = [call.args[0] for call in manager.pulse.volume_set_all_chans.call_args_list]
-    assert media not in touched
-    assert aux not in touched
+    manager.pulse.volume_set_all_chans.assert_called_once_with(media, 1.0)
 
 
 def test_set_mix_skips_configured_channel_already_at_target():
-    """The anti-OSD-flicker optimization must hold for every configured channel."""
-    game = _sink("Arctis_Game", 100)
-    chat = _sink("Arctis_Chat", 100)
-    media = _sink("Arctis_Media", 70)  # already at the dial's target
-    manager = _manager_with_channels([game, chat, media], ["media"])
+    media = _stream("Arctis_Media_sink_out", 70)
+    manager = _manager([_stream("Arctis_Chat_sink_out", 100), media], channels=["media"])
 
     manager.set_mix(70, 40)
 
-    touched = [call.args[0] for call in manager.pulse.volume_set_all_chans.call_args_list]
-    assert media not in touched
+    assert media not in _touched(manager)
+
+
+def test_mix_stream_levels_reads_each_channel():
+    from arctis_sound_manager.pactl import mix_stream_levels
+
+    pulse = MagicMock()
+    pulse.sink_input_list.return_value = [
+        _stream("Arctis_Game_sink_out", 60), _stream("Arctis_Chat_sink_out", 100),
+        _stream("Arctis_Game", 20),  # the sink, not the stream: ignored
+    ]
+
+    assert mix_stream_levels(pulse) == {"game": 60, "chat": 100, "media": None, "aux": None}

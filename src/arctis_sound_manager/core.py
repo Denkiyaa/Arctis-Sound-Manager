@@ -299,6 +299,7 @@ class CoreEngine:
     def __init__(self) -> None:
         self.media_mix = 100
         self.chat_mix = 100
+        self._mix_applied = False
         self._active_extra_dial_interfaces = []
         # EIO streak per listened interface (see listen_endpoint_loop).
         self._eio_counts: dict[int, int] = {}
@@ -1945,9 +1946,13 @@ class CoreEngine:
         new_media_mix = parsed_status({'media_mix': new_media_mix}, self.device_config).get('media_mix', self.media_mix)
         new_chat_mix = parsed_status({'chat_mix': new_chat_mix}, self.device_config).get('chat_mix', self.chat_mix)
 
-        if new_media_mix == self.media_mix and new_chat_mix == self.chat_mix:
+        # The first reading is always written: the mix streams come back at
+        # whatever level WirePlumber remembered, which need not be where the
+        # dial sits now.
+        first = not getattr(self, '_mix_applied', False)
+        if not first and new_media_mix == self.media_mix and new_chat_mix == self.chat_mix:
             return
-        if self._mix_is_jitter(new_media_mix, new_chat_mix):
+        if not first and self._mix_is_jitter(new_media_mix, new_chat_mix):
             # Deliberately not stored: keeping the settled values as the
             # reference is what lets a slow, real turn accumulate past the
             # tolerance instead of drifting one ignored point at a time.
@@ -1959,6 +1964,7 @@ class CoreEngine:
 
         self.media_mix = new_media_mix
         self.chat_mix = new_chat_mix
+        self._mix_applied = True
         self.pa_audio_manager.set_mix(self.media_mix, self.chat_mix)
     
     async def listen_endpoint_loop(self, interface_id: int):

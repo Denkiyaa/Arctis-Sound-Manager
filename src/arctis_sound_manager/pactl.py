@@ -20,6 +20,62 @@ ONLY_PHYSICAL = 1
 ONLY_VIRTUAL = 2
 ALL_SINKS = 3
 
+# The ChatMix crossfade is applied to each channel's loopback *output* stream
+# (Arctis_<Ch>_sink_out), not to the channel sink itself. The sink's volume is
+# the user's own level for that channel; mixing on top of it used to overwrite
+# it on every turn of the dial. And since one of those sinks is the desktop's
+# default output (Arctis_Media), every turn also made Plasma pop its volume
+# OSD — the desktop watches the default sink, never an internal stream. The
+# streams' levels are remembered by WirePlumber's stream restore, so the mix
+# survives a loopback restart on its own.
+MIX_STREAM_NAMES = {
+    'game': f'{PULSE_GAME_NODE_NAME}_sink_out',
+    'chat': f'{PULSE_CHAT_NODE_NAME}_sink_out',
+    'media': f'{PULSE_MEDIA_NODE_NAME}_sink_out',
+    'aux': f'{PULSE_AUX_NODE_NAME}_sink_out',
+}
+
+
+def _mix_streams(pulse) -> dict[str, list]:
+    streams: dict[str, list] = {ch: [] for ch in MIX_STREAM_NAMES}
+    by_name = {name: ch for ch, name in MIX_STREAM_NAMES.items()}
+    for si in pulse.sink_input_list():
+        channel = by_name.get(si.proplist.get('node.name', ''))
+        if channel is not None:
+            streams[channel].append(si)
+    return streams
+
+
+def mix_stream_levels(pulse) -> dict[str, int | None]:
+    """Current ChatMix level (0-100) of each channel, None where the channel's
+    loopback isn't running."""
+    return {
+        ch: (round(sis[0].volume.value_flat * 100) if sis else None)
+        for ch, sis in _mix_streams(pulse).items()
+    }
+
+
+def apply_mix_to_streams(pulse, channels_pct: int, chat_pct: int, channels: list[str]) -> None:
+    """Set the crossfade: *channels* (the dial's non-chat side) to
+    *channels_pct*, Chat to *chat_pct*, and every channel left off the dial
+    back to 100 so unticking one never leaves it stuck attenuated.
+
+    Only streams not already at their level are written: a no-op write still
+    fires a server volume event.
+    """
+    levels = {'chat': chat_pct}
+    for ch in ('game', 'media', 'aux'):
+        levels[ch] = channels_pct if ch in channels else 100
+    for ch, sis in _mix_streams(pulse).items():
+        pct = max(0, min(100, levels[ch]))
+        for si in sis:
+            try:
+                if round(si.volume.value_flat * 100) != pct:
+                    pulse.volume_set_all_chans(si, pct / 100)
+            except Exception as exc:  # noqa: BLE001 — the stream went away mid-write
+                logging.getLogger('PulseAudioManager').debug(
+                    "mix write to %s failed: %r", MIX_STREAM_NAMES[ch], exc)
+
 
 def _pid_matches(product_id_attr: str, product_id: 'int | list[int] | None') -> bool:
     """Compare a proplist PID value (any hex format) against an int or list of ints.
@@ -409,16 +465,6 @@ class PulseAudioManager:
             return False
         return True
 
-    # #249/#269: user-configurable channels that ride the ChatMix bar/dial's
-    # non-chat side. Chat is never a member — it's the fixed other half of
-    # the crossfade. "game" used to be an unconditional member handled
-    # separately from this map; it is now just the default entry in it.
-    _MIX_NODE_NAMES = {
-        'game': PULSE_GAME_NODE_NAME,
-        'media': PULSE_MEDIA_NODE_NAME,
-        'aux': PULSE_AUX_NODE_NAME,
-    }
-
     def _chatmix_channels(self) -> list[str]:
         """Channels configured to ride the non-chat side (#249/#269).
 
@@ -441,41 +487,5 @@ class PulseAudioManager:
         if chat_mix > 100:
             chat_mix = 100
 
-        all_sinks = self.sink_list_wrapper()
-
-        def _find(node_name: str):
-            return next((s for s in all_sinks if s.proplist.get('node.name', '') == node_name), None)
-
-        # Only the channel that actually moved is written. Writing a sink the
-        # level it already has is not free: the server still announces a volume
-        # change, and the desktop still shows its volume OSD for it — so
-        # nudging one end of the dial used to flash the other channel's sink
-        # too. See CoreEngine._mix_is_jitter for the other half of this.
-        chat = _find(PULSE_CHAT_NODE_NAME)
-        if chat and not self._sink_is_at(chat, chat_mix):
-            self.pulse.volume_set_all_chans(chat, chat_mix / 100)
-
-        # `media_mix` is the firmware's name for the dial's non-chat half; the
-        # channel(s) it drives are whichever the user configured (#249/#269),
-        # Game by default. See constants.py.
-        for channel in self._chatmix_channels():
-            node_name = self._MIX_NODE_NAMES.get(channel)
-            if node_name is None:
-                continue
-            sink = _find(node_name)
-            if sink and not self._sink_is_at(sink, media_mix):
-                self.pulse.volume_set_all_chans(sink, media_mix / 100)
-
-    @staticmethod
-    def _sink_is_at(sink, pct: int) -> bool:
-        """Whether *sink* already sits at *pct*, as the server would report it.
-
-        Compared in whole percent because that is the resolution the caller
-        works in: a level set from a percentage and read back is a float that
-        need not come home to the same digits.
-        """
-        try:
-            return round(sink.volume.value_flat * 100) == pct
-        except Exception:
-            return False
+        apply_mix_to_streams(self.pulse, media_mix, chat_mix, self._chatmix_channels())
 

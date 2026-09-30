@@ -180,6 +180,12 @@ python3Packages.buildPythonApplication {
         "$out/share/plasma/plasmoids/com.github.loteran.arctis-sound-manager/contents/ui/$f"
     done
 
+    # GNOME Shell extension (ChatMix OSD over fullscreen games on GNOME Wayland)
+    for f in metadata.json extension.js; do
+      install -Dm644 "src/arctis_sound_manager/desktop/gnome-shell/asm-chatmix-osd@loteran.github.com/$f" \
+        "$out/share/gnome-shell/extensions/asm-chatmix-osd@loteran.github.com/$f"
+    done
+
     # Default HeSuVi HRIR — seeded by the NixOS module into each user's
     # ~/.local/share/pipewire/hrir_hesuvi/hrir.wav (only if absent), giving
     # working surround out of the box without asm-setup or a network download.
