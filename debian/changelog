@@ -1,3 +1,12 @@
+arctis-sound-manager (1.4.32-1) noble; urgency=medium
+
+  * Ensure SystemDepsDialog detects and can self-heal the GNOME ChatMix OSD
+    tools (gsettings, gnome-extensions). (#297)
+  * Fix SteamOS systemd 258+ uaccess ACL handling by shipping the
+    70-steelseries-arctis-uaccess companion udev rules file. (#297)
+
+ -- loteran <axel.valadon@gmail.com>  Thu, 01 Oct 2026 00:00:00 +0000
+
 arctis-sound-manager (1.4.31-1) noble; urgency=medium
 
   * asm-cli status shows the headset state: battery, power, mic and

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.32] - 1 October 2026
+
+### Added
+
+### Fixed
+
+- Ensure `SystemDepsDialog` detects and can self-heal the GNOME ChatMix OSD tools (`gsettings`, `gnome-extensions`). (#297)
+- Fix SteamOS systemd 258+ uaccess ACL handling by shipping the `70-steelseries-arctis-uaccess` companion udev rules file. (#297)
+
 ## [1.4.31] - 29 September 2026
 
 ### Added
