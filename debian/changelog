@@ -1,3 +1,14 @@
+arctis-sound-manager (1.4.33-1) noble; urgency=medium
+
+  * Headset disconnecting every couple of minutes (#299). When a headset
+    stopped answering commands, ASM reset its USB connection after every
+    failed initialisation, so it kept dropping and reconnecting,
+    interrupting audio. ASM now tries the reset only once; if that does not
+    help, it leaves the device connected and logs that it needs a replug or
+    power cycle.
+
+ -- loteran <axel.valadon@gmail.com>  Thu, 01 Oct 2026 00:00:00 +0000
+
 arctis-sound-manager (1.4.32-1) noble; urgency=medium
 
   * ChatMix on-screen display. Turning the ChatMix dial (or the mixer page's

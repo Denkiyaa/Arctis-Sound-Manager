@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.33] - 1 October 2026
+
+### Fixed
+
+- **Headset disconnecting every couple of minutes (#299).** When a headset stopped answering commands, ASM reset its USB connection after every failed initialisation, so it kept dropping and reconnecting, interrupting audio. ASM now tries the reset only once; if that does not help, it leaves the device connected and logs that it needs a replug or power cycle.
+
 ## [1.4.32] - 1 October 2026
 
 ### Added
