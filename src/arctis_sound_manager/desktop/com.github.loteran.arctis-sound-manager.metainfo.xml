@@ -58,7 +58,7 @@
   <releases>
     <release version="1.4.32" date="2026-10-01">
       <description>
-        <p>Ensure SystemDepsDialog detects and can self-heal the GNOME ChatMix OSD tools (gsettings, gnome-extensions). (#297). Fix SteamOS systemd 258+ uaccess ACL handling by shipping the 70-steelseries-arctis-uaccess companion udev rules file. (#297).</p>
+        <p>ChatMix on-screen display. Turning the ChatMix dial (or the mixer page's bar) floats the ChatMix bar at the bottom of the screen for 1.5 s, above the taskbar and over fullscreen games. Works on KDE and wlroots Wayland (layer-shell), X11, and GNOME Wayland (through a small bundled GNOME Shell extension). On by default, can be turned off in the settings. Plasma 6 widget. Shows the headset power state and battery, the base station's spare battery, noise cancelling and microphone state, and opens asm-gui. It is fed by a new StatusChanged D-Bus signal emitted by the daemon, so it no longer needs to poll. Its strings are translated through Crowdin. OLED: now-playing line. The base station / GameDAC custom display can show "Artist - Title" of the playing MPRIS player, with a marquee.</p>
       </description>
     </release>
     <release version="1.4.31" date="2026-09-29">
