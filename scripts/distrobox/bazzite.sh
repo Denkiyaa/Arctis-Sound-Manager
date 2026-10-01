@@ -453,7 +453,9 @@ RULES
     # uaccess ACL companion (#297): must sort before 73-seat-late.rules
     local uaccess_tmp
     uaccess_tmp="$(mktemp /tmp/70-steelseries-arctis-uaccess.rules.XXXXXX)"
-    distrobox enter "$_CONTAINER" -- bash -lc "asm-cli udev dump-rules --uaccess" > "$uaccess_tmp"
+    # || true: an ASM older than 1.4.32 in the container rejects --uaccess,
+    # which must not abort the whole install under set -e.
+    distrobox enter "$_CONTAINER" -- bash -lc "asm-cli udev dump-rules --uaccess" > "$uaccess_tmp" || true
     if [[ -s "$uaccess_tmp" ]]; then
         sudo install -m644 "$uaccess_tmp" "$_UDEV_UACCESS_RULES"
         log_ok "uaccess rules: $_UDEV_UACCESS_RULES"
