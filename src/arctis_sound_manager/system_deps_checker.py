@@ -703,6 +703,19 @@ def _dbus_session_available() -> bool:
     return Path(f"/run/user/{os.getuid()}/bus").exists()
 
 
+def _gnome_osd_tools_available() -> bool:
+    """True unless a GNOME session is missing the tools that enable the OSD.
+
+    `gsettings` and `gnome-extensions` are only ever called from
+    `enable_gnome_extension_once`, and only when the session is GNOME. On KDE,
+    sway or anything else their absence changes nothing, so reporting them
+    missing would nag every non-GNOME user about a feature they cannot use.
+    """
+    if "gnome" not in os.environ.get("XDG_CURRENT_DESKTOP", "").lower():
+        return True
+    return _which("gsettings") and _which("gnome-extensions")
+
+
 def _gh_authenticated() -> bool:
     if not _which("gh"):
         return False
