@@ -500,9 +500,11 @@ if [ "$PURGE" -eq 1 ]; then
         rm -f  "$HOME/.config/systemd/user/filter-chain.service"
         # /etc rules left to the package manager when removing pkg, but the user
         # may also have a manual copy written by `asm-cli udev write-rules`.
-        if [ -f /etc/udev/rules.d/91-steelseries-arctis.rules ]; then
-            if confirm "Also remove /etc/udev/rules.d/91-steelseries-arctis.rules (sudo) ?"; then
-                sudo rm -f /etc/udev/rules.d/91-steelseries-arctis.rules
+        if [ -f /etc/udev/rules.d/91-steelseries-arctis.rules ] \
+                || [ -f /etc/udev/rules.d/70-steelseries-arctis-uaccess.rules ]; then
+            if confirm "Also remove /etc/udev/rules.d/{91-steelseries-arctis,70-steelseries-arctis-uaccess}.rules (sudo) ?"; then
+                sudo rm -f /etc/udev/rules.d/91-steelseries-arctis.rules \
+                    /etc/udev/rules.d/70-steelseries-arctis-uaccess.rules
                 sudo udevadm control --reload-rules 2>/dev/null || true
             fi
         fi

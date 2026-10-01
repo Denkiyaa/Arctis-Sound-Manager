@@ -58,6 +58,9 @@ override_dh_auto_install:
 	python3 scripts/generate_udev_rules.py src/arctis_sound_manager/devices/ \
 	    > $(DEST)/usr/lib/udev/rules.d/91-steelseries-arctis.rules
 	chmod 644 $(DEST)/usr/lib/udev/rules.d/91-steelseries-arctis.rules
+	python3 scripts/generate_udev_rules.py --uaccess src/arctis_sound_manager/devices/ \
+	    > $(DEST)/usr/lib/udev/rules.d/70-steelseries-arctis-uaccess.rules
+	chmod 644 $(DEST)/usr/lib/udev/rules.d/70-steelseries-arctis-uaccess.rules
 
 	# ── Systemd user services (single source of truth in systemd/) ──
 	install -Dm644 systemd/arctis-manager.service \

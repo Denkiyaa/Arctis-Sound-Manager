@@ -63,6 +63,10 @@ def test_not_in_container_writes_locally_unchanged(tmp_path, monkeypatch):
     assert rc == 0
     assert rules_path.exists()
     assert "SUBSYSTEM" in rules_path.read_text()
+    # #297: the uaccess companion lands next to the main file.
+    uaccess_path = tmp_path / "70-steelseries-arctis-uaccess.rules"
+    assert uaccess_path.exists()
+    assert 'TAG+="uaccess"' in uaccess_path.read_text()
 
 
 def test_in_container_with_host_exec_crosses_to_host(tmp_path, monkeypatch):
@@ -115,8 +119,10 @@ def test_in_container_with_no_host_exec_fails_loud(tmp_path, monkeypatch, capsys
 
     out = capsys.readouterr().out
     assert "dump-rules" in out
+    assert "dump-rules --uaccess" in out
     assert "udevadm control --reload-rules" in out
     assert str(rules_path) in out
+    assert str(tmp_path / "70-steelseries-arctis-uaccess.rules") in out
 
 
 def test_in_container_host_call_fails_no_silent_local_fallback(tmp_path, monkeypatch, capsys):
@@ -152,3 +158,28 @@ def test_reload_udev_rules_in_container_with_no_host_exec_fails_loud(monkeypatch
     assert rc != 0
     out = capsys.readouterr().out
     assert "udevadm control --reload-rules" in out
+
+
+def test_in_container_installs_uaccess_companion_on_host(tmp_path, monkeypatch):
+    """#297: the host crossing installs the 70- uaccess file next to the
+    main one, in the same elevated script (one password prompt)."""
+    monkeypatch.setattr(container, "running_in_container", lambda: True)
+    monkeypatch.setattr(container, "host_exec", lambda: ["distrobox-host-exec"])
+    monkeypatch.setattr(cli.subprocess, "run", _Recorder(returncode=0))
+
+    staged_commands = []
+    real_stage = cli._stage_elevated_script_for_host
+
+    def _capture(*commands):
+        staged_commands.extend(commands)
+        return real_stage(*commands)
+
+    monkeypatch.setattr(cli, "_stage_elevated_script_for_host", _capture)
+
+    rules_path = Path("/etc/udev/rules.d/91-steelseries-arctis.rules")
+    rc = cli.write_udev_rules(rules_path, create_directories=False, force_write=True)
+
+    assert rc == 0
+    targets = [cmd[-1] for cmd in staged_commands if cmd[0] == "install"]
+    assert str(rules_path) in targets
+    assert "/etc/udev/rules.d/70-steelseries-arctis-uaccess.rules" in targets

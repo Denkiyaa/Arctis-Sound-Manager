@@ -148,6 +148,9 @@ echo "==> Installing system files..."
 uv run --with ruamel.yaml python3 scripts/generate_udev_rules.py > build/deb/91-steelseries-arctis.rules
 install -Dm644 build/deb/91-steelseries-arctis.rules \
     "${PKGDIR}/usr/lib/udev/rules.d/91-steelseries-arctis.rules"
+uv run --with ruamel.yaml python3 scripts/generate_udev_rules.py --uaccess > build/deb/70-steelseries-arctis-uaccess.rules
+install -Dm644 build/deb/70-steelseries-arctis-uaccess.rules \
+    "${PKGDIR}/usr/lib/udev/rules.d/70-steelseries-arctis-uaccess.rules"
 
 # ── Systemd user services (single source of truth in systemd/) ──
 install -Dm644 systemd/arctis-manager.service \

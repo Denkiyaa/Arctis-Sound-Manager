@@ -102,6 +102,8 @@ package() {
     # module and inserts src/ onto sys.path itself when run from the repo.
     python3 scripts/generate_udev_rules.py \
         | install -Dm644 /dev/stdin "$pkgdir/usr/lib/udev/rules.d/91-steelseries-arctis.rules"
+    python3 scripts/generate_udev_rules.py --uaccess \
+        | install -Dm644 /dev/stdin "$pkgdir/usr/lib/udev/rules.d/70-steelseries-arctis-uaccess.rules"
 
     # Desktop entry
     install -Dm644 src/arctis_sound_manager/desktop/ArctisManager.desktop \

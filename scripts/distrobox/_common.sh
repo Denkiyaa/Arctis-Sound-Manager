@@ -10,6 +10,7 @@ ASM_CONTAINER_NAME="arctis-sound-manager"
 ASM_LOG_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/asm-distrobox-install.log"
 ASM_SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 ASM_UDEV_RULES_PATH="/etc/udev/rules.d/91-steelseries-arctis.rules"
+ASM_UDEV_UACCESS_RULES_PATH="/etc/udev/rules.d/70-steelseries-arctis-uaccess.rules"
 ASM_HIDRAW_SYMLINK_RULES="/etc/udev/rules.d/90-asm-hidraw-symlink.rules"
 ASM_HIDRAW_TMPFILES_CONF="/etc/tmpfiles.d/asm-hidraw.conf"
 ASM_HIDRAW_RUN_DIR="/run/asm-hidraw"
@@ -481,6 +482,18 @@ asm_install_udev_rules() {
         sudo install -m644 "$rules_tmp" "$ASM_UDEV_RULES_PATH"
         rm -f "$rules_tmp"
     fi
+
+    # uaccess ACL companion (#297): must sort before 73-seat-late.rules
+    local uaccess_tmp
+    uaccess_tmp="$(mktemp /tmp/70-steelseries-arctis-uaccess.rules.XXXXXX)"
+    distrobox enter "$ASM_CONTAINER_NAME" -- bash -lc \
+        "asm-cli udev dump-rules --uaccess" > "$uaccess_tmp"
+    if [[ -s "$uaccess_tmp" ]]; then
+        sudo install -m644 "$uaccess_tmp" "$ASM_UDEV_UACCESS_RULES_PATH"
+    else
+        log_warn "asm-cli udev dump-rules --uaccess produced empty output — skipping uaccess rules"
+    fi
+    rm -f "$uaccess_tmp"
 
     sudo udevadm control --reload-rules
     # P2-C: trigger only SteelSeries devices, not every USB device on the system

@@ -29,7 +29,8 @@ from pathlib import Path
 from arctis_sound_manager.constants import (HOME_CONFIG_FOLDER,
                                             INVOKING_USER_CONFIG_FOLDER,
                                             SETTINGS_FOLDER,
-                                            UDEV_RULES_PATHS)
+                                            UDEV_RULES_PATHS,
+                                            UDEV_UACCESS_RULES_PATHS)
 from arctis_sound_manager.utils import project_version
 
 # Settings keys that may carry semi-private data (city names and GPS
@@ -125,16 +126,21 @@ def _section_lsusb() -> str:
 def _section_udev() -> str:
     out = io.StringIO()
     out.write('Searched paths:\n')
-    for p in UDEV_RULES_PATHS:
-        path = Path(p)
-        if path.exists():
-            try:
-                size = path.stat().st_size
-                out.write(f'  [present] {path} ({size} bytes)\n')
-            except OSError as e:
-                out.write(f'  [error]   {path} ({e!r})\n')
-        else:
-            out.write(f'  [missing] {path}\n')
+    for label, paths in (
+        ('main access/power rules', UDEV_RULES_PATHS),
+        ('early uaccess ACL rules', UDEV_UACCESS_RULES_PATHS),
+    ):
+        out.write(f'  {label}:\n')
+        for p in paths:
+            path = Path(p)
+            if path.exists():
+                try:
+                    size = path.stat().st_size
+                    out.write(f'    [present] {path} ({size} bytes)\n')
+                except OSError as e:
+                    out.write(f'    [error]   {path} ({e!r})\n')
+            else:
+                out.write(f'    [missing] {path}\n')
 
     try:
         from arctis_sound_manager.udev_checker import is_udev_rules_valid
@@ -142,17 +148,18 @@ def _section_udev() -> str:
     except Exception as e:
         out.write(f'\nis_udev_rules_valid() raised: {e!r}\n')
 
-    # Show the first existing rules file (helpful when triaging "rules
-    # claim X but actually look like Y" reports).
-    for p in UDEV_RULES_PATHS:
+    # Dump each installed half. The early file is what distinguishes #297 from
+    # a conventional stale-rule report: the 91- file may be intact while the
+    # ACL-producing 70- file is absent.
+    for p in [*UDEV_RULES_PATHS, *UDEV_UACCESS_RULES_PATHS]:
         path = Path(p)
-        if path.exists():
-            try:
-                out.write(f'\nFirst rules file ({path}):\n')
-                out.write(path.read_text())
-            except OSError as e:
-                out.write(f'\n(could not read {path}: {e!r})')
-            break
+        if not path.exists():
+            continue
+        try:
+            out.write(f'\nRules file ({path}):\n')
+            out.write(path.read_text())
+        except OSError as e:
+            out.write(f'\n(could not read {path}: {e!r})')
     return out.getvalue()
 
 

@@ -1051,18 +1051,22 @@ def collect_system_info() -> dict:
     # udev rules: which paths exist + the actual content of the active file.
     # The ASM checker's own verdict on whether the rules are valid is also useful.
     try:
-        from arctis_sound_manager.constants import UDEV_RULES_PATHS
+        from arctis_sound_manager.constants import (UDEV_RULES_PATHS,
+                                                    UDEV_UACCESS_RULES_PATHS)
         from arctis_sound_manager.udev_checker import is_udev_rules_valid
-        rules_present = [p for p in UDEV_RULES_PATHS if Path(p).exists()]
+        rules_present = [
+            p for p in [*UDEV_RULES_PATHS, *UDEV_UACCESS_RULES_PATHS]
+            if Path(p).exists()
+        ]
         info['udev_paths'] = rules_present
         info['udev_valid'] = bool(is_udev_rules_valid())
-        if rules_present:
+        contents: list[str] = []
+        for path_string in rules_present:
             try:
-                info['udev_content'] = Path(rules_present[0]).read_text()
-            except Exception as e:
-                info['udev_content'] = f'(could not read {rules_present[0]}: {e!r})'
-        else:
-            info['udev_content'] = ''
+                contents.append(f'### {path_string}\n{Path(path_string).read_text()}')
+            except OSError as e:
+                contents.append(f'### {path_string}\n(could not read: {e!r})')
+        info['udev_content'] = '\n'.join(contents)
     except Exception as e:
         info['udev_paths'] = []
         info['udev_valid'] = None

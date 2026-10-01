@@ -207,10 +207,16 @@ done
 section "udev rules"
 
 UDEV_RULES="/etc/udev/rules.d/91-steelseries-arctis.rules"
+UDEV_UACCESS_RULES="/etc/udev/rules.d/70-steelseries-arctis-uaccess.rules"
 if [ -f "$UDEV_RULES" ]; then
-    check "udev rules present ($UDEV_RULES)" pass
+    check "udev access/power rules present ($UDEV_RULES)" pass
 else
-    check "udev rules present ($UDEV_RULES)" fail "file not found — udev rules were not written to host"
+    check "udev access/power rules present ($UDEV_RULES)" fail "file not found — udev rules were not written to host"
+fi
+if [ -f "$UDEV_UACCESS_RULES" ]; then
+    check "udev early uaccess ACL rules present ($UDEV_UACCESS_RULES)" pass
+else
+    check "udev early uaccess ACL rules present ($UDEV_UACCESS_RULES)" fail "file not found — session ACLs will not apply on systemd 258+"
 fi
 
 # ---------------------------------------------------------------------------

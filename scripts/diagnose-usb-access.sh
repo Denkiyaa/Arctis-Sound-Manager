@@ -69,7 +69,11 @@ FOUND_RULES=""
 for p in /etc/udev/rules.d/91-steelseries-arctis.rules \
          /usr/lib/udev/rules.d/91-steelseries-arctis.rules \
          /lib/udev/rules.d/91-steelseries-arctis.rules \
-         /run/udev/rules.d/91-steelseries-arctis.rules; do
+         /run/udev/rules.d/91-steelseries-arctis.rules \
+         /etc/udev/rules.d/70-steelseries-arctis-uaccess.rules \
+         /usr/lib/udev/rules.d/70-steelseries-arctis-uaccess.rules \
+         /lib/udev/rules.d/70-steelseries-arctis-uaccess.rules \
+         /run/udev/rules.d/70-steelseries-arctis-uaccess.rules; do
     if [ -e "$p" ]; then
         FOUND_RULES="$FOUND_RULES $p"
         # A rules file that is not world-readable is silently ignored by udev.

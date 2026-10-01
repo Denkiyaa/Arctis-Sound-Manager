@@ -17,7 +17,12 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
-from arctis_sound_manager.udev_rules import generate_rules, load_devices
+from arctis_sound_manager.constants import (UDEV_RULES_PATHS,
+                                            UDEV_UACCESS_RULES_NAME,
+                                            UDEV_UACCESS_RULES_PATHS)
+from arctis_sound_manager.udev_rules import (generate_rules,
+                                              generate_uaccess_rules,
+                                              load_devices)
 
 SRC_DEVICES = Path(__file__).parent.parent / "src" / "arctis_sound_manager" / "devices"
 
@@ -92,6 +97,62 @@ def test_nova_7p_gen2_pids_present():
 
     assert 'ATTRS{idProduct}=="2298"' in rules
     assert 'ATTRS{idProduct}=="22a7"' in rules
+
+
+def test_uaccess_file_sorts_before_seat_late():
+    """#297: since systemd 258 the uaccess ACL is only applied for tags set
+    before 73-seat-late.rules runs — a 91- file's tag is silently ignored."""
+    prefix = int(UDEV_UACCESS_RULES_NAME.split('-', 1)[0])
+    assert prefix < 73
+
+
+def test_uaccess_rules_cover_every_pid_and_only_tag():
+    """The 70- file tags exactly the PIDs of the 91- file and nothing else:
+    MODE and the power attributes must stay in the late file so they keep
+    overriding earlier rules."""
+    devices = load_devices([SRC_DEVICES])
+    rules = generate_uaccess_rules([SRC_DEVICES])
+
+    for _vid, pids, name in devices:
+        for pid in pids:
+            assert f'ATTRS{{idProduct}}=="{pid:04x}", TAG+="uaccess"' in rules, \
+                f"{name}: 0x{pid:04x} missing"
+    assert 'MODE=' not in rules
+    assert 'ATTR{power/' not in rules
+    assert 'ACTION=="remove", GOTO="local_end"' in rules
+
+
+def test_uaccess_paths_follow_the_main_rules_paths():
+    """Diagnostics and the checker must search the 70- companion beside each
+    91- location so a packaged or /etc installation gets the same verdict."""
+    assert UDEV_UACCESS_RULES_PATHS == [
+        str(Path(path).with_name(UDEV_UACCESS_RULES_NAME))
+        for path in UDEV_RULES_PATHS
+    ]
+
+
+def test_checker_requires_current_uaccess_companion(monkeypatch):
+    """#297: a current 91- file alone does not grant session ACLs on systemd
+    258+, so the setup dialog must install the new 70- companion."""
+    from arctis_sound_manager import udev_checker
+
+    main = ('91 rules', 'SUBSYSTEM=="usb", ATTRS{idVendor}=="1038", '
+            'ATTRS{idProduct}=="beef", MODE="0666", TAG+="uaccess"')
+    uaccess = ('70 rules', 'SUBSYSTEM=="usb", ATTRS{idVendor}=="1038", '
+               'ATTRS{idProduct}=="beef", TAG+="uaccess"')
+    monkeypatch.setattr(udev_checker, '_expected_pids', lambda: [(0x1038, 0xbeef)])
+    monkeypatch.setattr(udev_checker, '_host_rules_contents', lambda _paths: [])
+    monkeypatch.setattr(
+        udev_checker, '_local_rules_contents',
+        lambda paths: [main] if paths == UDEV_RULES_PATHS else [],
+    )
+    assert udev_checker.get_udev_rules_status() == 'outdated'
+
+    monkeypatch.setattr(
+        udev_checker, '_local_rules_contents',
+        lambda paths: [main] if paths == UDEV_RULES_PATHS else [uaccess],
+    )
+    assert udev_checker.get_udev_rules_status() == 'ok'
 
 
 def test_power_persist_disabled_alongside_power_control():

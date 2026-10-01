@@ -14,6 +14,7 @@ _CONTAINER="arctis-sound-manager"
 _LOG="${XDG_CACHE_HOME:-$HOME/.cache}/asm-distrobox-install.log"
 _SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 _UDEV_RULES="/etc/udev/rules.d/91-steelseries-arctis.rules"
+_UDEV_UACCESS_RULES="/etc/udev/rules.d/70-steelseries-arctis-uaccess.rules"
 _HIDRAW_SYMLINK_RULES="/etc/udev/rules.d/90-asm-hidraw-symlink.rules"
 _HIDRAW_RUN_DIR="/run/asm-hidraw"
 _HIDRAW_TMPFILES_CONF="/etc/tmpfiles.d/asm-hidraw.conf"
@@ -448,6 +449,18 @@ RULES
         log_warn "asm-cli udev dump-rules empty — skipping device rules"
     fi
     rm -f "$rules_tmp"
+
+    # uaccess ACL companion (#297): must sort before 73-seat-late.rules
+    local uaccess_tmp
+    uaccess_tmp="$(mktemp /tmp/70-steelseries-arctis-uaccess.rules.XXXXXX)"
+    distrobox enter "$_CONTAINER" -- bash -lc "asm-cli udev dump-rules --uaccess" > "$uaccess_tmp"
+    if [[ -s "$uaccess_tmp" ]]; then
+        sudo install -m644 "$uaccess_tmp" "$_UDEV_UACCESS_RULES"
+        log_ok "uaccess rules: $_UDEV_UACCESS_RULES"
+    else
+        log_warn "asm-cli udev dump-rules --uaccess empty — skipping uaccess rules"
+    fi
+    rm -f "$uaccess_tmp"
 
     sudo udevadm control --reload-rules
     sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=1038 \

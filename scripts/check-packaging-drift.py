@@ -142,6 +142,13 @@ def check_udev_rules() -> None:
         return
     if "1038" not in out or "uaccess" not in out:
         fail("udev generator output missing vendor 0x1038 or uaccess tag")
+    try:
+        out = _run(["python3", "scripts/generate_udev_rules.py", "--uaccess"])
+    except Exception as e:
+        fail(f"udev uaccess generator crashed: {e!r}")
+        return
+    if "1038" not in out or 'TAG+="uaccess"' not in out:
+        fail("udev uaccess generator output missing vendor 0x1038 or uaccess tag")
 
 
 def check_metainfo(fix: bool = False) -> None:

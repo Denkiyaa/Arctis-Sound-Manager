@@ -109,3 +109,12 @@ UDEV_RULES_PATHS = [
     # Runtime overlay (transient, used by some package managers and NixOS).
     '/run/udev/rules.d/91-steelseries-arctis.rules',
 ]
+
+# Companion file carrying only TAG+="uaccess" — it must sort before
+# 73-seat-late.rules to be acted on (systemd >= 258, #297). Always installed
+# next to whichever UDEV_RULES_PATHS entry the main file goes to.
+UDEV_UACCESS_RULES_NAME = '70-steelseries-arctis-uaccess.rules'
+UDEV_UACCESS_RULES_PATHS = [
+    str(Path(path).with_name(UDEV_UACCESS_RULES_NAME))
+    for path in UDEV_RULES_PATHS
+]

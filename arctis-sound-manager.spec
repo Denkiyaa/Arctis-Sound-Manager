@@ -122,6 +122,8 @@ python3 -m installer --destdir=%{buildroot} %{SOURCE2}
 install -Dm644 /dev/null %{buildroot}%{_udevrulesdir}/91-steelseries-arctis.rules
 python3 scripts/generate_udev_rules.py src/arctis_sound_manager/devices/ \
     > %{buildroot}%{_udevrulesdir}/91-steelseries-arctis.rules
+python3 scripts/generate_udev_rules.py --uaccess src/arctis_sound_manager/devices/ \
+    > %{buildroot}%{_udevrulesdir}/70-steelseries-arctis-uaccess.rules
 
 # Systemd user services (single source of truth in systemd/, not heredocs)
 install -Dm644 systemd/arctis-manager.service       %{buildroot}%{_userunitdir}/arctis-manager.service
@@ -326,6 +328,7 @@ fi
 %{_bindir}/asm-clipd
 %{_bindir}/asm-setup
 %{_udevrulesdir}/91-steelseries-arctis.rules
+%{_udevrulesdir}/70-steelseries-arctis-uaccess.rules
 %{_userunitdir}/arctis-manager.service
 %{_userunitdir}/arctis-video-router.service
 %{_userunitdir}/arctis-stream-guard.service

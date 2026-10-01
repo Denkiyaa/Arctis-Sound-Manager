@@ -7,7 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from arctis_sound_manager.constants import UDEV_RULES_PATHS
+from arctis_sound_manager.constants import (UDEV_RULES_PATHS,
+                                            UDEV_UACCESS_RULES_PATHS)
 
 _logger = logging.getLogger(__name__)
 
@@ -68,10 +69,10 @@ def _running_in_container() -> bool:
         return False
 
 
-def _local_rules_contents() -> list[tuple[str, str]]:
-    """(path, content) for every rules file readable on this filesystem."""
+def _local_rules_contents(paths: list[str]) -> list[tuple[str, str]]:
+    """(path, content) for every requested rules file readable locally."""
     found: list[tuple[str, str]] = []
-    for p in UDEV_RULES_PATHS:
+    for p in paths:
         path = Path(p)
         if not path.exists():
             continue
@@ -82,8 +83,8 @@ def _local_rules_contents() -> list[tuple[str, str]]:
     return found
 
 
-def _host_rules_contents() -> list[tuple[str, str]]:
-    """The same files on the host, when ASM runs inside a container.
+def _host_rules_contents(paths: list[str]) -> list[tuple[str, str]]:
+    """The requested files on the host, when ASM runs inside a container.
 
     A distrobox container has its own /etc, and udev only ever reads the
     host's. scripts/distrobox/*.sh install the rules there, from the host,
@@ -101,7 +102,7 @@ def _host_rules_contents() -> list[tuple[str, str]]:
         return []
 
     found: list[tuple[str, str]] = []
-    for p in UDEV_RULES_PATHS:
+    for p in paths:
         try:
             result = subprocess.run(
                 [host_exec, 'cat', p],
@@ -126,24 +127,31 @@ def get_udev_rules_status() -> str:
         _logger.warning("udev_checker: no expected PIDs available — treating rules as missing.")
         return 'missing'
 
-    any_file_found = False
+    any_main_file_found = False
     # The host is consulted only when the container's own filesystem has not
     # already answered 'ok', so the subprocess cost lands on the path that was
     # about to open a dialog anyway.
     for source in (_local_rules_contents, _host_rules_contents):
-        for label, content in source():
-            any_file_found = True
+        main_rules = source(UDEV_RULES_PATHS)
+        uaccess_rules = source(UDEV_UACCESS_RULES_PATHS)
+        if main_rules:
+            any_main_file_found = True
+        for label, content in main_rules:
             covered = _pids_in_rules(content)
-            if expected.issubset(covered):
-                return 'ok'
-            missing = sorted(expected - covered)
-            if missing:
+            if not expected.issubset(covered):
+                missing = sorted(expected - covered)
                 _logger.info(
                     f"udev_checker: {label} missing PIDs: "
                     + ', '.join(f'0x{pid:04x}' for pid in missing)
                 )
+                continue
+            if any(expected.issubset(_pids_in_rules(content))
+                   for _uaccess_label, content in uaccess_rules):
+                return 'ok'
+            _logger.info("udev_checker: main rules are current but the "
+                         "70- uaccess companion is missing or outdated")
 
-    return 'outdated' if any_file_found else 'missing'
+    return 'outdated' if any_main_file_found else 'missing'
 
 
 def is_udev_rules_valid() -> bool:

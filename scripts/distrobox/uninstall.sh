@@ -100,6 +100,11 @@ do_uninstall() {
             removed=1
             log_info "Removed: $ASM_UDEV_RULES_PATH"
         fi
+        if [[ -f "$ASM_UDEV_UACCESS_RULES_PATH" ]]; then
+            sudo rm -f "$ASM_UDEV_UACCESS_RULES_PATH"
+            removed=1
+            log_info "Removed: $ASM_UDEV_UACCESS_RULES_PATH"
+        fi
         if [[ -f "$ASM_HIDRAW_SYMLINK_RULES" ]]; then
             sudo rm -f "$ASM_HIDRAW_SYMLINK_RULES"
             removed=1

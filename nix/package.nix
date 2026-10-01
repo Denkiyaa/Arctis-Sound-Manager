@@ -162,6 +162,9 @@ python3Packages.buildPythonApplication {
     ${udevGenPython}/bin/python scripts/generate_udev_rules.py \
       src/arctis_sound_manager/devices \
       > "$out/lib/udev/rules.d/91-steelseries-arctis.rules"
+    ${udevGenPython}/bin/python scripts/generate_udev_rules.py --uaccess \
+      src/arctis_sound_manager/devices \
+      > "$out/lib/udev/rules.d/70-steelseries-arctis-uaccess.rules"
 
     # Desktop entry + icon
     install -Dm644 src/arctis_sound_manager/desktop/ArctisManager.desktop \

@@ -18,8 +18,11 @@ from ruamel.yaml import YAML
 from arctis_sound_manager.cli_tools import arctis_usb_info
 from arctis_sound_manager.config import DeviceConfiguration
 from arctis_sound_manager.constants import (DEVICES_CONFIG_FOLDER,
-                                            UDEV_RULES_PATHS)
+                                            UDEV_RULES_PATHS,
+                                            UDEV_UACCESS_RULES_NAME)
 from arctis_sound_manager.udev_rules import generate_rules as _generate_udev_rules
+from arctis_sound_manager.udev_rules import \
+    generate_uaccess_rules as _generate_uaccess_rules
 from arctis_sound_manager.utils import project_version
 
 # Kept for any external callers that may have imported this; new code should
@@ -188,6 +191,8 @@ def _print_manual_udev_fix(rules_path: Path) -> None:
     print()
     print(f'  distrobox enter {container_name} -- asm-cli udev dump-rules \\')
     print(f'      | sudo tee {rules_path} >/dev/null')
+    print(f'  distrobox enter {container_name} -- asm-cli udev dump-rules --uaccess \\')
+    print(f'      | sudo tee {_uaccess_rules_path(rules_path)} >/dev/null')
     print('  sudo udevadm control --reload-rules')
     print('  sudo udevadm trigger --action=add --subsystem-match=usb')
     print()
@@ -245,6 +250,17 @@ def generate_udev_rules_content(config_paths: list[Path] | None = None) -> str:
     return _generate_udev_rules(paths)
 
 
+def generate_uaccess_rules_content(config_paths: list[Path] | None = None) -> str:
+    """Same as generate_udev_rules_content, for the 70- uaccess companion file."""
+    paths = config_paths if config_paths is not None else DEVICES_CONFIG_FOLDER
+    return _generate_uaccess_rules(paths)
+
+
+def _uaccess_rules_path(rules_path: Path) -> Path:
+    """The uaccess companion always sits in the same directory as the main file."""
+    return rules_path.with_name(UDEV_UACCESS_RULES_NAME)
+
+
 def write_udev_rules(rules_path: Path, create_directories: bool, force_write: bool, and_reload: bool = False) -> int:
     # Inside a distrobox/toolbox, /etc/udev/rules.d belongs to the CONTAINER —
     # udev only ever reads the HOST's copy. This check must come before
@@ -287,16 +303,22 @@ def write_udev_rules(rules_path: Path, create_directories: bool, force_write: bo
         return 3
 
     file_content = generate_udev_rules_content()
+    uaccess_content = generate_uaccess_rules_content()
+    uaccess_path = _uaccess_rules_path(rules_path)
     if run_with_sudo:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.rules', delete=False) as tmp:
             tmp.write(f'{file_content}\n')
             tmp_path = tmp.name
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.rules', delete=False) as tmp:
+            tmp.write(f'{uaccess_content}\n')
+            uaccess_tmp_path = tmp.name
         try:
             if and_reload:
                 # Bundle write + reload + trigger in a single elevated call (one password prompt)
                 print('Bundling write + reload in a single elevated call...')
                 sh_path = _make_elevated_script(
                     ["install", "-m", "644", tmp_path, str(rules_path)],
+                    ["install", "-m", "644", uaccess_tmp_path, str(uaccess_path)],
                     ["udevadm", "control", "--reload-rules"],
                     ["udevadm", "trigger", "--action=add", "--subsystem-match=usb"],
                     ["sh", "-c",
@@ -310,12 +332,22 @@ def write_udev_rules(rules_path: Path, create_directories: bool, force_write: bo
                 finally:
                     os.unlink(sh_path)
             else:
-                return sudo_it(["install", "-m", "644", tmp_path, str(rules_path)])
+                sh_path = _make_elevated_script(
+                    ["install", "-m", "644", tmp_path, str(rules_path)],
+                    ["install", "-m", "644", uaccess_tmp_path, str(uaccess_path)],
+                )
+                try:
+                    return sudo_it([sh_path])
+                finally:
+                    os.unlink(sh_path)
         finally:
             os.unlink(tmp_path)
+            os.unlink(uaccess_tmp_path)
     else:
         with rules_path.open('w') as f:
             f.write(f'{file_content}\n')
+        with uaccess_path.open('w') as f:
+            f.write(f'{uaccess_content}\n')
         if and_reload:
             return reload_udev_rules()
 
@@ -367,8 +399,13 @@ def _write_udev_rules_on_host(rules_path: Path, force_write: bool, and_reload: b
 
     rules_stage = _HOST_STAGE_DIR / '91-steelseries-arctis.rules.staged'
     rules_stage.write_text(f'{generate_udev_rules_content()}\n')
+    uaccess_stage = _HOST_STAGE_DIR / f'{UDEV_UACCESS_RULES_NAME}.staged'
+    uaccess_stage.write_text(f'{generate_uaccess_rules_content()}\n')
 
-    commands = [["install", "-m", "644", str(rules_stage), str(rules_path)]]
+    commands = [
+        ["install", "-m", "644", str(rules_stage), str(rules_path)],
+        ["install", "-m", "644", str(uaccess_stage), str(_uaccess_rules_path(rules_path))],
+    ]
     if and_reload:
         commands += [
             ["udevadm", "control", "--reload-rules"],
@@ -394,6 +431,7 @@ def _write_udev_rules_on_host(rules_path: Path, force_write: bool, and_reload: b
         return 0
     finally:
         rules_stage.unlink(missing_ok=True)
+        uaccess_stage.unlink(missing_ok=True)
         if sh_stage is not None:
             sh_stage.unlink(missing_ok=True)
 
@@ -597,6 +635,8 @@ def main():
     dump_parser = udev_subparsers.add_parser('dump-rules', help='Print udev rules to stdout (for packaging)')
     dump_parser.add_argument('--devices-dir', default=None, type=Path,
                              help='Path to device YAML directory (defaults to bundled devices)')
+    dump_parser.add_argument('--uaccess', action='store_true',
+                             help=f'Print the {UDEV_UACCESS_RULES_NAME} companion file instead')
 
     reload_parser = udev_subparsers.add_parser('reload-rules', help='Reload the udev rules')
 
@@ -730,7 +770,10 @@ def main():
             sys.exit(result)
         elif args.action == 'dump-rules':
             config_paths = [args.devices_dir] if args.devices_dir else None
-            sys.stdout.write(generate_udev_rules_content(config_paths))
+            if args.uaccess:
+                sys.stdout.write(generate_uaccess_rules_content(config_paths))
+            else:
+                sys.stdout.write(generate_udev_rules_content(config_paths))
             sys.exit(0)
         elif args.action == 'reload-rules':
             sys.exit(reload_udev_rules())

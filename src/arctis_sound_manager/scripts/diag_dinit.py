@@ -396,8 +396,11 @@ def check_udev() -> dict:
     result: dict = {}
 
     rules_path = Path("/etc/udev/rules.d/91-steelseries-arctis.rules")
+    uaccess_path = Path("/etc/udev/rules.d/70-steelseries-arctis-uaccess.rules")
     exists = rules_path.exists()
+    uaccess_exists = uaccess_path.exists()
     result["udev_rules"] = exists
+    result["udev_uaccess_rules"] = uaccess_exists
     if exists:
         ok("udev rules file present", str(rules_path))
         try:
@@ -413,6 +416,11 @@ def check_udev() -> dict:
     else:
         miss("udev rules file absent", str(rules_path))
         result["udev_contains_steelseries_pid"] = False
+
+    if uaccess_exists:
+        ok("early uaccess ACL rules file present", str(uaccess_path))
+    else:
+        miss("early uaccess ACL rules file absent", str(uaccess_path))
 
     if found("lsusb"):
         rc, out, _ = run(["lsusb"])
@@ -547,6 +555,7 @@ def main() -> None:
         "filter_chain_running": r_pw.get("filter_chain_running", False),
         "virtual_sinks_visible": r_pw.get("virtual_sinks_visible", False),
         "udev_rules": r_udev.get("udev_rules", False),
+        "udev_uaccess_rules": r_udev.get("udev_uaccess_rules", False),
         "hrir": r_asm.get("hrir", False),
         "dbus_ok": r_dbus.get("dbus_ok", False),
         "asm_version": r_asm.get("asm_version"),
