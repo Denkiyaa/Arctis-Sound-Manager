@@ -393,6 +393,13 @@ class CoreEngine:
         # -inf, not 0.0: monotonic() counts from boot, so a daemon started at
         # login would otherwise see a reset "0s ago" and skip the first one.
         self._last_usb_reset_monotonic: float = float('-inf')
+        # One init_device-triggered reset per wedge, not one per minute (#299):
+        # with every write timing out, the 38-command init itself outlasts
+        # _USB_RESET_MIN_INTERVAL_S, so the rate limit alone let each failed
+        # init fire a fresh reset — the headset dropped off the bus every
+        # couple of minutes, taking the audio with it. Re-armed only once an
+        # init succeeds again, or on the next suspend.
+        self._wedged_reset_spent: bool = False
 
         # configure_virtual_sinks() runs on the pyudev observer thread, which
         # must not block (it is the single path for every USB hotplug event,
@@ -2906,6 +2913,8 @@ class CoreEngine:
                 "init_device: %d/%d commands failed — device looks wedged, "
                 "escalating to a USB reset", failed, attempted)
             self._schedule_wedged_device_reset("init_device transport failures")
+        else:
+            self._wedged_reset_spent = False
 
     def _schedule_wedged_device_reset(self, reason: str) -> None:
         """Fire-and-forget a USB reset from sync code.
@@ -2920,6 +2929,11 @@ class CoreEngine:
         loop = self._main_event_loop
         if loop is None or not loop.is_running():
             return
+        if self._wedged_reset_spent:
+            self.logger.warning(
+                "init_device: a USB reset already failed to clear this — not "
+                "resetting again; replug the device or power-cycle it")
+            return
         now = time.monotonic()
         since_last = now - self._last_usb_reset_monotonic
         if since_last < _USB_RESET_MIN_INTERVAL_S:
@@ -2927,6 +2941,7 @@ class CoreEngine:
                 "init_device: skipping reset (last one %.0fs ago, minimum %.0fs)",
                 since_last, _USB_RESET_MIN_INTERVAL_S)
             return
+        self._wedged_reset_spent = True
         self._last_usb_reset_monotonic = now
         asyncio.run_coroutine_threadsafe(self._escalate_to_usb_reset(reason), loop)
 
@@ -4739,6 +4754,7 @@ class CoreEngine:
         if pending is not None:
             pending.cancel()
         self._resume_reset_attempted = False
+        self._wedged_reset_spent = False
         self.logger.info("prepare_for_sleep: releasing USB handle before system suspend")
         self._release_usb_handle()
 

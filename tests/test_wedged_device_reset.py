@@ -69,6 +69,7 @@ def _make_scheduler() -> CoreEngine:
     engine._main_event_loop.is_running.return_value = True
     engine._escalate_to_usb_reset = MagicMock()
     engine._last_usb_reset_monotonic = _initial_last_reset()
+    engine._wedged_reset_spent = False
     return engine
 
 
@@ -96,3 +97,38 @@ def test_a_second_reset_within_the_minimum_interval_is_skipped():
 
     run.assert_called_once()
     run_again.assert_not_called()
+
+
+def test_a_reset_that_did_not_help_is_not_repeated():
+    """#299: the failed init outlasts the rate limit, so without this guard
+    every init fired another reset and the headset dropped every ~2 min."""
+    engine = _make_scheduler()
+
+    with patch.object(core_mod.time, "monotonic", return_value=500.0), \
+         patch.object(core_mod.asyncio, "run_coroutine_threadsafe") as run:
+        CoreEngine._schedule_wedged_device_reset(engine, "test")
+    with patch.object(core_mod.time, "monotonic",
+                      return_value=500.0 + 10 * core_mod._USB_RESET_MIN_INTERVAL_S), \
+         patch.object(core_mod.asyncio, "run_coroutine_threadsafe") as run_again:
+        CoreEngine._schedule_wedged_device_reset(engine, "test")
+
+    run.assert_called_once()
+    run_again.assert_not_called()
+
+
+def test_a_successful_init_rearms_the_reset():
+    engine = _make_engine(0, 38)
+    engine._wedged_reset_spent = True
+
+    CoreEngine.init_device(engine)
+
+    assert engine._wedged_reset_spent is False
+
+
+def test_a_failed_init_keeps_the_reset_spent():
+    engine = _make_engine(38, 38)
+    engine._wedged_reset_spent = True
+
+    CoreEngine.init_device(engine)
+
+    assert engine._wedged_reset_spent is True
