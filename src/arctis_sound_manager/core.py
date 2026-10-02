@@ -801,6 +801,62 @@ class CoreEngine:
         except Exception as exc:
             self.logger.error("recreate_loopbacks: unexpected error: %r", exc)
 
+    @staticmethod
+    def _snapshot_sink_streams(sink_names: list[str]) -> dict[str, list[int]]:
+        """Return the sink-input indexes currently playing on each named sink.
+
+        A recreated loopback gets a brand new node id.  Streams that were
+        moved onto it (target.object=<old id>) are orphaned and fall back to
+        the default sink or go silent (#304), so we remember who was there.
+        """
+        found: dict[str, list[int]] = {}
+        try:
+            import pulsectl
+            with pulsectl.Pulse("asm-sink-snapshot") as pulse:
+                by_index = {s.index: s.name for s in pulse.sink_list()}
+                for si in pulse.sink_input_list():
+                    name = by_index.get(si.sink)
+                    if name in sink_names:
+                        found.setdefault(name, []).append(si.index)
+        except Exception as exc:
+            logging.getLogger(__name__).debug("snapshot_sink_streams failed: %r", exc)
+        return found
+
+    def _restore_sink_streams(self, snapshot: dict[str, list[int]], timeout_s: float = 4.0) -> None:
+        """Move the snapshotted streams back onto their recreated sink (#304)."""
+        if not snapshot:
+            return
+        try:
+            import pulsectl
+            with pulsectl.Pulse("asm-sink-restore") as pulse:
+                for sink_name, indexes in snapshot.items():
+                    deadline = time.monotonic() + timeout_s
+                    target = None
+                    while time.monotonic() < deadline:
+                        target = next((s for s in pulse.sink_list() if s.name == sink_name), None)
+                        if target is not None:
+                            break
+                        time.sleep(0.2)
+                    if target is None:
+                        self.logger.warning(
+                            "restore_sink_streams: sink %r did not reappear", sink_name)
+                        continue
+                    live = {si.index: si for si in pulse.sink_input_list()}
+                    for idx in indexes:
+                        si = live.get(idx)
+                        if si is None or si.sink == target.index:
+                            continue
+                        try:
+                            pulse.sink_input_move(idx, target.index)
+                            self.logger.info(
+                                "restore_sink_streams: stream %d moved back to %r",
+                                idx, sink_name)
+                        except Exception as exc:
+                            self.logger.warning(
+                                "restore_sink_streams: move of %d failed: %r", idx, exc)
+        except Exception as exc:
+            self.logger.warning("restore_sink_streams failed: %r", exc)
+
     def recreate_loopbacks_game_media(self) -> None:
         """Recreate only Game and Media loopbacks, leaving Chat intact.
 
@@ -839,9 +895,11 @@ class CoreEngine:
                               'aux_enabled', False)),
             )
             recreated = [s for s in specs if s.channel != "chat"]
+            snapshot = self._snapshot_sink_streams([s.capture_name for s in recreated])
             for spec in recreated:
                 self.loopback_manager.recreate(spec)  # keep Arctis_Chat alive — Discord-safe
             self._link_loopbacks(recreated)
+            self._restore_sink_streams(snapshot)
 
             self.logger.info(
                 "recreate_loopbacks_game_media: game+media recreated, chat preserved"
@@ -894,8 +952,10 @@ class CoreEngine:
             )
             for spec in specs:
                 if spec.channel == channel:
+                    snapshot = self._snapshot_sink_streams([spec.capture_name])
                     self.loopback_manager.recreate(spec)
                     self._link_loopbacks([spec])
+                    self._restore_sink_streams(snapshot)
                     self.logger.info(
                         "recreate_loopback_single: channel=%r recreated", channel,
                     )
