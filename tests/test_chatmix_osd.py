@@ -98,7 +98,7 @@ def test_hidden_while_an_asm_window_has_focus(watcher, monkeypatch):
     assert watcher._osd.shown == []
 
 
-# ── Sound Master Overlay: same bar, same window, for the DAC wheel ──────
+# ── DAC Wheel Overlay: same bar, same window, for the DAC wheel ─────────
 
 def test_wheel_level_read_from_the_status_payload():
     assert chatmix_osd.dac_wheel_level(_wheel(42)) == 42

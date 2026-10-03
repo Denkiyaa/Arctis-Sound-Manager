@@ -496,7 +496,7 @@ class GeneralSettings(JsonSerializable):
 
     # Float the ChatMix bar at the bottom of the screen when the mix moves
     systray_chatmix_osd: bool = True
-
+    # Same bar, same place, for the DAC wheel (station_volume)
     # Same bar, same place, for the Master volume (the headset's own output)
     systray_master_osd: bool = False
 
