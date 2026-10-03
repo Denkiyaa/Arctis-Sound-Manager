@@ -37,8 +37,10 @@ from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QWidget
 
 import arctis_sound_manager.gui.theme as _theme
+from arctis_sound_manager.gui.fader_slider import FADER_HANDLE_QSS_H
 from arctis_sound_manager.gui.home_page import (_CHATMIX_CHANNEL_COLOR_KEYS,
                                                 _ChatMixSlider,
+                                                _headset_sink,
                                                 _make_chatmix_bar_qss,
                                                 chatmix_bar_position,
                                                 chatmix_bar_track_css)
@@ -174,6 +176,36 @@ def osd_style(channels: list[str]) -> dict:
     }
 
 
+def master_osd_style(percent: int) -> dict:
+    """The Master volume in the ChatMix bar's frame: same panel, same place,
+    the track filled up to the level in Master's colour (`fill`)."""
+    return {
+        **osd_style([]),
+        "left_label": I18n.translate("ui", "master"),
+        "right_label": f"{percent}%",
+        "left_colors": [_theme.c("COLOR_MASTER")],
+        "chat_color": _theme.c("BG_BUTTON"),
+        "fill": True,
+    }
+
+
+def _master_bar_qss(accent: str, groove: str) -> str:
+    return f"""
+        QSlider::groove:horizontal {{
+            height: 6px;
+            background: {groove};
+            border-radius: 3px;
+        }}
+        QSlider::sub-page:horizontal {{
+            background: {accent};
+            border-radius: 3px;
+        }}
+        QSlider::add-page:horizontal {{
+            background: transparent;
+        }}
+    """ + FADER_HANDLE_QSS_H
+
+
 class ChatMixOsd(QWidget):
     """The floating bar itself. Input-transparent and never focused: it must
     not eat a click or a keypress meant for the game underneath."""
@@ -237,23 +269,37 @@ class ChatMixOsd(QWidget):
     def show_position(self, position: int, channels: list[str]) -> None:
         if not self._usable:
             return
-        self._restyle(channels)
-        self._bar.setValue(position)
+        style = osd_style(channels)
+        self._restyle(style)
+        self._bar.show_centre_tick = True
+        self._bar.setStyleSheet(
+            _make_chatmix_bar_qss(chatmix_bar_track_css(style["left_colors"], style["chat_color"]))
+        )
+        self._pop(position)
+
+    def show_volume(self, percent: int) -> None:
+        if not self._usable:
+            return
+        style = master_osd_style(percent)
+        self._restyle(style)
+        self._bar.show_centre_tick = False
+        self._bar.setStyleSheet(_master_bar_qss(style["left_colors"][0], style["chat_color"]))
+        self._pop(percent)
+
+    def _pop(self, value: int) -> None:
+        self._bar.setValue(value)
+        self._bar.update()
         if self._x11:
             self._place_x11()
         self.show()
         self._hide_timer.start()
 
-    def _restyle(self, channels: list[str]) -> None:
-        style = osd_style(channels)
+    def _restyle(self, style: dict) -> None:
         label_qss = f"color: {style['text_color']}; font-size: 9pt; background: transparent;"
         self._channels_lbl.setText(style["left_label"])
         self._channels_lbl.setStyleSheet(label_qss)
         self._chat_lbl.setText(style["right_label"])
         self._chat_lbl.setStyleSheet(label_qss)
-        self._bar.setStyleSheet(
-            _make_chatmix_bar_qss(chatmix_bar_track_css(style["left_colors"], style["chat_color"]))
-        )
         self._panel.setStyleSheet(
             f"QFrame#chatmixOsdPanel {{ background-color: {style['bg_color']};"
             f" border: 1px solid {style['border_color']}; border-radius: 12px; }}"
@@ -277,6 +323,12 @@ class GnomeShellOsd:
     usable = True
 
     def show_position(self, position: int, channels: list[str]) -> None:
+        self._show({"position": position, **osd_style(channels)})
+
+    def show_volume(self, percent: int) -> None:
+        self._show({"position": percent, **master_osd_style(percent)})
+
+    def _show(self, state: dict) -> None:
         # QtDBus is a separate package on Debian/Ubuntu (python3-pyside6.qtdbus):
         # imported here so a missing module only costs the GNOME OSD, not the GUI (#306).
         try:
@@ -288,7 +340,7 @@ class GnomeShellOsd:
             return
         message = QDBusMessage.createMethodCall(
             GNOME_OSD_BUS_NAME, GNOME_OSD_OBJECT_PATH, GNOME_OSD_BUS_NAME, "Show")
-        message.setArguments([json.dumps({"position": position, **osd_style(channels)})])
+        message.setArguments([json.dumps(state)])
         bus.call(message, QDBus.CallMode.NoBlock)
 
 
@@ -349,9 +401,17 @@ def enable_gnome_extension_once() -> None:
         logger.info("Could not enable the GNOME ChatMix OSD extension: %r", exc)
 
 
+def master_level(pulse) -> int | None:
+    """The Master card's volume: the headset's own output sink, 0-100."""
+    sink = _headset_sink(pulse.sink_list())
+    return None if sink is None else round(sink.volume.value_flat * 100)
+
+
 class ChatMixWatcher(QObject):
-    """Follows the mix streams on PipeWire's own events (no polling), and
-    brings the OSD up when the ChatMix position moves.
+    """Follows the mix streams and the headset's sink on PipeWire's own
+    events (no polling), and brings the OSD up when the ChatMix position
+    or the Master volume moves. Both share one OSD window, so they show in
+    the same place and never on top of each other.
 
     The first reading after (re)connecting only sets the baseline: startup,
     and PipeWire coming back, are not something the user did.
@@ -359,13 +419,16 @@ class ChatMixWatcher(QObject):
 
     volumes_changed = Signal(object)
 
-    def __init__(self, is_stopping, is_enabled, channels, parent=None):
+    def __init__(self, is_stopping, is_enabled, channels, is_master_enabled=lambda: False,
+                 parent=None):
         super().__init__(parent)
         self._is_stopping = is_stopping
         self._is_enabled = is_enabled
+        self._is_master_enabled = is_master_enabled
         self._channels = channels
         self._osd: ChatMixOsd | GnomeShellOsd | None = None
         self._last_position: int | None = None
+        self._last_master: int | None = None
         self.volumes_changed.connect(self._on_volumes)
 
     def start(self) -> None:
@@ -385,33 +448,45 @@ class ChatMixWatcher(QObject):
                         got_event[0] = True
                         raise pulsectl.PulseLoopStop
 
-                    pulse.event_mask_set("sink_input")
+                    pulse.event_mask_set("sink_input", "sink")
                     pulse.event_callback_set(_on_event)
                     self.volumes_changed.emit(None)  # new baseline
-                    self.volumes_changed.emit(mix_stream_levels(pulse))
+                    self.volumes_changed.emit((mix_stream_levels(pulse), master_level(pulse)))
                     while not self._is_stopping():
                         pulse.event_listen(timeout=1)
                         if got_event[0]:
                             got_event[0] = False
-                            self.volumes_changed.emit(mix_stream_levels(pulse))
+                            self.volumes_changed.emit(
+                                (mix_stream_levels(pulse), master_level(pulse)))
             except Exception as exc:  # noqa: BLE001 — PipeWire restarting, reconnect
                 logger.debug("ChatMix OSD watcher: %r", exc)
                 time.sleep(2)
 
-    def _on_volumes(self, levels) -> None:
-        if levels is None:
+    def _on_volumes(self, reading) -> None:
+        if reading is None:
             self._last_position = None
+            self._last_master = None
             return
+        levels, master = reading
         channels = self._channels()
         position = chatmix_bar_position(levels, levels.get("chat"), channels)
-        if position is None:
-            return
-        previous, self._last_position = self._last_position, position
-        if previous is None or position == previous or not self._is_enabled():
-            return
-        # Someone moving the mixer page's own bar is already looking at it.
-        if QApplication.activeWindow() is not None:
-            return
+        if position is not None:
+            previous, self._last_position = self._last_position, position
+            if previous is not None and position != previous and self._is_enabled():
+                if self._can_show():
+                    self._get_osd().show_position(position, channels)
+        if master is not None:
+            previous, self._last_master = self._last_master, master
+            if previous is not None and master != previous and self._is_master_enabled():
+                if self._can_show():
+                    self._get_osd().show_volume(master)
+
+    @staticmethod
+    def _can_show() -> bool:
+        # Someone moving the mixer page's own sliders is already looking at them.
+        return QApplication.activeWindow() is None
+
+    def _get_osd(self):
         if self._osd is None:
             self._osd = _make_osd()
-        self._osd.show_position(position, channels)
+        return self._osd

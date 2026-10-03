@@ -16,8 +16,8 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def _levels(game, chat, media, aux=None):
-    return {"game": game, "chat": chat, "media": media, "aux": aux}
+def _levels(game, chat, media, aux=None, master=None):
+    return {"game": game, "chat": chat, "media": media, "aux": aux}, master
 
 
 class _FakeOsd:
@@ -27,12 +27,16 @@ class _FakeOsd:
     def show_position(self, position, channels):
         self.shown.append((position, list(channels)))
 
+    def show_volume(self, percent):
+        self.shown.append(("master", percent))
+
 
 @pytest.fixture
 def watcher(qapp, monkeypatch):
-    state = {"enabled": True, "channels": ["game"]}
+    state = {"enabled": True, "channels": ["game"], "master": True}
     w = chatmix_osd.ChatMixWatcher(
         lambda: True, lambda: state["enabled"], lambda: state["channels"],
+        lambda: state["master"],
     )
     w._osd = _FakeOsd()
     monkeypatch.setattr(chatmix_osd.QApplication, "activeWindow", staticmethod(lambda: None))
@@ -87,6 +91,64 @@ def test_hidden_while_an_asm_window_has_focus(watcher, monkeypatch):
     watcher._on_volumes(_levels(100, 40, 100))
     watcher._on_volumes(_levels(100, 60, 100))
     assert watcher._osd.shown == []
+
+
+# ── Sound Master Overlay: same bar, same window, for the Master volume ─────
+
+def test_master_shows_when_its_volume_moves(watcher):
+    watcher._on_volumes(_levels(100, 100, 100, master=50))
+    watcher._on_volumes(_levels(100, 100, 100, master=65))
+    assert watcher._osd.shown == [("master", 65)]
+
+
+def test_master_first_reading_and_reconnect_are_baselines(watcher):
+    watcher._on_volumes(_levels(100, 100, 100, master=50))
+    watcher._on_volumes(None)
+    watcher._on_volumes(_levels(100, 100, 100, master=80))
+    assert watcher._osd.shown == []
+
+
+def test_master_overlay_has_its_own_toggle(watcher):
+    watcher.state["master"] = False
+    watcher._on_volumes(_levels(100, 40, 100, master=50))
+    watcher._on_volumes(_levels(100, 60, 100, master=65))
+    assert watcher._osd.shown == [(30, ["game"])]
+
+
+def test_chatmix_toggle_leaves_master_alone(watcher):
+    watcher.state["enabled"] = False
+    watcher._on_volumes(_levels(100, 40, 100, master=50))
+    watcher._on_volumes(_levels(100, 60, 100, master=65))
+    assert watcher._osd.shown == [("master", 65)]
+
+
+def test_master_hidden_while_an_asm_window_has_focus(watcher, monkeypatch):
+    monkeypatch.setattr(chatmix_osd.QApplication, "activeWindow", staticmethod(lambda: object()))
+    watcher._on_volumes(_levels(100, 100, 100, master=50))
+    watcher._on_volumes(_levels(100, 100, 100, master=65))
+    assert watcher._osd.shown == []
+
+
+def test_master_uses_the_chatmix_window(qapp):
+    """Same widget, so same size and same place; only its content changes."""
+    osd = chatmix_osd.ChatMixOsd()
+    osd.show_position(30, ["game"])
+    width = osd.width()
+    osd.show_volume(65)
+    assert osd.width() == width
+    assert osd._bar.value() == 65
+    assert osd._chat_lbl.text() == "65%"
+    assert not osd._bar.show_centre_tick
+    osd.show_position(30, ["game"])
+    assert osd._bar.show_centre_tick
+    osd.hide()
+
+
+def test_gnome_payload_for_master_asks_for_a_fill():
+    style = chatmix_osd.master_osd_style(65)
+    assert style["fill"] is True
+    assert style["right_label"] == "65%"
+    assert len(style["left_colors"]) == 1
 
 
 def test_layer_shell_refused_next_to_a_foreign_qtcore(monkeypatch, tmp_path):

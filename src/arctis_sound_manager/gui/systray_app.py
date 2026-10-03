@@ -220,10 +220,11 @@ class QSystrayApp(QBaseDesktopApp):
             self.is_stopping,
             lambda: self._chatmix_osd_enabled,
             lambda: self._chatmix_channels,
+            lambda: self._master_osd_enabled,
             parent=self,
         )
         self._chatmix_watcher.start()
-        if self._chatmix_osd_enabled:
+        if self._chatmix_osd_enabled or self._master_osd_enabled:
             enable_gnome_extension_once()
 
         self.new_status.connect(self.on_new_status)
@@ -307,6 +308,7 @@ class QSystrayApp(QBaseDesktopApp):
     def _refresh_chatmix_osd_settings(self) -> None:
         data = _read_general_settings_file()
         self._chatmix_osd_enabled = bool(data.get('systray_chatmix_osd', True))
+        self._master_osd_enabled = bool(data.get('systray_master_osd', False))
         channels = data.get('chatmix_channels')
         self._chatmix_channels = list(channels) if isinstance(channels, list) and channels else ['game']
 

@@ -80,18 +80,28 @@ class ChatMixBar extends St.DrawingArea {
             roundedRect(cr, left, top, span, TRACK_HEIGHT, TRACK_HEIGHT / 2);
             cr.clip();
             const colors = state.left_colors?.length ? state.left_colors : ['#ffffff'];
-            const band = span / 2 / colors.length;
-            colors.forEach((c, i) => {
-                cr.setSourceRGB(...parseColor(c));
-                cr.rectangle(left + i * band, top, band + 1, TRACK_HEIGHT);
+            const position = Math.max(0, Math.min(100, state.position ?? 50));
+            if (state.fill) {
+                // A plain volume (Master): the track filled up to the level.
+                cr.setSourceRGB(...parseColor(state.chat_color));
+                cr.rectangle(left, top, span, TRACK_HEIGHT);
                 cr.fill();
-            });
-            cr.setSourceRGB(...parseColor(state.chat_color));
-            cr.rectangle(left + span / 2, top, span / 2, TRACK_HEIGHT);
-            cr.fill();
+                cr.setSourceRGB(...parseColor(colors[0]));
+                cr.rectangle(left, top, span * position / 100, TRACK_HEIGHT);
+                cr.fill();
+            } else {
+                const band = span / 2 / colors.length;
+                colors.forEach((c, i) => {
+                    cr.setSourceRGB(...parseColor(c));
+                    cr.rectangle(left + i * band, top, band + 1, TRACK_HEIGHT);
+                    cr.fill();
+                });
+                cr.setSourceRGB(...parseColor(state.chat_color));
+                cr.rectangle(left + span / 2, top, span / 2, TRACK_HEIGHT);
+                cr.fill();
+            }
             cr.restore();
 
-            const position = Math.max(0, Math.min(100, state.position ?? 50));
             const capX = left + span * position / 100 - CAP_WIDTH / 2;
             roundedRect(cr, capX, 0, CAP_WIDTH, CAP_HEIGHT, 5);
             cr.setSourceRGB(...parseColor(state.cap_color, [0.9, 0.9, 0.9]));

@@ -147,7 +147,7 @@ def _styled_button(text: str) -> QPushButton:
 
 # The "general" D-Bus section, split by topic. Keys not listed in any of these
 # stay in the General group itself.
-_INTERFACE_KEYS = ('systray_show_battery', 'systray_chatmix_osd', 'systray_icon_color')
+_INTERFACE_KEYS = ('systray_show_battery', 'systray_chatmix_osd', 'systray_master_osd', 'systray_icon_color')
 _AUDIO_KEYS = (
     'redirect_audio_on_connect', 'redirect_audio_on_connect_channel',
     'redirect_audio_on_disconnect', 'redirect_audio_on_disconnect_device',

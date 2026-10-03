@@ -497,6 +497,9 @@ class GeneralSettings(JsonSerializable):
     # Float the ChatMix bar at the bottom of the screen when the mix moves
     systray_chatmix_osd: bool = True
 
+    # Same bar, same place, for the Master volume (the headset's own output)
+    systray_master_osd: bool = False
+
     # UI theme
     theme: str = "steelseries"
 
@@ -528,6 +531,7 @@ class GeneralSettings(JsonSerializable):
         ConfigSetting('pipewire_quantum', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'pipewire_quantum_auto', 1024: 'pipewire_quantum_1024', 2048: 'pipewire_quantum_2048'}),
         ConfigSetting('systray_show_battery', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
         ConfigSetting('systray_chatmix_osd', SettingType.TOGGLE, True, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
+        ConfigSetting('systray_master_osd', SettingType.TOGGLE, False, values={ 'on': True, 'off': False, 'off_label': 'off', 'on_label': 'on' }),
         ConfigSetting('systray_icon_color', SettingType.BUTTON_GROUP, 0, values_mapping={0: 'systray_icon_color_auto', 1: 'systray_icon_color_white', 2: 'systray_icon_color_black'}),
         # On by default (issue #228): a preset library that grows on its own is
         # worth saying out loud once, otherwise people wonder whether the list

@@ -272,7 +272,12 @@ class _ChatMixSlider(FaderSlider):
     cap like the EQ sliders' ticks.
     """
 
+    #: Off when the same slider shows a plain volume (the Master overlay).
+    show_centre_tick = True
+
     def paint_under_cap(self, painter: QPainter) -> None:
+        if not self.show_centre_tick:
+            return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         pen = QPen(QColor("white"))
         pen.setWidth(2)
