@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.34] - 4 October 2026
+
+### Added
+
+- **DAC Wheel Overlay.** Turning the volume wheel on the base station / GameDAC floats a "DAC wheel" bar at the bottom of the screen, in the same place as the ChatMix bar (now called Chat/Mix Overlay). Can be turned off in the settings.
+- **Arctis Pro Wireless: spare battery and base station screen.** The spare battery charging in the base is shown on the Channels page, and the base's OLED can be used from the DAC page.
+
+### Fixed
+
+- **Arctis Pro Wireless battery stuck at 50% (#305).** ASM read the radio link state instead of the battery; it now reads the real battery level.
+- **asm-gui crashing on startup on Debian/Ubuntu (#306).** The ChatMix overlay needed PySide6's QtDBus module, which those distributions ship as a separate package. It is now a declared dependency, and a missing module only disables the GNOME overlay instead of the whole GUI.
+- **Apps losing sound after changing an EQ preset (#304).** Changing a Game or Media EQ preset recreates the channel, and apps moved onto it dropped out until moved again by hand. They are now moved back automatically.
+
 ## [1.4.33] - 1 October 2026
 
 ### Fixed
