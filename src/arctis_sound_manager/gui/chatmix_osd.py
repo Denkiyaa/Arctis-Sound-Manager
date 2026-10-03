@@ -40,11 +40,12 @@ import arctis_sound_manager.gui.theme as _theme
 from arctis_sound_manager.gui.fader_slider import FADER_HANDLE_QSS_H
 from arctis_sound_manager.gui.home_page import (_CHATMIX_CHANNEL_COLOR_KEYS,
                                                 _ChatMixSlider,
-                                                _headset_sink,
                                                 _make_chatmix_bar_qss,
                                                 chatmix_bar_position,
                                                 chatmix_bar_track_css)
-from arctis_sound_manager.constants import DBUS_BUS_NAME, DBUS_OBJECT_BASE_PATH
+from arctis_sound_manager.constants import (DBUS_BUS_NAME, DBUS_OBJECT_BASE_PATH,
+                                            DBUS_STATUS_INTERFACE_NAME,
+                                            DBUS_STATUS_OBJECT_PATH)
 from arctis_sound_manager.i18n import I18n
 from arctis_sound_manager.pactl import mix_stream_levels
 
@@ -177,11 +178,12 @@ def osd_style(channels: list[str]) -> dict:
 
 
 def master_osd_style(percent: int) -> dict:
-    """The Master volume in the ChatMix bar's frame: same panel, same place,
-    the track filled up to the level in Master's colour (`fill`)."""
+    """The DAC wheel in the ChatMix bar's frame: same panel, same place, the
+    track filled up to the level in Master's colour (`fill`) — the reading
+    shown beside the Master card on the Channels page (#268)."""
     return {
         **osd_style([]),
-        "left_label": I18n.translate("ui", "master"),
+        "left_label": I18n.translate("ui", "dac_wheel"),
         "right_label": f"{percent}%",
         "left_colors": [_theme.c("COLOR_MASTER")],
         "chat_color": _theme.c("BG_BUTTON"),
@@ -401,23 +403,31 @@ def enable_gnome_extension_once() -> None:
         logger.info("Could not enable the GNOME ChatMix OSD extension: %r", exc)
 
 
-def master_level(pulse) -> int | None:
-    """The Master card's volume: the headset's own output sink, 0-100."""
-    sink = _headset_sink(pulse.sink_list())
-    return None if sink is None else round(sink.volume.value_flat * 100)
+def dac_wheel_level(payload: str) -> int | None:
+    """The DAC wheel (`station_volume`) from a StatusChanged payload, 0-100,
+    or None when this device has no wheel or did not report it."""
+    try:
+        wheel = json.loads(payload).get("gamedac", {}).get("station_volume", {})
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(wheel, dict) or wheel.get("type") != "percentage":
+        return None
+    value = wheel.get("value")
+    return value if isinstance(value, int) else None
 
 
 class ChatMixWatcher(QObject):
-    """Follows the mix streams and the headset's sink on PipeWire's own
-    events (no polling), and brings the OSD up when the ChatMix position
-    or the Master volume moves. Both share one OSD window, so they show in
-    the same place and never on top of each other.
+    """Follows the mix streams on PipeWire's own events (no polling), and
+    the DAC wheel on the daemon's StatusChanged signal, and brings the OSD
+    up when the ChatMix position or the wheel moves. Both share one OSD
+    window, so they show in the same place and never on top of each other.
 
     The first reading after (re)connecting only sets the baseline: startup,
-    and PipeWire coming back, are not something the user did.
+    and PipeWire or the daemon coming back, are not something the user did.
     """
 
     volumes_changed = Signal(object)
+    wheel_changed = Signal(object)
 
     def __init__(self, is_stopping, is_enabled, channels, is_master_enabled=lambda: False,
                  parent=None):
@@ -430,9 +440,39 @@ class ChatMixWatcher(QObject):
         self._last_position: int | None = None
         self._last_master: int | None = None
         self.volumes_changed.connect(self._on_volumes)
+        self.wheel_changed.connect(self._on_wheel)
 
     def start(self) -> None:
         Thread(target=self._listen, daemon=True, name="chatmix-osd").start()
+        Thread(target=self._listen_wheel, daemon=True, name="dac-wheel-osd").start()
+
+    def _listen_wheel(self) -> None:
+        try:
+            import asyncio
+
+            from dbus_next.aio import MessageBus
+        except ImportError:
+            return
+
+        async def run() -> None:
+            while not self._is_stopping():
+                try:
+                    bus = await MessageBus().connect()
+                    intro = await bus.introspect(DBUS_BUS_NAME, DBUS_STATUS_OBJECT_PATH)
+                    iface = bus.get_proxy_object(
+                        DBUS_BUS_NAME, DBUS_STATUS_OBJECT_PATH, intro,
+                    ).get_interface(DBUS_STATUS_INTERFACE_NAME)
+                    self.wheel_changed.emit(None)  # new baseline
+                    iface.on_status_changed(
+                        lambda payload: self.wheel_changed.emit(dac_wheel_level(payload)))
+                    while not self._is_stopping() and bus.connected:
+                        await asyncio.sleep(1)
+                    bus.disconnect()
+                except Exception as exc:  # noqa: BLE001 — daemon not up yet, retry
+                    logger.debug("DAC wheel OSD watcher: %r", exc)
+                await asyncio.sleep(2)
+
+        asyncio.run(run())
 
     def _listen(self) -> None:
         try:
@@ -448,38 +488,42 @@ class ChatMixWatcher(QObject):
                         got_event[0] = True
                         raise pulsectl.PulseLoopStop
 
-                    pulse.event_mask_set("sink_input", "sink")
+                    pulse.event_mask_set("sink_input")
                     pulse.event_callback_set(_on_event)
                     self.volumes_changed.emit(None)  # new baseline
-                    self.volumes_changed.emit((mix_stream_levels(pulse), master_level(pulse)))
+                    self.volumes_changed.emit(mix_stream_levels(pulse))
                     while not self._is_stopping():
                         pulse.event_listen(timeout=1)
                         if got_event[0]:
                             got_event[0] = False
-                            self.volumes_changed.emit(
-                                (mix_stream_levels(pulse), master_level(pulse)))
+                            self.volumes_changed.emit(mix_stream_levels(pulse))
             except Exception as exc:  # noqa: BLE001 — PipeWire restarting, reconnect
                 logger.debug("ChatMix OSD watcher: %r", exc)
                 time.sleep(2)
 
-    def _on_volumes(self, reading) -> None:
-        if reading is None:
+    def _on_volumes(self, levels) -> None:
+        if levels is None:
             self._last_position = None
-            self._last_master = None
             return
-        levels, master = reading
         channels = self._channels()
         position = chatmix_bar_position(levels, levels.get("chat"), channels)
-        if position is not None:
-            previous, self._last_position = self._last_position, position
-            if previous is not None and position != previous and self._is_enabled():
-                if self._can_show():
-                    self._get_osd().show_position(position, channels)
-        if master is not None:
-            previous, self._last_master = self._last_master, master
-            if previous is not None and master != previous and self._is_master_enabled():
-                if self._can_show():
-                    self._get_osd().show_volume(master)
+        if position is None:
+            return
+        previous, self._last_position = self._last_position, position
+        if previous is None or position == previous or not self._is_enabled():
+            return
+        if self._can_show():
+            self._get_osd().show_position(position, channels)
+
+    def _on_wheel(self, level) -> None:
+        if level is None:
+            self._last_master = None
+            return
+        previous, self._last_master = self._last_master, level
+        if previous is None or level == previous or not self._is_master_enabled():
+            return
+        if self._can_show():
+            self._get_osd().show_volume(level)
 
     @staticmethod
     def _can_show() -> bool:

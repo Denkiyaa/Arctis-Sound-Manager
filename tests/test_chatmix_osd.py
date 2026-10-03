@@ -16,8 +16,13 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def _levels(game, chat, media, aux=None, master=None):
-    return {"game": game, "chat": chat, "media": media, "aux": aux}, master
+def _levels(game, chat, media, aux=None):
+    return {"game": game, "chat": chat, "media": media, "aux": aux}
+
+
+def _wheel(value):
+    import json
+    return json.dumps({"gamedac": {"station_volume": {"type": "percentage", "value": value}}})
 
 
 class _FakeOsd:
@@ -93,39 +98,49 @@ def test_hidden_while_an_asm_window_has_focus(watcher, monkeypatch):
     assert watcher._osd.shown == []
 
 
-# ── Sound Master Overlay: same bar, same window, for the Master volume ─────
+# ── Sound Master Overlay: same bar, same window, for the DAC wheel ──────
 
-def test_master_shows_when_its_volume_moves(watcher):
-    watcher._on_volumes(_levels(100, 100, 100, master=50))
-    watcher._on_volumes(_levels(100, 100, 100, master=65))
+def test_wheel_level_read_from_the_status_payload():
+    assert chatmix_osd.dac_wheel_level(_wheel(42)) == 42
+    assert chatmix_osd.dac_wheel_level('{"headset": {}}') is None
+    assert chatmix_osd.dac_wheel_level("not json") is None
+
+
+def test_master_shows_when_the_wheel_turns(watcher):
+    watcher._on_wheel(50)
+    watcher._on_wheel(65)
     assert watcher._osd.shown == [("master", 65)]
 
 
 def test_master_first_reading_and_reconnect_are_baselines(watcher):
-    watcher._on_volumes(_levels(100, 100, 100, master=50))
-    watcher._on_volumes(None)
-    watcher._on_volumes(_levels(100, 100, 100, master=80))
+    watcher._on_wheel(50)
+    watcher._on_wheel(None)  # daemon came back
+    watcher._on_wheel(80)
     assert watcher._osd.shown == []
 
 
 def test_master_overlay_has_its_own_toggle(watcher):
     watcher.state["master"] = False
-    watcher._on_volumes(_levels(100, 40, 100, master=50))
-    watcher._on_volumes(_levels(100, 60, 100, master=65))
+    watcher._on_volumes(_levels(100, 40, 100))
+    watcher._on_volumes(_levels(100, 60, 100))
+    watcher._on_wheel(50)
+    watcher._on_wheel(65)
     assert watcher._osd.shown == [(30, ["game"])]
 
 
 def test_chatmix_toggle_leaves_master_alone(watcher):
     watcher.state["enabled"] = False
-    watcher._on_volumes(_levels(100, 40, 100, master=50))
-    watcher._on_volumes(_levels(100, 60, 100, master=65))
+    watcher._on_volumes(_levels(100, 40, 100))
+    watcher._on_volumes(_levels(100, 60, 100))
+    watcher._on_wheel(50)
+    watcher._on_wheel(65)
     assert watcher._osd.shown == [("master", 65)]
 
 
 def test_master_hidden_while_an_asm_window_has_focus(watcher, monkeypatch):
     monkeypatch.setattr(chatmix_osd.QApplication, "activeWindow", staticmethod(lambda: object()))
-    watcher._on_volumes(_levels(100, 100, 100, master=50))
-    watcher._on_volumes(_levels(100, 100, 100, master=65))
+    watcher._on_wheel(50)
+    watcher._on_wheel(65)
     assert watcher._osd.shown == []
 
 
