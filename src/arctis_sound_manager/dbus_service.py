@@ -383,9 +383,13 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
                 f"0x{self.core_engine.usb_device.idProduct:04x}"
                 if self.core_engine.usb_device else ""
             )
+            # The DAC page is the OLED's settings. A base with a status section
+            # but no screen profile (Arctis Pro Wireless: spare battery only,
+            # #305) would get a page of controls that drive nothing.
             settings['has_dac'] = (
                 self.core_engine.device_config.status is not None
                 and 'gamedac' in self.core_engine.device_config.status.representation
+                and self.core_engine.device_config.oled is not None
             )
             # Whether the custom 10-band EQ has anything to write to. Headsets
             # without an on-device EQ must not be offered those sliders — the

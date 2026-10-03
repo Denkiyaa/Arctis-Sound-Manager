@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 from pathlib import Path
 
 from arctis_sound_manager.desktop_session import DesktopSession
-from arctis_sound_manager.oled_protocol import OledProtocol
+from arctis_sound_manager.oled_protocol import OledProtocol, SiberiaOledProtocol
 from arctis_sound_manager.power_status import (HeadsetPower,
                                                normalize_power_value)
 from arctis_sound_manager.weather_service import WeatherData, WeatherService
@@ -189,7 +189,15 @@ class OledManager:
         # passed to ctrl_transfer is recomputed per-packet in _send_oled_packet.
         self._oled_frame_report_type: int = (self._oled_wvalue >> 8) & 0xFF
 
-        if oled_cfg is not None:
+        if oled_cfg is not None and oled_cfg.protocol == 'siberia_840':
+            self._protocol = SiberiaOledProtocol(
+                report_id=_report_id, width=_width, height=_height,
+                frame_report_size=oled_cfg.frame_report_size,
+                control_report_size=oled_cfg.control_report_size,
+                min_brightness=oled_cfg.min_brightness,
+                packing=oled_cfg.packing,
+            )
+        elif oled_cfg is not None:
             self._protocol = OledProtocol(
                 report_id=_report_id, width=_width, height=_height,
                 frame_report_size=oled_cfg.frame_report_size,
@@ -240,6 +248,11 @@ class OledManager:
         # a hand on the wheel.
         self._wheel_seen: dict[str, object] = {}
         self._wake_pending = threading.Event()
+
+        # When the screen was last taken with the protocol's preamble
+        # (Siberia 840: custom write mode + offset); 0 = handed back.
+        self._preamble_lock = threading.Lock()
+        self._preamble_at: float = 0.0
 
         # How long to wait for a SET_REPORT acknowledgement, and how many writes
         # in a row have gone unacknowledged (issue #196). Starts optimistic and
@@ -327,6 +340,7 @@ class OledManager:
         packets = self._protocol.build_frame_packets(
             frame, self._protocol.DISPLAY_WIDTH, self._protocol.DISPLAY_HEIGHT
         )
+        self._take_screen()
         for packet in packets:
             self._send_oled_packet(packet)
 
@@ -345,12 +359,34 @@ class OledManager:
         if self._protocol.can_go_dark:
             self._send_oled_packet(self._protocol.build_brightness_packet(0), control=True)
             return
+        self._take_screen()
         for packet in self._protocol.build_blank_frame_packets():
             self._send_oled_packet(packet)
 
+    def _take_screen(self) -> None:
+        """Send the protocol's preamble before a frame, when it is due."""
+        preamble = self._protocol.build_preamble_packets()
+        if not preamble:
+            return
+        refresh = getattr(self._protocol, 'PREAMBLE_REFRESH_S', 0.0)
+        gap = getattr(self._protocol, 'PREAMBLE_GAP_S', 0.0)
+        with self._preamble_lock:
+            now = time.monotonic()
+            if self._preamble_at and now - self._preamble_at < refresh:
+                return
+            for packet in preamble:
+                self._send_oled_packet(packet, control=True)
+                time.sleep(gap)
+            self._preamble_at = time.monotonic()
+
+    def _hand_back_screen(self) -> None:
+        self._send_oled_packet(self._protocol.build_return_to_ui_packet(), control=True)
+        with self._preamble_lock:
+            self._preamble_at = 0.0
+
     def set_custom_display(self, enabled: bool) -> None:
         if not enabled:
-            self._send_oled_packet(self._protocol.build_return_to_ui_packet(), control=True)
+            self._hand_back_screen()
         else:
             self._reset_scroll()
             self.update_display(activity=True)
@@ -595,6 +631,7 @@ class OledManager:
         # never sent at all, and the DAC kept whatever it had drawn there.
         # On the wired GameDAC that happened on every single frame, because it
         # executes screen writes without ever acknowledging them.
+        self._take_screen()
         frame_ok = True
         for packet in packets:
             if not self._send_oled_packet(packet):
@@ -754,7 +791,7 @@ class OledManager:
 
                 if not self._screen_off:
                     if not gs.oled_custom_display:
-                        self._send_oled_packet(self._protocol.build_return_to_ui_packet(), control=True)
+                        self._hand_back_screen()
                         # timeout=0 means "never sleep": re-assert brightness every cycle
                         # to prevent the DAC firmware's own ~60s screen-off from firing.
                         if timeout == 0:
@@ -824,7 +861,7 @@ class OledManager:
                 self._reset_scroll()
                 self.update_display(activity=False)
             else:
-                self._send_oled_packet(self._protocol.build_return_to_ui_packet(), control=True)
+                self._hand_back_screen()
         except Exception as e:
             logger.warning("OLED wake error: %s", e)
         finally:

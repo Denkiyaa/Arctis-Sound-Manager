@@ -247,14 +247,15 @@ def explain(frames: list[list[int]], config) -> None:
     profile's `starts_with` values do not describe this firmware.
     """
     mappings = config.status.response_mapping
-    known = [f"{m.starts_with:04x}" for m in mappings]
+    known = [f"any (reply to {m.reply_to:#06x})" if m.starts_with is None
+             else f"{m.starts_with:04x}" for m in mappings]
     info(f"profile expects frames starting with: {', '.join(known)}")
 
     matched = 0
     for frame in frames:
         as_hex = "".join(f"{b:02x}" for b in frame)
         for mapping in mappings:
-            prefix = f"{mapping.starts_with:02x}"
+            prefix = "" if mapping.starts_with is None else f"{mapping.starts_with:02x}"
             if len(prefix) % 2:
                 prefix = "0" + prefix
             if as_hex.startswith(prefix):

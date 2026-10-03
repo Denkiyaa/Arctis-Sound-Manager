@@ -80,9 +80,17 @@ class HardwareEqReadback:
 
 
 class ConfigStatusResponseMapping:
-    starts_with: int
+    starts_with: int | None
+    #: The request this mapping answers, for families whose replies do not
+    #: echo the command. The Arctis Pro Wireless answers both rf_status
+    #: (0x41aa) and battery_status (0x40aa) with bare values — siberia-840
+    #: spec, `incoming` has no opcode field — so the first byte cannot tell
+    #: one reply from the other. A mapping with `reply_to` only reads frames
+    #: answering that request, matched in the order the requests were sent
+    #: (#305). `starts_with` may then be omitted, meaning any frame.
+    reply_to: int | None = None
 
-    def __init__(self, starts_with: int, **kwargs: int):
+    def __init__(self, starts_with: int | None, **kwargs: int):
         self.starts_with = starts_with
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -90,7 +98,7 @@ class ConfigStatusResponseMapping:
     def get_status_values(self, raw_response: list[int]) -> dict[str, int]:
         response: dict[str, int] = {}
         for k, v in self.__dict__.items():
-            if k == 'starts_with':
+            if k in ('starts_with', 'reply_to'):
                 continue
             if isinstance(v, bool):
                 continue  # bool is an int subclass; a mapping never means this
@@ -201,6 +209,11 @@ class OledConfig:
     control_report_size: int = 64
     min_brightness: int = 0    # lowest level the panel accepts (0 = can go dark)
     transpose: bool = False    # controller addresses the panel rotated 90°
+    # 'nova' (0x93 strips) or 'siberia_840' (0xD0/0xD2 whole frames, Arctis
+    # Pro Wireless); `packing` is the latter's pixel layout, see
+    # oled_protocol.SiberiaOledProtocol.
+    protocol: str = 'nova'
+    packing: str = 'column_msb'
 
 
 @dataclass
@@ -226,9 +239,14 @@ class ConfigStatus:
         raw_mappings: list[dict[str, int]] = self.response_mapping # pyright: ignore[reportAssignmentType]
 
         self.response_mapping = [ConfigStatusResponseMapping(
-            starts_with=mapping.get('starts_with', 0),
+            starts_with=mapping.get('starts_with', None if 'reply_to' in mapping else 0),
             **{k: v for k, v in mapping.items() if k != 'starts_with'},
         ) for mapping in raw_mappings]
+
+    @property
+    def untagged_requests(self) -> set[int]:
+        """Requests whose replies carry no opcode — see ConfigStatusResponseMapping.reply_to."""
+        return {m.reply_to for m in self.response_mapping if m.reply_to is not None}
 
 @dataclass
 class OnlineStatusConfig:
@@ -545,6 +563,8 @@ class DeviceConfiguration:
                 control_report_size=raw_oled.get('control_report_size', 64),
                 min_brightness=raw_oled.get('min_brightness', 0),
                 transpose=bool(raw_oled.get('transpose', False)),
+                protocol=raw_oled.get('protocol', 'nova'),
+                packing=raw_oled.get('packing', 'column_msb'),
             )
         else:
             self.oled = None

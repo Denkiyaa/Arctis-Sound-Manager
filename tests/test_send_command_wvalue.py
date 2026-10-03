@@ -33,6 +33,7 @@ def _make_engine(transport: CommandTransport, command_report_id):
         command_interface_index=[4, 0],
         command_padding=SimpleNamespace(filler=0x00, length=16),
         time_between_commands_ms=None,
+        status=None,
     )
     return engine
 

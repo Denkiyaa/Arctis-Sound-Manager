@@ -8,6 +8,7 @@ import json
 import logging
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Coroutine, Literal, cast
 
@@ -345,6 +346,11 @@ class CoreEngine:
         # the existing reader resolve it keeps there being exactly one
         # reader.
         self._raw_response_waiters: dict[int, list[asyncio.Future]] = {}
+
+        # Requests sent whose replies carry no opcode (status mappings with
+        # `reply_to`), oldest first: the device answers in order, so the next
+        # frame read answers the head of this queue (#305).
+        self._untagged_requests_pending: deque[int] = deque()
 
         # EQ mode the on-device equaliser was last set for ("sonar"/"custom"),
         # so reconcile_hardware_eq_mode() writes on a change and stays quiet
@@ -2092,8 +2098,16 @@ class CoreEngine:
                 if read_input and read_input[0] == 0x07:
                     self.logger.debug(f'EVENT: {[hex(b) for b in read_input[:8]]}')
 
+                # Which request this frame answers, for replies without an
+                # opcode; None for an unsolicited frame.
+                answers = None
+                if self.device_config.status.untagged_requests and self._untagged_requests_pending:
+                    answers = self._untagged_requests_pending.popleft()
+
                 for mapping in self.device_config.status.response_mapping:
-                    starts_with = f'{mapping.starts_with:02x}'
+                    if mapping.reply_to is not None and mapping.reply_to != answers:
+                        continue
+                    starts_with = '' if mapping.starts_with is None else f'{mapping.starts_with:02x}'
                     if len(starts_with) % 2 != 0:
                         starts_with = f'0{starts_with}'
                     read_hex_str = ''.join(f'{byte:02x}' for byte in read_input)
@@ -4005,6 +4019,11 @@ class CoreEngine:
         if len(filler) % 2 != 0:
             filler = f'0{filler}'
         
+        status = self.device_config.status
+        untagged_request = int(command_str, 16) if command_str else None
+        if status is None or untagged_request not in status.untagged_requests:
+            untagged_request = None
+
         if len(command_str) < self.device_config.command_padding.length * 2:
             command_str = f'{command_str}{filler * (self.device_config.command_padding.length - len(command_str) // 2)}'
 
@@ -4025,6 +4044,10 @@ class CoreEngine:
                     if wait > 0:
                         time.sleep(wait)
                 self._last_usb_write_monotonic = time.monotonic()
+                # Queued before the write: the reply can be read on the
+                # listen thread before write() even returns.
+                if untagged_request is not None:
+                    self._untagged_requests_pending.append(untagged_request)
                 if endpoint != 0:
                     self.usb_device.write(endpoint, command_lst)
                 else:
@@ -4615,6 +4638,9 @@ class CoreEngine:
             return
         
         endpoint = self.get_command_endpoint_address()
+        # Every reply to the previous poll has landed long ago; anything still
+        # queued was lost, and keeping it would shift every reply from now on.
+        self._untagged_requests_pending.clear()
         self.send_command([self.device_config.status.request], endpoint)
         # Whatever the main request does not answer. Each extra query is one
         # more reply on the listen loop, mapped by its own `starts_with`.

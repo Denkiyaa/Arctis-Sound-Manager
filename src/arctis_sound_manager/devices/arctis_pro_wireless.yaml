@@ -35,23 +35,39 @@ device:
     - [0x3c, 0xaa, 'settings.pm_shutdown']
     - [0x90, 0xaa]  # save
 
-  # Response is a 32-byte packet; byte[0] = power status, byte[1] = battery (0-4).
-  # Confirmed from hardware capture: [4, 2, 0, ...] = online 50%, [2, 2, 0, ...] = offline.
+  # siberia-840 spec (the base this profile's firmware API includes):
+  # 0x41aa rf_status   -> [rf_mode, rf_status, ...]  rf_mode 4 = headset linked
+  # 0x40aa battery_status -> [battery_level, ...]
+  # 0x42aa charger_status -> [battery_level, ...]  the spare in the base's slot
+  # Hardware capture: [4, 2, 0, ...] online, [2, 2, 0, ...] offline. byte[1]
+  # is rf_status, not the battery: read as such it stuck at 2/4 = 50% (#305).
+  # Neither reply echoes its command, hence reply_to instead of starts_with.
   status:
     request: 0x41aa
+    extra_requests:
+      - 0x40aa
+      - 0x42aa
     response_mapping:
-      - starts_with: 0x04
+      - reply_to: 0x41aa
+        starts_with: 0x04
         headset_power_status: 0x00
-        headset_battery_charge: 0x01
 
-      - starts_with: 0x02
+      - reply_to: 0x41aa
+        starts_with: 0x02
         headset_power_status: 0x00
-        headset_battery_charge: 0x01
+
+      - reply_to: 0x40aa
+        headset_battery_charge: 0x00
+
+      - reply_to: 0x42aa
+        charge_slot_battery_charge: 0x00
 
     representation:
       headset:
         - headset_power_status
         - headset_battery_charge
+      gamedac:
+        - charge_slot_battery_charge
 
   online_status:
     status_variable: headset_power_status
@@ -86,8 +102,7 @@ device:
         update_sequence: [0x3c, 0xaa, 'value']
     station:
       # oled_brightness in arctis-pro-wireless.device: command 0x85, the
-      # usual 0xAA check byte, level 0-10. The spec draws nothing on this
-      # screen (no draw_bitmap), so ASM only dims it.
+      # usual 0xAA check byte, level 0-10.
       station_screen_brightness:
         type: slider
         min: 0x00
@@ -98,6 +113,22 @@ device:
         default: 0x0a
         update_sequence: [0x85, 0xaa, 'value']
 
+  # The screen is drawn by the included siberia-840 spec, not this file:
+  # 0xD0/0xD1 take it, 0xD2 sends a whole 128x48 frame in one 1025-byte
+  # Feature report on interface 0. See oled_protocol.SiberiaOledProtocol.
+  # `packing` is GG's `convert-to-column-packed-byte-format`, whose bit layout
+  # the spec does not give: not yet confirmed on hardware (#305).
+  oled:
+    protocol: siberia_840
+    interface: 0
+    report_id: 0x00
+    wvalue: 0x0300
+    width: 128
+    height: 48
+    frame_report_size: 1025
+    control_report_size: 33
+    packing: column_msb
+
   status_parse:
     headset_power_status:
       type: int_str_mapping
@@ -105,6 +136,10 @@ device:
         0x02: offline
         0x04: online
     headset_battery_charge:
+      type: percentage
+      perc_min: 0
+      perc_max: 4
+    charge_slot_battery_charge:
       type: percentage
       perc_min: 0
       perc_max: 4

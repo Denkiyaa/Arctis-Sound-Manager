@@ -112,6 +112,10 @@ class OledProtocol:
         # 64-byte Output report — same rationale as build_brightness_packet.
         return self._build_packet(header, [], size=self.CONTROL_REPORT_SIZE)
 
+    def build_preamble_packets(self) -> list[list[int]]:
+        """Control reports a frame needs sent before it. None for this family."""
+        return []
+
     def build_blank_frame_packets(self) -> list[list[int]]:
         """An all-dark frame, for panels that cannot be dimmed to 0."""
         size = ((self.DISPLAY_WIDTH + 7) // 8) * self.DISPLAY_HEIGHT
@@ -186,3 +190,84 @@ class OledProtocol:
         if self.report_id == 0x00:
             return payload[1:]
         return payload
+
+
+class SiberiaOledProtocol(OledProtocol):
+    """The Siberia 840 screen protocol, which the Arctis Pro Wireless base
+    inherits (its spec `include`s siberia-840).
+
+    From the siberia-840 spec: set_custom_write_mode [0xD0, 0x01, 0x0F] and
+    set_custom_write_offset [0xD1, 0x00, 0x10], each followed by 250 ms, take
+    the screen; oled_display [0xD2, 0x00, data] then draws a whole 128x48
+    frame in one 1025-byte Feature report; reset_screen [0xD0, 0x00, 0x00]
+    hands it back. Brightness is the base's own oled_brightness,
+    [0x85, 0xAA, 0-10].
+
+    GG packs the frame with `convert-to-column-packed-byte-format`, a builtin
+    the spec does not define — unlike its `-with-LSB` variants, which ASM
+    already speaks. `packing` names the layout: column_* puts 8 vertical
+    pixels in a byte, columns left to right; row_* 8 horizontal ones, rows
+    top to bottom; _msb/_lsb is which bit holds the first pixel.
+    scripts/reverse-engineering/oled_packing_probe.py tells them apart on
+    the hardware.
+    """
+
+    CMD_WRITE_MODE = 0xD0
+    CMD_WRITE_OFFSET = 0xD1
+    CMD_DISPLAY = 0xD2
+    CHECK_BYTE = 0xAA
+    PACKINGS = ("column_msb", "column_lsb", "row_msb", "row_lsb")
+    #: The 0x0F in set_custom_write_mode reads as seconds. Re-taking the
+    #: screen well inside that keeps it ours whichever way the firmware
+    #: counts them (from the mode switch, or from the last frame).
+    PREAMBLE_REFRESH_S = 10.0
+    PREAMBLE_GAP_S = 0.25
+
+    def __init__(self, *args, packing: str = "column_msb", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        if packing not in self.PACKINGS:
+            raise ValueError(f"Unknown OLED packing {packing!r}")
+        self.packing = packing
+
+    def build_frame_packets(
+        self, pixel_data: bytes, width: int, height: int
+    ) -> list[list[int]]:
+        body = self.pack(pixel_data, width, height, self.packing)
+        return [self._build_packet([self.report_id, self.CMD_DISPLAY, 0x00], body)]
+
+    def build_preamble_packets(self) -> list[list[int]]:
+        return [
+            self._build_packet([self.report_id, self.CMD_WRITE_MODE, 0x01, 0x0F], [],
+                               size=self.CONTROL_REPORT_SIZE),
+            self._build_packet([self.report_id, self.CMD_WRITE_OFFSET, 0x00, 0x10], [],
+                               size=self.CONTROL_REPORT_SIZE),
+        ]
+
+    def build_brightness_packet(self, level: int) -> list[int]:
+        clamped = max(self.min_brightness, min(self.MAX_BRIGHTNESS, level))
+        return self._build_packet([self.report_id, self.CMD_BRIGHTNESS, self.CHECK_BYTE, clamped], [],
+                                  size=self.CONTROL_REPORT_SIZE)
+
+    def build_return_to_ui_packet(self) -> list[int]:
+        return self._build_packet([self.report_id, self.CMD_WRITE_MODE, 0x00, 0x00], [],
+                                  size=self.CONTROL_REPORT_SIZE)
+
+    @staticmethod
+    def pack(pixel_data: bytes, width: int, height: int, packing: str) -> list[int]:
+        """Repack a row-major MSB-first 1-bpp image into `packing`."""
+        src_stride = (width + 7) // 8
+        column = packing.startswith("column")
+        lsb = packing.endswith("lsb")
+        pages = (height + 7) // 8
+        out = [0] * (width * pages if column else src_stride * height)
+        for y in range(height):
+            for x in range(width):
+                idx = y * src_stride + x // 8
+                if idx >= len(pixel_data) or not (pixel_data[idx] >> (7 - x % 8)) & 1:
+                    continue
+                if column:
+                    index, pos = x * pages + y // 8, y % 8
+                else:
+                    index, pos = y * src_stride + x // 8, x % 8
+                out[index] |= 1 << (pos if lsb else 7 - pos)
+        return out

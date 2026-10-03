@@ -120,6 +120,24 @@ single self-contained file — it can be downloaded on its own rather than
 cloning the repository. Adapting it to another opcode is a matter of changing
 `QUERY` and `PRODUCTS`.
 
+### Find a screen's pixel layout — `oled_packing_probe.py`
+
+The Arctis Pro Wireless base draws with the Siberia 840 protocol (its spec
+`include`s siberia-840): the commands are in the spec, the pixel layout is
+only the name of a GG builtin, `convert-to-column-packed-byte-format` (#305).
+The probe draws a border, a block in the top-left corner and a number in each
+candidate layout and asks which one looked right; set that as `packing:` in
+the profile's `oled:` section.
+
+```bash
+systemctl --user stop arctis-manager
+python3 oled_packing_probe.py
+systemctl --user start arctis-manager
+```
+
+Draws only — no setting written — and hands the screen back at the end. Unlike
+the probes above it imports ASM (protocol and font), so it needs ASM installed.
+
 ## 5. Automated SteelSeries GG watcher — `gg-watch.py`
 
 This script is the **automation backbone** for new GG releases. It runs on a
