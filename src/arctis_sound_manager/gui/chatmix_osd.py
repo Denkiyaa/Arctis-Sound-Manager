@@ -33,7 +33,6 @@ from pathlib import Path
 from threading import Thread
 
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
-from PySide6.QtDBus import QDBus, QDBusConnection, QDBusMessage
 from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QWidget
 
@@ -278,6 +277,12 @@ class GnomeShellOsd:
     usable = True
 
     def show_position(self, position: int, channels: list[str]) -> None:
+        # QtDBus is a separate package on Debian/Ubuntu (python3-pyside6.qtdbus):
+        # imported here so a missing module only costs the GNOME OSD, not the GUI (#306).
+        try:
+            from PySide6.QtDBus import QDBus, QDBusConnection, QDBusMessage
+        except ImportError:
+            return
         bus = QDBusConnection.sessionBus()
         if not bus.isConnected() or not bus.interface().isServiceRegistered(GNOME_OSD_BUS_NAME).value():
             return

@@ -116,7 +116,7 @@ def test_pyside6_keeps_its_pip_fallback():
     depends = _print_depends()
     for pkg in ("python3-pyside6.qtcore", "python3-pyside6.qtgui",
                 "python3-pyside6.qtwidgets", "python3-pyside6.qtsvg",
-                "python3-pyside6.qtnetwork"):
+                "python3-pyside6.qtnetwork", "python3-pyside6.qtdbus"):
         assert f"{pkg} | python3-pip" in depends, (
             f"{pkg} lost its python3-pip alternative — got: {depends}"
         )
