@@ -95,8 +95,8 @@ def _portal(saved_token: str | None = None) -> tuple[ScreenCastPortal, dict]:
         return {}
 
     portal._call = _call
-    portal._load_token = lambda window=False: saved_token
-    portal._save_token = lambda token, window=False: recorded.setdefault(
+    portal._load_token = lambda window=False, game=None: saved_token
+    portal._save_token = lambda token, window=False, game=None: recorded.setdefault(
         "saved", (token, window))
     return portal, recorded
 
@@ -185,3 +185,30 @@ def test_legacy_token_file_is_not_trusted(tmp_path, monkeypatch):
 
     assert cc.ScreenCastPortal._load_token(window=False) is None
     assert cc.ScreenCastPortal._load_token(window=True) is None
+
+
+def test_each_game_keeps_its_own_token(tmp_path, monkeypatch):
+    """One shared token meant picking Pal overwrote Genshin's, and the next
+    Genshin launch asked again. Each game now replays only its own."""
+    from arctis_sound_manager import clip_capture as cc
+    monkeypatch.setattr(cc, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(cc, "TOKEN_FILE", tmp_path / "tok.json")
+
+    cc.ScreenCastPortal._save_token("genshin-token", window=True, game="GenshinImpact")
+    cc.ScreenCastPortal._save_token("pal-token", window=True, game="Pal")
+
+    assert cc.ScreenCastPortal._load_token(window=True, game="GenshinImpact") == "genshin-token"
+    assert cc.ScreenCastPortal._load_token(window=True, game="Pal") == "pal-token"
+    # A game never picked for is asked once, not handed another game's window.
+    assert cc.ScreenCastPortal._load_token(window=True, game="ELDEN RING") is None
+
+
+def test_token_from_a_previous_build_is_still_replayed(tmp_path, monkeypatch):
+    """The single token an older build left is used until games have their
+    own, so upgrading does not cost a picker for the game played last."""
+    from arctis_sound_manager import clip_capture as cc
+    monkeypatch.setattr(cc, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(cc, "TOKEN_FILE", tmp_path / "tok.json")
+    (tmp_path / "tok.json").write_text('{"restore_token": "old", "window": false}')
+
+    assert cc.ScreenCastPortal._load_token(window=False, game="GenshinImpact") == "old"

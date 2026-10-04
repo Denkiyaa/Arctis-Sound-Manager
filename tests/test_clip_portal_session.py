@@ -140,6 +140,7 @@ def _capture_shell(portal) -> ClipCapture:
     cap = object.__new__(ClipCapture)
     cap.pipeline = None
     cap.portal = portal
+    cap.game = None
     return cap
 
 
@@ -217,7 +218,7 @@ def test_a_failed_open_closes_the_half_made_session(monkeypatch):
     _force_portal_path(monkeypatch)
     made = _FakePortal()
 
-    def _open(window=False):
+    def _open(window=False, game=None):
         raise RuntimeError("cancelled")
 
     made.open = _open
