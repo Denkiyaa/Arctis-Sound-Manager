@@ -1067,7 +1067,10 @@ class ClipsPage(QWidget):
 
         With the game still running the capture is rebuilt; start() reuses the
         restore token, and the buffer it costs holds no video worth keeping.
-        With the game gone there is nothing to rebuild for, so it stops.
+        With the game gone it stops — but only a capture autostart gave, or a
+        window capture whose window is gone. A capture the user started on the
+        screen is theirs to end (see _poll_game), and strict detection finds no
+        game on a desktop or a loading screen either: rebuild that one.
         """
         capture = self._capture
         if capture is None:
@@ -1076,7 +1079,7 @@ class ClipsPage(QWidget):
         stalled = getattr(capture, "video_stalled_s", 0.0)
         if not lost and stalled < _VIDEO_STALL_S:
             return
-        if not game:
+        if not game and (self._auto_started or getattr(capture, "window", False)):
             logger.info("screencast ended with no game running — stopping the capture")
             self._stop_capture()
             return

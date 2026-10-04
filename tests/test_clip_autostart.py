@@ -158,3 +158,49 @@ def test_it_is_off_until_the_user_says_otherwise():
     from arctis_sound_manager.settings import GeneralSettings
 
     assert GeneralSettings().clips_autostart is False
+
+
+class _DeadStream:
+    """A capture whose screencast died: what _restart_if_video_stalled sees."""
+
+    def __init__(self, window: bool = False) -> None:
+        self.window = window
+        self.stream_lost = True
+        self.video_stalled_s = 0.0
+        self.restarts = 0
+
+    def restart(self) -> None:
+        self.restarts += 1
+        self.stream_lost = False
+
+
+def test_a_dead_stream_the_user_started_on_the_screen_is_rebuilt(page, monkeypatch):
+    """No game is not "the game quit" for a capture the user started: strict
+    detection finds none on a desktop or a loading screen either."""
+    monkeypatch.setattr(type(page), "_update_status", lambda self: None)
+    capture = page._capture = _DeadStream()
+    page._auto_started = False
+
+    page._restart_if_video_stalled(None)
+
+    assert page.stopped == []
+    assert capture.restarts == 1
+
+
+def test_a_dead_stream_autostart_gave_stops_with_the_game(page):
+    page._capture = _DeadStream()
+    page._auto_started = True
+
+    page._restart_if_video_stalled(None)
+
+    assert page.stopped == [True]
+
+
+def test_a_dead_window_capture_stops_with_no_game(page):
+    """Its window is gone; rebuilding would only put the picker up."""
+    page._capture = _DeadStream(window=True)
+    page._auto_started = False
+
+    page._restart_if_video_stalled(None)
+
+    assert page.stopped == [True]
