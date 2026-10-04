@@ -43,6 +43,11 @@ T = TypeVar("T")
 
 NANOSECONDS = 1_000_000_000
 
+# How far the newest video frame may trail the newest audio before the video
+# track counts as dead. The screencast repeats a frame every second on a still
+# screen (keepalive-time), so five seconds of nothing is not an idle desktop.
+STALE_VIDEO_NS = 5 * NANOSECONDS
+
 
 @dataclass(frozen=True, slots=True)
 class Frame(Generic[T]):
@@ -233,8 +238,21 @@ class ClipBuffer(Generic[T]):
         if now == 0:
             return {}, 0.0
 
-        if self.video is not None and self.video.frames:
-            start = self.video.start_for(requested_ns, now)
+        # A video track that stopped receiving frames while audio carried on
+        # cannot anchor the cut. Its newest keyframe is then minutes old, every
+        # audio packet since is "after the start", and the clip came out as a
+        # second of video followed by twenty minutes of sound — on exactly the
+        # save that mattered. pipewiresrc's keepalive repeats a frame every
+        # second even on a still screen, so a gap this long is a dead stream:
+        # keep the sound of the moment and leave the frozen picture out.
+        video = self.video if self.video is not None and self.video.frames else None
+        if video is not None and now - video.frames[-1].pts > STALE_VIDEO_NS:
+            log.warning("video stopped %.0fs ago — saving the audio only",
+                        (now - video.frames[-1].pts) / NANOSECONDS)
+            video = None
+
+        if video is not None:
+            start = video.start_for(requested_ns, now)
         else:
             start = max(now - requested_ns, 0)
 
@@ -243,6 +261,8 @@ class ClipBuffer(Generic[T]):
 
         out: dict[str, list[Frame[T]]] = {}
         for track in self.tracks:
+            if track is self.video and video is None:
+                continue
             frames = track.since(start)
             if frames:
                 out[track.name] = frames

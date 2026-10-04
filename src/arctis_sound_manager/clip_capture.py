@@ -807,12 +807,19 @@ class ScreenCastPortal:
                 f"{' (cancelled)' if code == 1 else ''}")
         return results
 
-    def open(self, window: bool = False) -> tuple[int, int]:
+    def open(self, window: bool = False, game: str | None = None) -> tuple[int, int]:
         """Handshake through to a live stream; returns (pipewire fd, node id).
 
-        A saved restore_token makes the picker appear only the first time ever.
+        A saved restore_token makes the picker appear only the first time.
         Wayland requires that consent once and gives no way around it — every
         screen recorder on the platform has the same one-off prompt.
+
+        Tokens are kept per *game*: a picked window is restored by its app id
+        and title, so a token only ever brings back the game it was granted
+        for. With one token for everything, picking Pal overwrote Genshin's,
+        and the next Genshin launch replayed a Pal token, matched nothing and
+        put the picker up again — every time a different game had been played
+        in between.
         """
         GLib, Gio = self._GLib, self._Gio
 
@@ -831,14 +838,14 @@ class ScreenCastPortal:
             "cursor_mode": GLib.Variant("u", 2),
             "persist_mode": GLib.Variant("u", 2),
         }
-        if (saved := self._load_token(window)):
+        if (saved := self._load_token(window, game)):
             select["restore_token"] = GLib.Variant("s", saved)
 
         self._call("SelectSources", "(oa{sv})", (self.session,), select)
         res = self._call("Start", "(osa{sv})", (self.session, ""), {})
 
         if res.get("restore_token"):
-            self._save_token(res["restore_token"], window)
+            self._save_token(res["restore_token"], window, game)
 
         streams = res.get("streams") or []
         if not streams:
@@ -895,7 +902,19 @@ class ScreenCastPortal:
         TOKEN_FILE.unlink(missing_ok=True)
 
     @staticmethod
-    def _load_token(window: bool = False) -> str | None:
+    def _read_tokens(window: bool) -> dict:
+        """The token file, or an empty one when it was written for the other kind."""
+        try:
+            saved = json.loads(TOKEN_FILE.read_text())
+        except Exception:
+            return {}
+        if not isinstance(saved, dict) or "window" not in saved \
+                or bool(saved["window"]) != bool(window):
+            return {}
+        return saved
+
+    @staticmethod
+    def _load_token(window: bool = False, game: str | None = None) -> str | None:
         """The saved token, if it was granted for the kind of source asked for.
 
         A token names what was picked, and the portal restores *that* — a
@@ -905,24 +924,33 @@ class ScreenCastPortal:
         screen capture left a window token on disk still being replayed:
         forget() only runs when the setting is changed from the page. So the
         kind is stored beside the token, and a token for the other kind is
-        ignored (and the picker asked once, for the right thing).
+        ignored (and the picker asked once, for the right thing). A file with
+        no kind was written by a build that could have minted it for either;
+        it is not trusted, at the cost of one picker.
+
+        With a *game*, that game's own token. The single shared token is only
+        fallen back on while no game has one yet — the file a previous build
+        left, whose token is most likely the game played last — so another
+        game's window is never restored in its place once tokens are per game.
         """
-        try:
-            saved = json.loads(TOKEN_FILE.read_text())
-        except Exception:
-            return None
-        # A file with no kind was written by a build that could have minted
-        # it for either; it is not trusted, at the cost of one picker.
-        if "window" not in saved or bool(saved["window"]) != bool(window):
+        saved = ScreenCastPortal._read_tokens(window)
+        games = saved.get("games") or {}
+        if game and game in games:
+            return games[game]
+        if game and games:
             return None
         return saved.get("restore_token")
 
     @staticmethod
-    def _save_token(token: str, window: bool = False) -> None:
+    def _save_token(token: str, window: bool = False, game: str | None = None) -> None:
+        saved = ScreenCastPortal._read_tokens(window)
+        games = dict(saved.get("games") or {})
+        if game:
+            games[game] = token
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             TOKEN_FILE.write_text(json.dumps(
-                {"restore_token": token, "window": bool(window)}))
+                {"restore_token": token, "window": bool(window), "games": games}))
         except OSError as exc:
             log.warning("could not persist the screencast token: %s", exc)
 
@@ -976,7 +1004,8 @@ class ClipCapture:
     """Runs the capture and answers save_clip() from the rolling buffer."""
 
     def __init__(self, history_s: float = 90.0, fps: int = DEFAULT_FPS,
-                 bitrate_kbps: int = 20000, window: bool = False):
+                 bitrate_kbps: int = 20000, window: bool = False,
+                 game: str | None = None):
         self._Gio, self._GLib, self._Gst = _require_gst()
         self._Gst.init(None)
 
@@ -990,6 +1019,9 @@ class ClipCapture:
         self.last_clip_fps = 0.0
         self.bitrate_kbps = bitrate_kbps
         self.window = window
+        # Which game this capture is for — the key its restore token is kept
+        # under (see ScreenCastPortal.open).
+        self.game = game
         self.buffer: ClipBuffer = ClipBuffer(window_s=history_s)
         self.portal: ScreenCastPortal | None = None
         self.pipeline = None
@@ -1003,11 +1035,21 @@ class ClipCapture:
         # _watch_source_rate(). A deque with a maxlen cannot be used: the window
         # is a duration, not a count, and the count is what is being measured.
         self._source_stamps: deque[float] = deque()
+        # When the last encoded video frame reached the buffer — see
+        # video_stalled_s. None until the first one arrives.
+        self._last_video_at: float | None = None
+        # Set when a stream that had been delivering frames errored out; the
+        # page rebuilds or stops the capture on its next game poll.
+        self.stream_lost = False
 
     # ── capture ───────────────────────────────────────────────────────────────
 
     def start(self) -> None:
         Gst = self._Gst
+        # Stamps from a previous pipeline would read as an instant stall.
+        self._source_stamps = deque()
+        self._last_video_at = None
+        self.stream_lost = False
 
         # A session already here means a previous start was never stopped.
         # Overwriting the reference would strand it on the bus, still drawing
@@ -1041,7 +1083,7 @@ class ClipCapture:
         if self._x11_source is None:
             self.portal = ScreenCastPortal()
             try:
-                fd, node_id = self.portal.open(window=self.window)
+                fd, node_id = self.portal.open(window=self.window, game=self.game)
             except BaseException:
                 # CreateSession may well have succeeded before whatever failed
                 # here — a cancelled picker, a refused stream. That half-open
@@ -1137,6 +1179,17 @@ class ClipCapture:
             log.error("capture error from %s: %s", source, err.message)
             if debug:
                 log.debug("%s", debug)
+            if self._last_video_at is not None:
+                # Frames were flowing, so the video path is not what failed:
+                # the stream went away under us — a captured window closed,
+                # the compositor dropped the cast. Restarting here asked the
+                # portal again and put the picker up as the game quit. The
+                # page decides instead: rebuild if the game is still on,
+                # stop if it is gone.
+                log.warning("screencast stream lost after it had been running")
+                self._release_pipeline()
+                self.stream_lost = True
+                return
             if self._convert_index + 1 < len(self._convert_chain):
                 self._convert_index += 1
                 log.warning("video path failed — retrying on the system-memory "
@@ -1173,6 +1226,7 @@ class ClipCapture:
             keyframe = True
             if is_video:
                 keyframe = not buf.has_flags(Gst.BufferFlags.DELTA_UNIT)
+                self._last_video_at = time.monotonic()
 
             ok, info = buf.map(Gst.MapFlags.READ)
             if not ok:
@@ -1415,6 +1469,32 @@ class ClipCapture:
             return 0.0
         span = stamps[-1] - stamps[0]
         return (len(stamps) - 1) / span if span > 0 else 0.0
+
+    @property
+    def video_stalled_s(self) -> float:
+        """Seconds since the last encoded video frame, or 0.0 before the first.
+
+        The screencast can die under a running capture with nothing on the bus
+        to say so: the audio branches carry on, the buffer still reports ninety
+        seconds, and the fps read-out keeps showing the last rate it measured —
+        so the first anyone hears of it is a clip with no picture in it. With
+        keepalive-time on the source a still screen still yields a frame a
+        second, so a long silence here is the stream, not the screen.
+        """
+        if self._last_video_at is None or self.pipeline is None:
+            return 0.0
+        return time.monotonic() - self._last_video_at
+
+    @property
+    def source_stalled_s(self) -> float:
+        """Seconds since the portal last handed out a frame, or 0.0 if unknown.
+
+        Read next to :attr:`video_stalled_s` when a stall is logged: the portal
+        still sending means our encoder branch wedged; both silent means the
+        compositor stopped the stream.
+        """
+        stamps = self._source_stamps
+        return time.monotonic() - stamps[-1] if stamps else 0.0
 
     @property
     def video_path_label(self) -> str:

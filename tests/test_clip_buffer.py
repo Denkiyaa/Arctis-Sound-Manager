@@ -173,6 +173,40 @@ def test_audio_only_buffer_honours_the_request_literally():
     assert actual == pytest.approx(30.0, abs=0.05)
 
 
+def test_dead_video_does_not_stretch_the_audio():
+    """The screencast died twenty minutes before the save; audio kept going.
+
+    The stale video used to anchor the cut at its last keyframe, so the clip
+    came out as under a second of picture and twenty minutes of sound. The
+    request is honoured on the audio and the frozen video is left out.
+    """
+    buf: ClipBuffer = ClipBuffer(window_s=90.0)
+    _fill_video(buf.add_video(), 60.0, fps=24, gop=24)
+    audio = buf.add_audio("game")
+    for i in range(int(1260 / 0.02)):           # audio runs on to 21 minutes
+        audio.push(Frame(pts=i * _s(0.02), payload=f"a{i}"))
+
+    frames, actual = buf.take(30.0)
+
+    assert "video" not in frames
+    assert actual == pytest.approx(30.0, abs=0.05)
+    span = frames["game"][-1].pts - frames["game"][0].pts
+    assert span == pytest.approx(_s(30), abs=_s(0.05))
+
+
+def test_a_still_screen_is_not_dead_video():
+    """keepalive repeats a frame a second; a 1 s gap must keep the video."""
+    buf: ClipBuffer = ClipBuffer(window_s=90.0)
+    _fill_video(buf.add_video(), 60.0, fps=1, gop=1)
+    audio = buf.add_audio("game")
+    for i in range(int(60.5 / 0.02)):
+        audio.push(Frame(pts=i * _s(0.02), payload=f"a{i}"))
+
+    frames, _ = buf.take(30.0)
+
+    assert "video" in frames
+
+
 def test_clear_empties_every_track():
     buf = _buffer_with_audio()
     buf.clear()

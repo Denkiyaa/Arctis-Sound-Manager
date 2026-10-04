@@ -82,6 +82,10 @@ _DEFAULT_FPS = 30
 # seconds they came back for.
 _GAME_POLL_MS = 5_000
 _GAME_GONE_GRACE_S = 45.0
+# Seconds without an encoded video frame before a running capture is rebuilt.
+# The source repeats a frame every second on a still screen, so this is
+# comfortably past anything but a dead stream.
+_VIDEO_STALL_S = 10.0
 
 
 def _saved_fps() -> int:
@@ -785,7 +789,8 @@ class ClipsPage(QWidget):
         try:
             capture = ClipCapture(history_s=max(90.0, self._seconds.value() * 2.0),
                                   fps=int(self._fps.currentData() or _DEFAULT_FPS),
-                                  window=bool(self._source_kind.currentData()))
+                                  window=bool(self._source_kind.currentData()),
+                                  game=self._last_detected_game)
             capture.start()
         except ClipCaptureUnavailable as exc:
             self._error = str(exc)
@@ -1051,6 +1056,43 @@ class ClipsPage(QWidget):
         self._error = None
         self._update_status()
 
+    def _restart_if_video_stalled(self, game: str | None) -> None:
+        """The screencast stopped under a running capture: build it again.
+
+        Two ways in. A stall reports nothing — no bus error, the audio keeps
+        flowing, the status bar keeps its last numbers — so it was found only
+        by saving a clip, twenty minutes later, and getting no picture. A lost
+        stream does error, and the capture used to answer it by asking the
+        portal again, which put the picker up just as the game quit.
+
+        With the game still running the capture is rebuilt; start() reuses the
+        restore token, and the buffer it costs holds no video worth keeping.
+        With the game gone there is nothing to rebuild for, so it stops.
+        """
+        capture = self._capture
+        if capture is None:
+            return
+        lost = getattr(capture, "stream_lost", False)
+        stalled = getattr(capture, "video_stalled_s", 0.0)
+        if not lost and stalled < _VIDEO_STALL_S:
+            return
+        if not game:
+            logger.info("screencast ended with no game running — stopping the capture")
+            self._stop_capture()
+            return
+        logger.warning("no video for %.0fs (portal last sent a frame %.0fs ago) — "
+                       "rebuilding the capture", stalled,
+                       getattr(capture, "source_stalled_s", 0.0))
+        try:
+            capture.restart()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not rebuild the stalled capture: %s", exc)
+            self._error = str(exc)
+            self._stop_capture()
+            return
+        self._error = None
+        self._update_status()
+
     def _poll_game(self) -> None:
         """Start the capture when a game shows up, drop it when the game goes.
 
@@ -1091,6 +1133,7 @@ class ClipsPage(QWidget):
 
         self._rebuild_once_sonar_is_up()
         self._rebuild_if_sources_recreated()
+        self._restart_if_video_stalled(game)
 
         if not self._autostart.isChecked():
             return
