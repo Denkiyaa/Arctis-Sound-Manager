@@ -246,6 +246,12 @@ def test_a_blocked_app_on_the_game_channel_is_still_blocked():
     assert _detect(SINKS, [_stream(1, "Google Chrome")]) is None
 
 
+def test_a_video_player_on_the_game_channel_does_not_arm_the_capture():
+    """Haruna, routed to the Game channel, opened to watch a clip — and the
+    capture armed itself for it and put the picker over the video."""
+    assert _detect(SINKS, [_stream(1, "haruna")], strict=True) is None
+
+
 def test_an_unlisted_app_is_still_taken_as_the_game():
     """The blocklist is a list of exceptions; anything not on it still counts,
     or every native game would need to be known in advance."""
