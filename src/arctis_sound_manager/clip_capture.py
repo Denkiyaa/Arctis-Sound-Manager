@@ -89,6 +89,11 @@ _NOT_A_GAME = {
     "firefox", "chromium", "chrome", "brave", "vivaldi", "librewolf", "epiphany",
     "discord", "vesktop", "armcord", "spotify", "vlc", "mpv", "telegram",
     "speech-dispatcher", "obs", "asm-gui", "plasmashell", "kdeconnect", "zapzap",
+    # Video and music players. Watching a saved clip is the likeliest moment
+    # for one to be playing, and one routed to the Game channel would arm the
+    # capture and put the portal picker over the clip being watched.
+    "haruna", "celluloid", "totem", "smplayer", "dragon", "dragonplayer",
+    "elisa", "audacious", "strawberry", "clementine", "rhythmbox",
     # Names that only mean anything as a phrase. "webrtc" and "voiceengine" are
     # each too generic to block on their own; together they are what every
     # Chromium tab calls its audio stream.
