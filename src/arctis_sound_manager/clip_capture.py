@@ -94,6 +94,8 @@ _NOT_A_GAME = {
     # capture and put the portal picker over the clip being watched.
     "haruna", "celluloid", "totem", "smplayer", "dragon", "dragonplayer",
     "elisa", "audacious", "strawberry", "clementine", "rhythmbox",
+    # The Steam client itself — its store, library and overlay make sound too.
+    "steam", "steamwebhelper",
     # Names that only mean anything as a phrase. "webrtc" and "voiceengine" are
     # each too generic to block on their own; together they are what every
     # Chromium tab calls its audio stream.
@@ -434,7 +436,10 @@ def detect_game(strict: bool = False) -> str | None:
                 if name and not _is_not_a_game(name):
                     return name
 
-            # 1. A stream running under a known game runtime.
+            # 1. A stream running under a known game runtime. The blocklist
+            # still applies: the Steam client runs from the same tree as its
+            # games, and its own UI (steamwebhelper, which reports itself as
+            # "Chromium") passed for a game and put the picker over the store.
             for si in streams:
                 try:
                     pid = int(si.proplist.get("application.process.id", ""))
@@ -442,7 +447,8 @@ def detect_game(strict: bool = False) -> str | None:
                     continue
                 haystack = _process_cmdline(pid) + _process_environ(pid)
                 if any(hint in haystack for hint in _GAME_RUNTIME_HINTS):
-                    if (name := label(si)):
+                    name = label(si)
+                    if name and not _is_not_a_game(name):
                         return name
 
             # 2. Fall back to "a playback stream that is not obviously not a game".
