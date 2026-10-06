@@ -44,6 +44,7 @@ def _check_display_or_exit() -> None:
 
 
 _QT_ABI_VERSION_RE = re.compile(r"QtPrivate_(\d+)_(\d+)(?:_(\d+))?")
+_MISSING_MODULE_RE = re.compile(r"No module named '(PySide6[\w.]*)'")
 
 
 def _qt_import_help(exc: ImportError) -> str:
@@ -69,6 +70,33 @@ def _qt_import_help(exc: ImportError) -> str:
     PySide6 in ~/.local shadowing the distro one it does not match.
     """
     text = str(exc)
+
+    # A third case: the Python module itself is absent, not the Qt
+    # libraries under it. Ubuntu 24.04 / Mint 22 ship no python3-pyside6.*
+    # at all, so pip is the only source there — the Wayland advice below
+    # sent those users after a package that changes nothing.
+    missing = exc.name or ""
+    m = _MISSING_MODULE_RE.search(text)
+    if m:
+        missing = m.group(1)
+    if missing == "PySide6":
+        return (
+            f"asm-gui: PySide6 is not installed ({exc}).\n"
+            "  Ubuntu 24.04, Linux Mint 22, Pop!_OS 24.04 (no PySide6 package):\n"
+            "      sudo apt install python3-pip\n"
+            "      pip3 install --user --break-system-packages pyside6\n"
+            "  Ubuntu 25.04+, Debian 13 : sudo apt install python3-pyside6.qtwidgets\n"
+            "  Fedora/Nobara : sudo dnf install python3-pyside6\n"
+            "  Arch/Cachy    : sudo pacman -S pyside6\n"
+        )
+    if missing.startswith("PySide6."):
+        # Debian splits PySide6 per Qt module (#163): one can be missing
+        # while the rest import fine.
+        package = "python3-pyside6." + missing.split(".", 1)[1].lower()
+        return (
+            f"asm-gui: a PySide6 module is missing ({exc}).\n"
+            f"  Debian/Ubuntu : sudo apt install {package}\n"
+        )
 
     if "undefined symbol" not in text:
         return (
@@ -124,8 +152,30 @@ def _import_qt_or_exit():
         from PySide6.QtWidgets import QApplication, QDialog
         return QTimer, QLocalServer, QLocalSocket, QApplication, QDialog
     except ImportError as e:
-        sys.stderr.write(_qt_import_help(e))
+        help_text = _qt_import_help(e)
+        sys.stderr.write(help_text)
+        _notify_desktop("Arctis Sound Manager cannot start", help_text)
         sys.exit(3)
+
+
+def _notify_desktop(title: str, body: str) -> None:
+    """Best-effort desktop notification, for failures before Qt exists.
+
+    Launched from the menu, stderr goes nowhere: the app just "does not
+    open" and the user has nothing to report. notify-send needs no Qt.
+    """
+    import shutil
+    import subprocess
+
+    notify_send = shutil.which("notify-send")
+    if not notify_send:
+        return
+    try:
+        subprocess.run([notify_send, "--urgency=critical", "--app-name=asm-gui", title, body],
+                       timeout=5, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 from arctis_sound_manager.runtime_staleness import (  # noqa: E402

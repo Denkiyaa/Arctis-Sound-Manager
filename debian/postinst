@@ -21,6 +21,27 @@ if [ "$1" = "configure" ]; then
     fi
 
     REAL_USER="${SUDO_USER:-}"
+    # Mint's and Ubuntu's graphical installers go through pkexec or a root
+    # daemon, which set no SUDO_USER: PySide6 was then never pip-installed on
+    # series that do not package it, and asm-gui silently failed to open.
+    if [ -z "$REAL_USER" ] && [ -n "${PKEXEC_UID:-}" ] && [ "$PKEXEC_UID" != 0 ]; then
+        REAL_USER=$(id -nu "$PKEXEC_UID" 2>/dev/null || true)
+    fi
+    if [ -z "$REAL_USER" ] && command -v loginctl >/dev/null 2>&1; then
+        # The one user with an active graphical session; none if ambiguous.
+        GRAPHICAL_USERS=$(
+            for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
+                loginctl show-session "$s" -p Name -p Type -p Active -p Remote 2>/dev/null \
+                    | awk -F= '{v[$1] = $2}
+                        END {if ((v["Type"] == "x11" || v["Type"] == "wayland") &&
+                                 v["Active"] == "yes" && v["Remote"] == "no" &&
+                                 v["Name"] != "" && v["Name"] != "root") print v["Name"]}'
+            done | sort -u
+        )
+        if [ -n "$GRAPHICAL_USERS" ] && [ "$(printf '%s\n' "$GRAPHICAL_USERS" | wc -l)" -eq 1 ]; then
+            REAL_USER="$GRAPHICAL_USERS"
+        fi
+    fi
 
     # If PySide6 is not available as a system package (e.g. Ubuntu 22.04),
     # install it via pip for the real user who ran sudo.

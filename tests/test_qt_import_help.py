@@ -61,13 +61,27 @@ def test_a_pip_copy_is_the_second_thing_to_check():
     assert ".local" in out
 
 
-def test_a_genuinely_missing_qt_still_gets_the_install_advice():
-    """The original message was right for the case it was written for, and has
-    to stay right: nothing loaded, so installing Qt is the fix."""
+def test_a_missing_pyside6_module_gets_the_pip_route():
+    """Ubuntu 24.04 / Mint 22 have no python3-pyside6.* at all: pip is the
+    only source there, and the Wayland advice changes nothing."""
     out = _qt_import_help(ImportError("No module named 'PySide6'"))
 
-    assert "qt6-wayland" in out
+    assert "pip3 install --user --break-system-packages pyside6" in out
+    assert "qt6-wayland" not in out
     assert "do not match" not in out
+
+
+def test_a_missing_pyside6_submodule_names_its_debian_package():
+    """Debian splits PySide6 per Qt module (#163): name the one missing."""
+    out = _qt_import_help(ImportError("No module named 'PySide6.QtNetwork'"))
+
+    assert "python3-pyside6.qtnetwork" in out
+
+
+def test_the_module_name_attribute_is_used_when_set():
+    out = _qt_import_help(ImportError("import failed", name="PySide6"))
+
+    assert "pip3 install" in out
 
 
 def test_a_missing_shared_library_is_treated_as_missing_qt():

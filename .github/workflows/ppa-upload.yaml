@@ -71,6 +71,22 @@ jobs:
           # (.*) matches literal parens only, leaving the old series in place.
           sed -i "1s|.*|arctis-sound-manager (${VERSION}-1~${SERIES}1) ${SERIES}; urgency=medium|" debian/changelog
 
+      - name: Let PySide6 fall back to pip on series that do not package it
+        # noble (24.04, and Mint 22 / Pop!_OS 24.04 on top of it) ships no
+        # python3-pyside6.* at all: Ubuntu packages it from 25.04. The flat
+        # dependencies #163 needed on resolute made the noble package
+        # uninstallable outright. The `| python3-pip` alternative is the one
+        # build-deb.sh already gives the GitHub .deb; postinst pip-installs
+        # PySide6 for the user. Only here, never in debian/control: on a series
+        # that has the packages, apt would take python3-pip and skip them (#163).
+        if: matrix.series == 'noble'
+        run: |
+          sed -i -E 's/^([[:space:]]*)(python3-pyside6\.[a-z0-9]+),/\1\2 | python3-pip,/' debian/control
+          grep -q 'python3-pyside6.qtwidgets | python3-pip,' debian/control
+          if grep -Eq '^[[:space:]]*python3-pyside6\.[a-z0-9]+,' debian/control; then
+            echo "::error::a python3-pyside6.* dependency kept no pip fallback"; exit 1
+          fi
+
       - name: Import GPG key
         run: |
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import

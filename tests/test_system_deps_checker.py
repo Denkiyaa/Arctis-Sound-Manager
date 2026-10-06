@@ -603,3 +603,35 @@ def test_host_which_unreachable_host_is_false(monkeypatch):
     monkeypatch.setattr(sdc, "_host_exec_prefix", lambda: None)
     monkeypatch.setattr(sdc.shutil, "which", lambda name: "/usr/bin/pkexec")
     assert sdc._host_which("pkexec") is False
+
+
+# ── PySide6 on series that do not package it ────────────────────────────────
+
+def _fake_apt_policy(candidate):
+    def run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=f"  Candidate: {candidate}\n")
+    return run
+
+
+def test_pyside6_uses_apt_where_the_series_packages_it(monkeypatch):
+    monkeypatch.setattr(sdc, "_which", lambda b: True)
+    monkeypatch.setattr(sdc.subprocess, "run", _fake_apt_policy("6.10.2-6ubuntu1"))
+    argv = sdc._pyside6_debian_install()
+    assert argv[:2] == ["apt-get", "install"]
+    assert "python3-pyside6.qtdbus" in argv
+
+
+def test_pyside6_falls_back_to_user_pip_on_noble(monkeypatch):
+    """Ubuntu 24.04 / Mint 22 have no python3-pyside6.*: apt could only fail."""
+    monkeypatch.setattr(sdc, "_which", lambda b: True)
+    monkeypatch.setattr(sdc.subprocess, "run", _fake_apt_policy("(none)"))
+    argv = sdc._pyside6_debian_install()
+    assert argv[:3] == ["python3", "-m", "pip"]
+    assert "--user" in argv and "--break-system-packages" in argv
+    from arctis_sound_manager.gui.system_deps_dialog import _is_user_run
+    assert _is_user_run(argv), "a --user pip install must never go through pkexec"
+
+
+def test_pyside6_falls_back_to_pip_without_apt_cache(monkeypatch):
+    monkeypatch.setattr(sdc, "_which", lambda b: False)
+    assert sdc._pyside6_debian_install()[:3] == ["python3", "-m", "pip"]

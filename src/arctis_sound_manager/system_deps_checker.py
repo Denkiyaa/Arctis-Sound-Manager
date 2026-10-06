@@ -570,6 +570,41 @@ def _pip_user(pkg: str) -> list[str]:
     Runs as the invoking user (never via pkexec) — see the deps dialog.
     """
     return ["python3", "-m", "pip", "install", "--user", pkg]
+
+
+def _apt_can_install(package: str) -> bool:
+    """True when apt has an installation candidate for `package`."""
+    if not _which("apt-cache"):
+        return False
+    try:
+        result = subprocess.run(["apt-cache", "policy", package],
+                                capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    m = re.search(r"Candidate:\s*(\S+)", result.stdout)
+    return bool(m) and m.group(1) != "(none)"
+
+
+def _pyside6_debian_install() -> list[str]:
+    """apt where the series packages PySide6, pip into ~/.local elsewhere.
+
+    Ubuntu packages PySide6 from 25.04 only: on 24.04 (and Mint 22 /
+    Pop!_OS 24.04) the apt command named packages that do not exist, and
+    the dialog's fix could only fail. Debian/Ubuntu mark the system Python
+    externally-managed, hence --break-system-packages, which --user keeps
+    confined to the user's own site.
+    """
+    if _apt_can_install("python3-pyside6.qtwidgets"):
+        return ["apt-get", "install", "-y",
+                "python3-pyside6.qtcore",
+                "python3-pyside6.qtgui",
+                "python3-pyside6.qtwidgets",
+                "python3-pyside6.qtsvg",
+                "python3-pyside6.qtnetwork",
+                "python3-pyside6.qtdbus"]
+    return [*_pip_user("pyside6"), "--break-system-packages"]
+
+
 def _gst_element_available(element: str) -> bool:
     """True when the named GStreamer element is registered.
 
@@ -1168,17 +1203,9 @@ def _build_checks() -> list[DepCheck]:
             detect=lambda: _can_import("PySide6"),
             install_commands={
                 "fedora": ["dnf", "install", "-y", "python3-pyside6"],
-                # Debian splits PySide6 into per-Qt-module packages — the
-                # debian/control file lists each one with a `python3-pip`
-                # fallback. Installing the umbrella is enough for the import
-                # to succeed.
-                "debian": ["apt-get", "install", "-y",
-                           "python3-pyside6.qtcore",
-                           "python3-pyside6.qtgui",
-                           "python3-pyside6.qtwidgets",
-                           "python3-pyside6.qtsvg",
-                           "python3-pyside6.qtnetwork",
-                           "python3-pyside6.qtdbus"],
+                # Debian splits PySide6 into per-Qt-module packages, and
+                # some series have none at all.
+                "debian": _pyside6_debian_install(),
                 "arch":   ["pacman", "-S", "--noconfirm", "pyside6"],
             },
         ),
