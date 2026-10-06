@@ -252,6 +252,20 @@ def test_a_video_player_on_the_game_channel_does_not_arm_the_capture():
     assert _detect(SINKS, [_stream(1, "haruna")], strict=True) is None
 
 
+def test_the_steam_client_is_not_a_game(monkeypatch):
+    """steamwebhelper runs from the Steam tree like its games do and calls its
+    stream "Chromium"; it armed the capture on the store page. A game started
+    from the same tree still counts."""
+    from arctis_sound_manager import clip_capture
+    monkeypatch.setattr(clip_capture, "_process_cmdline",
+                        lambda pid: "/home/u/.local/share/steam/ubuntu12_64/steamwebhelper")
+    monkeypatch.setattr(clip_capture, "_process_environ", lambda pid: "")
+
+    assert _detect(SINKS, [_stream(3, "Chromium", pid="42")], strict=True) is None
+    assert _detect(SINKS, [_stream(3, "steamwebhelper", pid="42")], strict=True) is None
+    assert _detect(SINKS, [_stream(3, "FMOD Ex App", pid="42")], strict=True) == "FMOD Ex App"
+
+
 def test_an_unlisted_app_is_still_taken_as_the_game():
     """The blocklist is a list of exceptions; anything not on it still counts,
     or every native game would need to be known in advance."""
