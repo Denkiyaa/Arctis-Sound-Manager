@@ -117,7 +117,9 @@ device:
   # 0xD0/0xD1 take it, 0xD2 sends a whole 128x48 frame in one 1025-byte
   # Feature report on interface 0. See oled_protocol.SiberiaOledProtocol.
   # `packing` is GG's `convert-to-column-packed-byte-format`, whose bit layout
-  # the spec does not give: not yet confirmed on hardware (#305).
+  # the spec does not give: column_msb drew noise on hardware (#305). Until
+  # oled_geometry_probe.py tells how bytes map to pixels, ASM leaves it to
+  # the base (`verified: false`).
   oled:
     protocol: siberia_840
     interface: 0
@@ -128,6 +130,7 @@ device:
     frame_report_size: 1025
     control_report_size: 33
     packing: column_msb
+    verified: false
 
   status_parse:
     headset_power_status:

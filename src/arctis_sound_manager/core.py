@@ -2860,6 +2860,7 @@ class CoreEngine:
             device_config.status is not None
             and 'gamedac' in device_config.status.representation
             and device_config.oled is not None
+            and device_config.oled.verified
         )
         if has_oled:
             # The OLED is decoration: never let it take the daemon down with

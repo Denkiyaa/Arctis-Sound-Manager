@@ -214,6 +214,9 @@ class OledConfig:
     # oled_protocol.SiberiaOledProtocol.
     protocol: str = 'nova'
     packing: str = 'column_msb'
+    # False until the layout has been seen right on real hardware: the screen
+    # is then left to the device, since a wrong guess draws noise (#305).
+    verified: bool = True
 
 
 @dataclass
@@ -565,6 +568,7 @@ class DeviceConfiguration:
                 transpose=bool(raw_oled.get('transpose', False)),
                 protocol=raw_oled.get('protocol', 'nova'),
                 packing=raw_oled.get('packing', 'column_msb'),
+                verified=bool(raw_oled.get('verified', True)),
             )
         else:
             self.oled = None
