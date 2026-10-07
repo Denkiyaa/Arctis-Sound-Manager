@@ -10,11 +10,13 @@ What it does when a new version appears:
   2. recovers the descriptor passphrase from SteelSeriesEngine.exe and
      decrypts the Arctis specs (recover-key.py + decode-arctis-specs.sh,
      both already here), then disassembles the engine builtins those specs
-     call and SSEdevice.dll's HID transport (gg-disasm.py);
+     call and SSEdevice.dll's HID transport (gg-disasm.py), and decompiles
+     Sonar's .NET assemblies to C# (ilspycmd);
   3. compares against the previous version using fingerprint index:
        * new .edevice files            → new hardware
        * changed Arctis .device files  → protocol changes worth reading
        * changed builtins / transport  → GG now builds or sends bytes differently
+       * changed Sonar C#              → EQ / ChatMix / routing logic moved
        * presets in the catalogue that ASM does not ship
   4. acts:
        * presets  → writes the JSON into ASM, commits to main (the branch
@@ -62,6 +64,11 @@ GENERATE_MANIFEST = ASM_ROOT / "scripts/generate_presets_manifest.py"
 
 REPO = "loteran/Arctis-Sound-Manager"
 RESEARCH_REPO = "loteran/steelseries-research"
+
+# Sonar's own .NET assemblies — EQ, ChatMix, routing, config models. The
+# runtime and third-party libraries next to them are left out. A native one
+# (the APO / DSP layer) has no IL to decompile and is skipped.
+SONAR_ASSEMBLIES = ("SteelSeriesSonar", "Sonar.*", "SoundStage.*", "Interop.*")
 
 LATEST_URL = "https://steelseries.com/gg/downloads/gg/latest/windows"
 VERSION_RE = re.compile(r"SteelSeriesGG([\d.]+)Setup\.exe")
@@ -116,7 +123,8 @@ def load_state() -> dict:
 def save_state(version: str, edevice_files: list[str], spec_hashes: dict[str, str],
                presets_added: list[str], new_files: list[str],
                changed_specs: list[str], issue: str | None,
-               disasm_fingerprints: dict[str, str], changed_code: list[str]) -> None:
+               disasm_fingerprints: dict[str, str], changed_code: list[str],
+               sonar_fingerprints: dict[str, str], changed_sonar_ns: list[str]) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps({
         "version": version,
@@ -128,6 +136,8 @@ def save_state(version: str, edevice_files: list[str], spec_hashes: dict[str, st
         "changed_specs": changed_specs,
         "disasm_fingerprints": dict(sorted(disasm_fingerprints.items())),
         "changed_code": changed_code,
+        "sonar_fingerprints": dict(sorted(sonar_fingerprints.items())),
+        "changed_sonar": changed_sonar_ns,
         "issue": issue,
     }, indent=2, ensure_ascii=False) + "\n")
 
@@ -179,7 +189,8 @@ def extract(installer: Path, version: str) -> Path:
          "apps/engine/deviceSpecifications/*",
          "apps/engine/SteelSeriesEngine.exe",
          "apps/engine/SSEdevice.dll",
-         "apps/sonar/db-migrations/*"])
+         "apps/sonar/db-migrations/*",
+         *(f"apps/sonar/{pattern}.dll" for pattern in SONAR_ASSEMBLIES)])
     return root
 
 
@@ -218,6 +229,42 @@ def disassemble(root: Path, decoded: Path, version: str) -> Path | None:
         log(f"  disassembly failed, skipped: {e}")
         return None
     return out
+
+
+def decompile_sonar(root: Path, version: str) -> Path | None:
+    """Decompile Sonar's .NET assemblies to C# with ilspycmd."""
+    out = GG_WORKDIR / f"sonar-{version}"
+    if (out / "fingerprints.json").is_file():
+        log(f"  already decompiled into {out.name}")
+        return out
+    if not shutil.which("ilspycmd"):
+        log("  ilspycmd not installed — skipping the Sonar decompilation")
+        return None
+    log("  decompiling Sonar …")
+    out.mkdir(parents=True, exist_ok=True)
+    dlls = sorted({dll for pattern in SONAR_ASSEMBLIES
+                   for dll in (root / "apps/sonar").glob(f"{pattern}.dll")})
+    for dll in dlls:
+        try:
+            run(["ilspycmd", "-p", "-o", str(out / dll.stem), str(dll)])
+        except subprocess.CalledProcessError:
+            log(f"    {dll.name}: native, not .NET — skipped")
+            shutil.rmtree(out / dll.stem, ignore_errors=True)
+    # .cs only: the generated .csproj carries a random project GUID.
+    fingerprints = {str(f.relative_to(out)): hashlib.sha256(f.read_bytes()).hexdigest()[:16]
+                    for f in sorted(out.rglob("*.cs"))}
+    (out / "fingerprints.json").write_text(json.dumps(fingerprints, indent=1) + "\n")
+    return out
+
+
+def changed_sonar(sonar: Path | None, state: dict) -> list[str]:
+    """Sonar namespaces (directories) with an added, removed or changed file."""
+    if sonar is None or not state.get("sonar_fingerprints"):
+        return []
+    old = state["sonar_fingerprints"]
+    new = json.loads((sonar / "fingerprints.json").read_text())
+    files = {f for f in old.keys() | new.keys() if old.get(f) != new.get(f)}
+    return sorted({str(Path(f).parent) for f in files})
 
 
 def changed_disassembly(disasm: Path | None, state: dict) -> list[str]:
@@ -433,7 +480,8 @@ def add_presets(new: dict[str, dict], version: str) -> list[str]:
     return written
 
 
-def push_specs_to_research_repo(decoded: Path, disasm: Path | None, version: str) -> bool:
+def push_specs_to_research_repo(decoded: Path, disasm: Path | None,
+                                sonar: Path | None, version: str) -> bool:
     """Mirror this version's decrypted specs and disassembly into the private
     research repo.
 
@@ -459,7 +507,7 @@ def push_specs_to_research_repo(decoded: Path, disasm: Path | None, version: str
     url = f"https://x-access-token:{token}@github.com/{RESEARCH_REPO}.git"
     run(["git", "clone", "--depth", "1", url, str(clone_dir)])
 
-    trees = [decoded] + ([disasm] if disasm else [])
+    trees = [decoded] + [t for t in (disasm, sonar) if t]
     for tree in trees:
         dest = clone_dir / tree.name
         if dest.is_dir():
@@ -483,8 +531,8 @@ def push_specs_to_research_repo(decoded: Path, disasm: Path | None, version: str
 
 
 def open_issue(version: str, new_files: list[str], changed: list[str],
-               changed_code: list[str]) -> str | None:
-    if not new_files and not changed and not changed_code:
+               changed_code: list[str], changed_sonar_ns: list[str]) -> str | None:
+    if not new_files and not changed and not changed_code and not changed_sonar_ns:
         return None
     title = f"SteelSeries GG {version}: device specs changed"
     existing = subprocess.run(
@@ -518,6 +566,13 @@ def open_issue(version: str, new_files: list[str], changed: list[str],
         lines += ["", "The engine builtins (frame packing, conversions) or the HID "
                   "transport in SSEdevice.dll changed. Diff `disasm-<version>/` "
                   "in the research repo: ASM copies what these do.", ""]
+    if changed_sonar_ns:
+        lines += [f"### Changed Sonar code ({len(changed_sonar_ns)} namespaces)", ""]
+        lines += [f"- `{f}`" for f in changed_sonar_ns[:40]]
+        if len(changed_sonar_ns) > 40:
+            lines += [f"- … and {len(changed_sonar_ns) - 40} more"]
+        lines += ["", "Diff `sonar-<version>/` in the research repo: EQ, ChatMix "
+                  "and routing logic that ASM's Sonar side mirrors.", ""]
     lines += ["<sub>Opened by the GG watcher. Decrypted specs are not attached: "
               "they are SteelSeries' material and stay off this repository.</sub>"]
 
@@ -556,22 +611,25 @@ def main() -> int:
     root = extract(fetch(version, url), version)
     decoded = decode(root, version)
     disasm = disassemble(root, decoded, version)
-    push_specs_to_research_repo(decoded, disasm, version)
+    sonar = decompile_sonar(root, version)
+    push_specs_to_research_repo(decoded, disasm, sonar, version)
 
     edevice_files, spec_hashes = build_index(root, decoded)
     new_files, changed = compare_to_state(edevice_files, spec_hashes, state)
     presets = missing_presets(root)
     changed_code = changed_disassembly(disasm, state)
+    changed_sonar_ns = changed_sonar(sonar, state)
 
     log(f"  new device files : {len(new_files)}")
     log(f"  changed specs    : {len(changed)}")
     log(f"  missing presets  : {len(presets)}")
     log(f"  changed GG code  : {len(changed_code)}")
+    log(f"  changed Sonar ns : {len(changed_sonar_ns)}")
 
     written = add_presets(presets, version) if presets else []
     for n in written:
         log(f"    + {n}")
-    issue = open_issue(version, new_files, changed, changed_code)
+    issue = open_issue(version, new_files, changed, changed_code, changed_sonar_ns)
     if issue:
         log(f"  issue: {issue}")
 
@@ -581,8 +639,10 @@ def main() -> int:
 
     fingerprints = (json.loads((disasm / "fingerprints.json").read_text())
                     if disasm else state.get("disasm_fingerprints", {}))
+    sonar_fingerprints = (json.loads((sonar / "fingerprints.json").read_text())
+                          if sonar else state.get("sonar_fingerprints", {}))
     save_state(version, edevice_files, spec_hashes, written, new_files, changed, issue,
-               fingerprints, changed_code)
+               fingerprints, changed_code, sonar_fingerprints, changed_sonar_ns)
     commit_state()
     log("done.")
     return 0
