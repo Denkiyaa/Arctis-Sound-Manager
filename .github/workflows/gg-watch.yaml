@@ -44,10 +44,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout main
+      # The branch the run was started on: main for the cron, any branch for
+      # a manual test of the watcher's own changes.
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
 
       - name: Install 7z and the disassembler
@@ -70,7 +72,9 @@ jobs:
           # write access outside this repo. Mirrors decoded specs there so
           # they're cloneable from any machine. Missing secret = step skips.
           RESEARCH_REPO_TOKEN: ${{ secrets.RESEARCH_REPO_TOKEN }}
+        # Presets and state are pushed to the checked-out branch, and only
+        # main is where they belong: off main, a run is always a dry run.
         run: |
           python3 scripts/reverse-engineering/gg-watch.py \
             ${{ inputs.since && format('--since={0}', inputs.since) || '' }} \
-            ${{ inputs.dry_run == true && '--dry-run' || '' }}
+            ${{ (inputs.dry_run == true || github.ref_name != 'main') && '--dry-run' || '' }}
