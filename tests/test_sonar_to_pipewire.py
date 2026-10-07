@@ -4151,3 +4151,53 @@ def test_the_boost_stage_carries_the_headroom(tmp_path, monkeypatch):
     text = s2p.generate_sonar_eq_conf("media", bands, 0.0, 0.0, 0.0, boost_db=2.0)
     assert "name = boost  label = bq_highshelf" in text
     assert "Gain = -3.0 }" in text          # 2 dB of Boost minus 5 dB of headroom
+
+
+# ── Sonar's full filter-type set (SoundStage.Models Filter.FilterType) ───────
+
+@pytest.mark.parametrize("sonar_type, label", [
+    ("notchFilter", "bq_notch"),
+    ("allPass", "bq_allpass"),
+    ("bandPassPeak0dB", "bq_bandpass"),
+])
+@pytest.mark.parametrize("channel", ["game", "chat"])
+def test_sonar_filter_types_get_their_own_biquad(sonar_type, label, channel):
+    """Every Sonar filter type used to fall back to bq_peaking; the notch in
+    the DOOM: The Dark Ages preset played as a 12 dB dip."""
+    bands = [EqBand(freq=12500, gain=-12.0, q=4.0, type=sonar_type, enabled=True)]
+    text = generate_sonar_eq_conf(channel, bands, 0.0, 0.0, 0.0,
+                                  output_path=Path("/dev/null"))
+    assert f"label = {label}" in text
+    assert "Freq = 12500 " in text
+
+
+def test_band_pass_peak_q_is_a_bandpass_times_q():
+    """PipeWire's bandpass peaks at 0 dB, Sonar's bandPassPeakQ at Q: the same
+    filter followed by a linear stage multiplying by Q."""
+    bands = [EqBand(freq=1000, gain=0.0, q=3.0, type="bandPassPeakQ", enabled=True)]
+    text = generate_sonar_eq_conf("game", bands, 0.0, 0.0, 0.0,
+                                  output_path=Path("/dev/null"))
+    bp = re.search(r"name = (\S+)\s+label = bq_bandpass", text).group(1)
+    gain = re.search(r"name = (\S+)\s+label = linear\n\s+control = \{ Mult = 3.0", text).group(1)
+    assert f'output = "{bp}:Out"  input = "{gain}:In"' in text
+
+
+def test_bypass_band_is_left_out():
+    bypass = EqBand(freq=1000, gain=6.0, q=1.0, type="byPass", enabled=True)
+    text = generate_sonar_eq_conf("game", [bypass], 0.0, 0.0, 0.0,
+                                  output_path=Path("/dev/null"))
+    assert "Freq = 1000.0  Q = 1.0  Gain = 6.0" not in text
+
+
+def test_curve_draws_every_sonar_filter_type():
+    """A type the curve did not know drew flat, whatever the band did."""
+    from arctis_sound_manager.gui.eq_curve_widget import FILTER_TYPES, _biquad_response
+    for t in FILTER_TYPES:
+        if t == "byPass":
+            continue
+        response = _biquad_response(EqBand(freq=1000, gain=-6.0, q=2.0, type=t), [500, 1000, 2000])
+        assert any(abs(v) > 0.01 for v in response) or t == "allPass", t
+    notch = _biquad_response(EqBand(freq=1000, gain=0.0, q=2.0, type="notchFilter"), [1000])
+    assert notch[0] < -40
+    peak_q = _biquad_response(EqBand(freq=1000, gain=0.0, q=4.0, type="bandPassPeakQ"), [1000])
+    assert abs(peak_q[0] - 20 * __import__("math").log10(4.0)) < 0.05

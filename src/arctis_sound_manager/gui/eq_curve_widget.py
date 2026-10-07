@@ -43,13 +43,19 @@ import arctis_sound_manager.gui.theme as theme
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
-FILTER_TYPES = ["peakingEQ", "lowPass", "highPass", "lowShelving", "highShelving"]
+FILTER_TYPES = ["peakingEQ", "lowPass", "highPass", "lowShelving", "highShelving",
+                "bandPassPeak0dB", "bandPassPeakQ", "notchFilter", "allPass", "byPass"]
 FILTER_LABELS = {
     "peakingEQ":    "Peaking EQ",
     "lowPass":      "Low Pass",
     "highPass":     "High Pass",
     "lowShelving":  "Low Shelf",
     "highShelving": "High Shelf",
+    "bandPassPeak0dB": "Band Pass",
+    "bandPassPeakQ":   "Band Pass (peak = Q)",
+    "notchFilter":     "Notch",
+    "allPass":         "All Pass",
+    "byPass":          "Bypass",
 }
 
 BAND_COLORS = [
@@ -106,6 +112,18 @@ def _biquad_response(band: EqBand, freqs: list[float]) -> list[float]:
         a0 =           (A + 1) - (A - 1) * cosw + 2 * sA * alpha
         a1 =  2 *     ((A - 1) - (A + 1) * cosw)
         a2 =           (A + 1) - (A - 1) * cosw - 2 * sA * alpha
+    elif t == "bandPassPeak0dB":
+        b0 = alpha;          b1 = 0.0;        b2 = -alpha
+        a0 = 1 + alpha;      a1 = -2 * cosw;  a2 = 1 - alpha
+    elif t == "bandPassPeakQ":
+        b0 = sinw / 2;       b1 = 0.0;        b2 = -sinw / 2
+        a0 = 1 + alpha;      a1 = -2 * cosw;  a2 = 1 - alpha
+    elif t == "notchFilter":
+        b0 = 1.0;            b1 = -2 * cosw;  b2 = 1.0
+        a0 = 1 + alpha;      a1 = -2 * cosw;  a2 = 1 - alpha
+    elif t == "allPass":
+        b0 = 1 - alpha;      b1 = -2 * cosw;  b2 = 1 + alpha
+        a0 = 1 + alpha;      a1 = -2 * cosw;  a2 = 1 - alpha
     else:
         return [0.0] * len(freqs)
 

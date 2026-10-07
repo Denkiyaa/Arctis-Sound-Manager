@@ -809,6 +809,13 @@ def eq_headroom_db(bands, macro_values: dict[str, float] | None = None) -> float
 
 
 def _node_block(name: str, label: str, freq: float, q: float, gain: float) -> str:
+    if label == "linear":
+        # bandPassPeakQ's gain stage: Out = In * Mult, Mult = the band's Q.
+        mult = _clamp_finite(q, *_BAND_Q_RANGE, 1.0)
+        return (
+            f"                    {{ type = builtin  name = {name}  label = linear\n"
+            f"                      control = {{ Mult = {mult}  Add = 0.0 }} }}"
+        )
     freq = _clamp_finite(freq, *_BAND_FREQ_RANGE, 1000.0)
     q = _clamp_finite(q, *_BAND_Q_RANGE, 0.7071)
     gain = _clamp_finite(gain, *_BAND_GAIN_RANGE, 0.0)
@@ -883,6 +890,13 @@ _BAND_SLOT_STEP = 8
 # low-pass filters at any gain and cannot be parked as unity, so those are
 # emitted only while in use — adding or removing one stays structural.
 _RACK_TYPES = ("peakingEQ", "lowShelving", "highShelving")
+# Internal to the rack, never stored in a curve: see _band_slot_rack.
+_GAIN_STAGE = "gainStage"
+
+
+def _is_active(band: EqBand) -> bool:
+    """A band that shapes the sound: enabled, and not Sonar's byPass type."""
+    return band.enabled and band.type != "byPass"
 
 
 def _unity_band(band_type: str = "peakingEQ") -> EqBand:
@@ -907,8 +921,23 @@ def _band_slot_rack(active_bands: list[EqBand]) -> list[EqBand]:
 
     # Filter types gain cannot neutralise, in a stable order so that a curve
     # holding the same set of them still produces the same rack.
-    rack += [b for b in active_bands if b.type not in _RACK_TYPES]
+    for b in active_bands:
+        if b.type in _RACK_TYPES:
+            continue
+        rack.append(b)
+        if b.type == "bandPassPeakQ":
+            # PipeWire's bandpass peaks at 0 dB; Sonar's bandPassPeakQ peaks
+            # at Q (the RBJ cookbook's "constant skirt gain" form). Same
+            # filter times Q: follow it with a linear stage multiplying by Q.
+            rack.append(EqBand(freq=b.freq, gain=0.0, q=b.q, type=_GAIN_STAGE,
+                               enabled=True))
     return rack
+
+
+def _label(band: EqBand) -> str:
+    if band.type == _GAIN_STAGE:
+        return "linear"
+    return PW_LABEL.get(band.type, "bq_peaking")
 
 
 def _link(out: str, inp: str) -> str:
@@ -1541,7 +1570,7 @@ def generate_sonar_eq_conf(
     # _band_slot_rack. The fully-flat case (no bands, all macros/boost at 0)
     # still takes the cheap _bypass_conf "copy" path below — the one-time
     # transition in/out of that state is the only structural change left.
-    active_bands: list[EqBand] = [b for b in bands if b.enabled]
+    active_bands: list[EqBand] = [b for b in bands if _is_active(b)]
     macro_values = {"basses": basses_db, "voix": voix_db, "aigus": aigus_db}
     is_flat = (
         not active_bands
@@ -1618,7 +1647,7 @@ def _active_conf_8ch(
     last_name = names[-1]
 
     for (name, band), nm in zip(all_filters, names):
-        label = PW_LABEL.get(band.type, "bq_peaking")
+        label = _label(band)
         node_lines.append(_node_block(nm, label, band.freq, band.q, band.gain))
 
     for i in range(len(all_filters) - 1):
@@ -1739,7 +1768,7 @@ def _active_conf_2ch(
     names_R = [f"{n}_R" for n, _ in all_filters]
 
     for (name, band), nL, nR in zip(all_filters, names_L, names_R):
-        label = PW_LABEL.get(band.type, "bq_peaking")
+        label = _label(band)
         node_lines.append(_node_block(nL, label, band.freq, band.q, band.gain))
         node_lines.append(_node_block(nR, label, band.freq, band.q, band.gain))
 
@@ -1914,7 +1943,7 @@ def generate_sonar_micro_conf(
 
     boost_db = max(-12.0, min(12.0, boost_db))
 
-    active_bands = [b for b in bands if b.enabled]
+    active_bands = [b for b in bands if _is_active(b)]
     macro_values = {"basses": basses_db, "voix": voix_db, "aigus": aigus_db}
 
     nc = noise_canceling or {}
@@ -1971,7 +2000,7 @@ def generate_sonar_micro_conf(
     names = [n for n, _ in all_filters]
 
     for (name, band), nm in zip(all_filters, names):
-        label = PW_LABEL.get(band.type, "bq_peaking")
+        label = _label(band)
         node_lines.append(_node_block(nm, label, band.freq, band.q, band.gain))
 
     for i in range(len(all_filters) - 1):

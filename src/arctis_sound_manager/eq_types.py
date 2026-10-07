@@ -20,6 +20,14 @@ PW_LABEL: dict[str, str] = {
     "highPass":     "bq_highpass",
     "lowShelving":  "bq_lowshelf",
     "highShelving": "bq_highshelf",
+    # Sonar's other filter types (SoundStage.Models Filter.FilterType, the
+    # RBJ cookbook set). PipeWire's bandpass is the constant 0 dB peak one;
+    # bandPassPeakQ (peak gain = Q) is that plus a linear gain stage, see
+    # sonar_to_pipewire._band_slot_rack. byPass is never emitted.
+    "notchFilter":     "bq_notch",
+    "allPass":         "bq_allpass",
+    "bandPassPeak0dB": "bq_bandpass",
+    "bandPassPeakQ":   "bq_bandpass",
 }
 
 # ── EQ band dataclass ─────────────────────────────────────────────────────────
