@@ -139,10 +139,13 @@ def test_first_reading_is_written_even_at_the_default(monkeypatch):
 
 # ── PulseAudioManager.set_mix: no redundant writes ─────────────────────────
 
+from arctis_sound_manager.pactl import mix_to_volume  # noqa: E402
+
+
 def _stream(node_name, pct):
     s = MagicMock()
     s.proplist = {"node.name": node_name}
-    s.volume.value_flat = pct / 100
+    s.volume.value_flat = mix_to_volume(pct)
     return s
 
 
@@ -169,7 +172,7 @@ def test_set_mix_skips_the_channel_that_did_not_move():
 
     manager.set_mix(100, 40)
 
-    manager.pulse.volume_set_all_chans.assert_called_once_with(chat, 0.4)
+    manager.pulse.volume_set_all_chans.assert_called_once_with(chat, mix_to_volume(40))
 
 
 def test_set_mix_writes_both_when_both_moved():
@@ -212,7 +215,7 @@ def test_set_mix_moves_only_the_configured_channels():
 
     manager.set_mix(70, 40)
 
-    manager.pulse.volume_set_all_chans.assert_any_call(media, 0.7)
+    manager.pulse.volume_set_all_chans.assert_any_call(media, mix_to_volume(70))
     assert game not in _touched(manager)
 
 
@@ -223,8 +226,8 @@ def test_set_mix_moves_aux_alongside_game_when_configured():
 
     manager.set_mix(55, 40)
 
-    manager.pulse.volume_set_all_chans.assert_any_call(aux, 0.55)
-    manager.pulse.volume_set_all_chans.assert_any_call(game, 0.55)
+    manager.pulse.volume_set_all_chans.assert_any_call(aux, mix_to_volume(55))
+    manager.pulse.volume_set_all_chans.assert_any_call(game, mix_to_volume(55))
 
 
 def test_set_mix_releases_a_channel_taken_off_the_dial():
@@ -235,7 +238,7 @@ def test_set_mix_releases_a_channel_taken_off_the_dial():
 
     manager.set_mix(70, 100)
 
-    manager.pulse.volume_set_all_chans.assert_called_once_with(media, 1.0)
+    manager.pulse.volume_set_all_chans.assert_called_once_with(media, mix_to_volume(100))
 
 
 def test_set_mix_skips_configured_channel_already_at_target():
@@ -257,3 +260,14 @@ def test_mix_stream_levels_reads_each_channel():
     ]
 
     assert mix_stream_levels(pulse) == {"game": 60, "chat": 100, "media": None, "aux": None}
+
+
+def test_mix_follows_sonars_gain_curve():
+    """Sonar's ChatMixService: the attenuated side plays at x / (2 - x) of
+    full amplitude — -9.5 dB half way, not the -18 dB of a cubic 50 %."""
+    import math
+    from arctis_sound_manager.pactl import volume_to_mix
+    assert mix_to_volume(100) == 1.0
+    assert mix_to_volume(0) == 0.0
+    assert abs(20 * math.log10(mix_to_volume(50) ** 3) - 20 * math.log10(1 / 3)) < 1e-9
+    assert all(volume_to_mix(mix_to_volume(p)) == p for p in range(101))

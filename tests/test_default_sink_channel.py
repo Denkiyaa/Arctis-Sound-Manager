@@ -24,6 +24,7 @@ from arctis_sound_manager.constants import (PULSE_CHAT_NODE_NAME,
                                             PULSE_GAME_NODE_NAME,
                                             PULSE_MEDIA_NODE_NAME)
 
+from arctis_sound_manager.pactl import mix_to_volume
 
 # ── The constants themselves ──────────────────────────────────────────────────
 
@@ -136,8 +137,8 @@ def test_chatmix_still_drives_game_not_media():
         call.args[0]: call.args[1]
         for call in mgr.pulse.volume_set_all_chans.call_args_list
     }
-    assert volumes[by_name[PULSE_GAME_NODE_NAME]] == 0.8
-    assert volumes[by_name[PULSE_CHAT_NODE_NAME]] == 0.4
+    assert volumes[by_name[PULSE_GAME_NODE_NAME]] == mix_to_volume(80)
+    assert volumes[by_name[PULSE_CHAT_NODE_NAME]] == mix_to_volume(40)
 
 
 def test_chatmix_leaves_the_media_channel_alone():

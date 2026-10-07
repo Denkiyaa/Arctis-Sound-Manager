@@ -46,11 +46,27 @@ def _mix_streams(pulse) -> dict[str, list]:
     return streams
 
 
+def mix_to_volume(pct: int) -> float:
+    """Stream volume for a ChatMix level, the way Sonar turns its balance into
+    a gain (ChatMixService.SetChatmix, ToScaled): level x in [0, 1] on the
+    attenuated side plays at x / (2 - x) of full amplitude — half way is
+    -9.5 dB. Sonar sets that as a linear gain; a Pulse volume is cubic, so
+    it is written as the cube root."""
+    x = max(0, min(100, pct)) / 100
+    return (x / (2 - x)) ** (1 / 3)
+
+
+def volume_to_mix(volume: float) -> int:
+    """Inverse of mix_to_volume: the ChatMix level a stream volume stands for."""
+    gain = max(0.0, min(1.0, volume)) ** 3
+    return round(200 * gain / (1 + gain))
+
+
 def mix_stream_levels(pulse) -> dict[str, int | None]:
     """Current ChatMix level (0-100) of each channel, None where the channel's
     loopback isn't running."""
     return {
-        ch: (round(sis[0].volume.value_flat * 100) if sis else None)
+        ch: (volume_to_mix(sis[0].volume.value_flat) if sis else None)
         for ch, sis in _mix_streams(pulse).items()
     }
 
@@ -70,8 +86,8 @@ def apply_mix_to_streams(pulse, channels_pct: int, chat_pct: int, channels: list
         pct = max(0, min(100, levels[ch]))
         for si in sis:
             try:
-                if round(si.volume.value_flat * 100) != pct:
-                    pulse.volume_set_all_chans(si, pct / 100)
+                if volume_to_mix(si.volume.value_flat) != pct:
+                    pulse.volume_set_all_chans(si, mix_to_volume(pct))
             except Exception as exc:  # noqa: BLE001 — the stream went away mid-write
                 logging.getLogger('PulseAudioManager').debug(
                     "mix write to %s failed: %r", MIX_STREAM_NAMES[ch], exc)
