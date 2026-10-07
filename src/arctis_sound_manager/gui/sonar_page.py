@@ -192,6 +192,50 @@ def _parse_preset_data(data: dict) -> list[EqBand]:
     return bands
 
 
+# Sonar's capture settings (BaseCaptureConfig) → the micro tab's own state
+# keys. volumeStabilizerState is what the Compressor card stands for.
+_PRESET_MICRO_KEYS = {
+    "noiseCancelingState":       "noiseCanceling",
+    "noiseReductionState":       "bgReduction",
+    "impactNoiseReductionState": "impactReduction",
+    "noiseGateState":            "noiseGate",
+    "volumeStabilizerState":     "compressor",
+}
+
+
+def _parse_preset_micro_processing(data: dict) -> dict:
+    """The micro processing a Sonar preset carries, in _MICRO_PROC_DEFAULTS'
+    shape — only the keys the preset sets, so an ASM preset (which has none)
+    leaves the user's processing alone.
+
+    Sonar applies it this way (CaptureConfigSettings.Apply): ClearCast on
+    turns background and impact reduction off, whatever the preset says.
+    """
+    payload = data.get("data", data)
+    out: dict = {}
+    for sonar_key, key in _PRESET_MICRO_KEYS.items():
+        state = payload.get(sonar_key)
+        if not isinstance(state, dict):
+            continue
+        entry: dict = {"enabled": bool(state.get("enabled", False))}
+        try:
+            value = float(state.get("value"))
+        except (TypeError, ValueError):
+            value = None
+        if value is not None:
+            lo, hi = (-60.0, -10.0) if key == "noiseGate" else (0.0, 1.0)
+            entry["value"] = _clamp_preset_value(value, lo, hi, lo)
+        out[key] = entry
+    auto = payload.get("automaticNoiseGateState")
+    if "noiseGate" in out and isinstance(auto, dict):
+        out["noiseGate"]["auto"] = bool(auto.get("enabled", False))
+    if out.get("noiseCanceling", {}).get("enabled"):
+        for key in ("bgReduction", "impactReduction"):
+            if key in out:
+                out[key]["enabled"] = False
+    return out
+
+
 def _parse_preset(path: Path) -> list[EqBand]:
     return _parse_preset_data(json.loads(path.read_text()))
 
@@ -1111,6 +1155,7 @@ class _PresetBar(QWidget):
     save_as_requested = Signal()                # save as a new named preset
     macros_loaded   = Signal(float, float, float)  # basses, voix, aigus
     settings_loaded = Signal(dict)
+    processing_loaded = Signal(dict)            # micro: Sonar capture settings
 
     def __init__(self, channel: str, parent: QWidget | None = None):
         super().__init__(parent)
@@ -1312,6 +1357,10 @@ class _PresetBar(QWidget):
         settings = data.get("settings") or None
         if settings is not None:
             self.settings_loaded.emit(settings)
+        if self._channel == "micro":
+            processing = _parse_preset_micro_processing(data)
+            if processing:
+                self.processing_loaded.emit(processing)
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
@@ -2774,6 +2823,16 @@ class _NoiseCancelingCard(QWidget):
         self._nc["value"] = value / 100.0
         self.state_changed.emit()
 
+    def reload(self) -> None:
+        """Show the state again after it was changed under the card."""
+        for widget in (self._toggle, self._slider):
+            widget.blockSignals(True)
+        self._toggle.setChecked(self._nc["enabled"])
+        self._slider.setValue(int(self._nc["value"] * 100))
+        for widget in (self._toggle, self._slider):
+            widget.blockSignals(False)
+        self._refresh_engine_ui()
+
     # ── DeepFilterNet install flow ──
     def _prompt_install_deepfilter(self, enable_after: bool = False) -> bool:
         """Offer to download the DeepFilterNet plugin. Returns True when a
@@ -2880,7 +2939,22 @@ class _NoiseReductionCard(QWidget):
         val_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 9pt;")
         row.addWidget(val_lbl)
         setattr(self, f"_val_{key}", val_lbl)
+        setattr(self, f"_toggle_{key}", toggle)
+        setattr(self, f"_slider_{key}", slider)
         return row
+
+    def reload(self) -> None:
+        """Show the state again after it was changed under the card."""
+        for key in ("bgReduction", "impactReduction"):
+            toggle = getattr(self, f"_toggle_{key}")
+            slider = getattr(self, f"_slider_{key}")
+            for widget in (toggle, slider):
+                widget.blockSignals(True)
+            toggle.setChecked(self._state[key]["enabled"])
+            slider.setValue(int(self._state[key]["value"] * 100))
+            for widget in (toggle, slider):
+                widget.blockSignals(False)
+            getattr(self, f"_val_{key}").setText(f"{self._state[key]['value']:.2f}")
 
     def _on_toggle(self, key: str, enabled: bool):
         self._state[key]["enabled"] = enabled
@@ -2966,6 +3040,19 @@ class _NoiseGateCard(QWidget):
         self._seuil.setEnabled(self._state["noiseGate"]["enabled"] and not checked)
         self.state_changed.emit()
 
+    def reload(self) -> None:
+        """Show the state again after it was changed under the card."""
+        gate = self._state["noiseGate"]
+        for widget in (self._toggle, self._seuil, self._auto_cb):
+            widget.blockSignals(True)
+        self._toggle.setChecked(gate["enabled"])
+        self._seuil.setValue(int(gate["value"] * 10))
+        self._auto_cb.setChecked(gate["auto"])
+        for widget in (self._toggle, self._seuil, self._auto_cb):
+            widget.blockSignals(False)
+        self._seuil_val.setText(f'{gate["value"]:.1f} dB')
+        self._set_enabled(gate["enabled"])
+
 
 # ── Compressor / Volume Stabilizer card ───────────────────────────────────────
 
@@ -3026,6 +3113,18 @@ class _CompressorCard(QWidget):
         self._state["compressor"]["value"] = v
         self._val_lbl.setText(f"{v:.2f}")
         self.state_changed.emit()
+
+    def reload(self) -> None:
+        """Show the state again after it was changed under the card."""
+        comp = self._state["compressor"]
+        for widget in (self._toggle, self._slider):
+            widget.blockSignals(True)
+        self._toggle.setChecked(comp["enabled"])
+        self._slider.setValue(int(comp["value"] * 100))
+        for widget in (self._toggle, self._slider):
+            widget.blockSignals(False)
+        self._val_lbl.setText(f'{comp["value"]:.2f}')
+        self._set_enabled(comp["enabled"])
 
 
 # ── Sonar Micro widget ────────────────────────────────────────────────────────
@@ -3089,11 +3188,25 @@ class SonarMicroWidget(SonarChannelWidget):
 
         root.addWidget(micro_settings)
         root.addStretch(1)
+        self._preset_bar.processing_loaded.connect(self._on_preset_processing)
 
         # Generate sonar-micro-eq.conf if it doesn't exist yet (first run)
         _micro_conf = Path.home() / ".config" / "pipewire" / "filter-chain.conf.d" / "sonar-micro-eq.conf"
         if not _micro_conf.exists():
             self._schedule_apply()
+
+    def _on_preset_processing(self, processing: dict) -> None:
+        """A Sonar preset sets the micro processing too, as it does in GG.
+
+        The cards hold references to the inner dicts, so update them in place.
+        The apply _on_preset_selected scheduled picks the new state up.
+        """
+        for key, values in processing.items():
+            self._micro_state.setdefault(key, {}).update(values)
+        _save_micro_proc(self._micro_state)
+        for card in (self._nc_card, self._nr_card, self._ng_card, self._comp_card):
+            card.reload()
+        self._schedule_apply()
 
     def _on_micro_changed(self):
         _save_micro_proc(self._micro_state)
