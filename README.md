@@ -752,7 +752,7 @@ Example Waybar module showing the battery, hidden when the headset is off:
 
 ## Virtual surround 7.1
 
-Virtual 7.1 surround is included automatically with the install — it deploys a PipeWire HeSuVi filter-chain and downloads the HRIR file. **57 HRIR profiles** are bundled and selectable from the **Settings** tab with instant apply.
+Virtual 7.1 surround is included automatically with the install — it deploys a PipeWire HeSuVi filter-chain and downloads the HRIR file. **57 HRIR profiles** from [HeSuVi](https://sourceforge.net/projects/hesuvi/) are bundled and selectable from the **Settings** tab with instant apply.
 
 ```
                   ┌──────────────────────────┐
@@ -1218,3 +1218,5 @@ This project is licensed under the [GNU General Public License v3.0](LICENSE).
 The majority of the source code is original work — Copyright (C) 2026 loteran.
 
 25 files are partially derived from [Linux Arctis Manager](https://github.com/elegos/Linux-Arctis-Manager/) by Giacomo Furlan (elegos), used under GPL-3.0 — Copyright (C) 2022 Giacomo Furlan (elegos).
+
+The HRIR profiles used by Spatial Audio (`src/arctis_sound_manager/hrir_assets/`) come from [HeSuVi](https://sourceforge.net/projects/hesuvi/) by Matt Gore, used under the MIT License — Copyright 2021 Matt Gore; see [`LICENSE-HeSuVi.txt`](src/arctis_sound_manager/hrir_assets/LICENSE-HeSuVi.txt). Most are recordings of commercial surround virtualizers made by the HeSuVi community; the product names (Dolby, DTS, Windows Sonic, Razer, Sennheiser…) are trademarks of their owners, and ASM is not affiliated with or endorsed by them.
