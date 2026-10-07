@@ -1191,6 +1191,20 @@ def _node_ports(data: list, node_id: int, direction: str) -> dict[str, int]:
     return ports
 
 
+def node_input_channel_count(name: str, data: list | None = None) -> int | None:
+    """How many audio channels the sink *name* takes, from its input ports.
+
+    None when the node is not in the graph (or the name is ambiguous), so a
+    caller can tell "unknown" from a real count.
+    """
+    if data is None:
+        data = _pw_dump()
+    node_id = _resolve_unique_node_id(_index_nodes_by_name(data), name, "node_input_channel_count")
+    if node_id is None:
+        return None
+    return len(_node_ports(data, node_id, "in")) or None
+
+
 # Canonical channel ordering used by the positional fallback below. Only the
 # relative order matters (not the exact set of names PipeWire may ever emit).
 _CANONICAL_CHANNEL_ORDER = ("FL", "FR", "FC", "LFE", "RL", "RR", "SL", "SR", "RC", "MONO")

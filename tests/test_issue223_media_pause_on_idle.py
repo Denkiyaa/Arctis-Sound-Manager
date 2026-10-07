@@ -114,8 +114,9 @@ def test_generated_media_conf_keeps_the_property_out_of_capture(
 
     assert _PAUSE_ON_IDLE in _playback_block(conf)
     assert _PAUSE_ON_IDLE not in _capture_block(conf)
-    # Exactly one occurrence in the whole file — no duplicate slipped in.
-    assert conf.count(_PAUSE_ON_IDLE) == 1
+    # Exactly one per output chain — no duplicate slipped in. The HeSuVi conf
+    # carries two chains since it gained the stereo downmix.
+    assert conf.count(_PAUSE_ON_IDLE) == conf.count("playback.props")
 
 
 # ── the in-place repair for confs written by an older ASM ─────────────────────

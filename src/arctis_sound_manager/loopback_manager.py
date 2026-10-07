@@ -176,6 +176,11 @@ class LoopbackSpec:
         output in simple mode).
     description:
         Human-readable label shown in audio control panels (``node.description``).
+    surround:
+        Take 7.1 instead of stereo. Game/Media/Aux in Sonar mode, where an
+        8-channel EQ follows: a game then sends its real centre and surrounds
+        instead of a stereo mix the chain could only upmix. A stereo app on a
+        7.1 sink fills FL/FR only — PipeWire does not upmix into it.
     """
 
     channel: str
@@ -183,6 +188,7 @@ class LoopbackSpec:
     playback_name: str
     target: str
     description: str
+    surround: bool = False
 
 
 # ── Pre-defined sink table (mirrors _VIRTUAL_SINKS in sonar_to_pipewire.py) ──
@@ -232,7 +238,7 @@ OPTIONAL_CHANNELS = ("aux",)
 def _build_pw_loopback_argv(spec: LoopbackSpec) -> list[str]:
     """Build the ``pw-loopback`` argv for *spec*.
 
-    The capture side is always 2ch [FL FR] with ``media.class=Audio/Sink``
+    The capture side is 2ch [FL FR] — 7.1 for a ``surround`` spec — with ``media.class=Audio/Sink``
     so that applications can route audio to it.  The playback side carries
     ``target.object`` (WirePlumber >= 0.5) plus ``node.target`` (0.4.x compat),
     ``stream.dont-remix=false`` (which lets PipeWire expand
@@ -269,18 +275,19 @@ def _build_pw_loopback_argv(spec: LoopbackSpec) -> list[str]:
     # (Discord, browsers) and mixers — it MUST be on the capture side, which is
     # the sink applications see. The value contains spaces, so it is wrapped in
     # double quotes; PipeWire's SPA parser reads the quoted string as one value.
+    channels, position = (8, "[FL FR FC LFE RL RR SL SR]") if spec.surround else (2, "[FL FR]")
     capture_props = (
         f"node.name={spec.capture_name}"
         f' node.description="{spec.description}"'
         f" media.class=Audio/Sink"
-        f" audio.channels=2"
-        f" audio.position=[FL FR]"
+        f" audio.channels={channels}"
+        f" audio.position={position}"
     )
     playback_props = (
         f"node.name={spec.playback_name}"
         f' node.description="{spec.description}"'
-        f" audio.channels=2"
-        f" audio.position=[FL FR]"
+        f" audio.channels={channels}"
+        f" audio.position={position}"
         f" stream.dont-remix=false"
         # WirePlumber >= 0.5 resolves target.object (object.serial / node.name
         # lookup) with priority over node.target; without it the stream can be
@@ -937,5 +944,8 @@ def make_specs(
             playback_name=sink["playback_name"],
             target=target,
             description=f"{device_name} {sink['description']}",
+            # Only into an 8-channel EQ. Simple mode links straight to the
+            # stereo device, and Chat's EQ is stereo.
+            surround=sonar and sink["channel"] != "chat",
         ))
     return specs

@@ -2047,10 +2047,12 @@ def test_ensure_spatial_eq_links_targets_physical_when_disabled(monkeypatch):
 
 def test_ensure_spatial_eq_links_moves_link_on_toggle(monkeypatch):
     """Toggling ON↔OFF moves the same EQ output link between HeSuVi and the
-    physical output (mock pw-link layer)."""
+    stereo downmix in front of the headset (mock pw-link layer)."""
     state = {"game": True}
     monkeypatch.setattr(_s2p_p3, "_spatial_enabled", lambda ch: state[ch])
     monkeypatch.setattr(_s2p_p3, "_get_physical_out_game", lambda: "alsa_output.test-headset")
+    monkeypatch.setattr("arctis_sound_manager.pw_utils.node_input_channel_count",
+                        lambda name, data=None: 2)
     # HeSuVi is loaded — otherwise the issue #100 fallback sends the ON legs to
     # the physical output too, and the toggle it is testing stops being visible.
     monkeypatch.setattr(
@@ -2069,9 +2071,50 @@ def test_ensure_spatial_eq_links_moves_link_on_toggle(monkeypatch):
     _s2p_p3.ensure_spatial_eq_links(("game",))            # ON again
     assert targets == [
         "effect_input.virtual-surround-7.1-hesuvi",
-        "alsa_output.test-headset",
+        "effect_input.sonar-game-downmix",
         "effect_input.virtual-surround-7.1-hesuvi",
     ]
+
+
+def _route(monkeypatch, spatial, dest_channels, downmix_up=True):
+    monkeypatch.setattr(_s2p_p3, "_spatial_enabled", lambda ch: spatial)
+    monkeypatch.setattr(_s2p_p3, "_get_physical_out_game", lambda: "alsa_output.dest")
+    monkeypatch.setattr("arctis_sound_manager.pw_utils.node_input_channel_count",
+                        lambda name, data=None: dest_channels)
+    monkeypatch.setattr(
+        "arctis_sound_manager.pw_utils.pw_node_exists",
+        lambda name, data=None: downmix_up or "downmix" not in name)
+    targets = []
+    monkeypatch.setattr("arctis_sound_manager.pw_utils.ensure_loopback_link",
+                        lambda playback, target, data=None: targets.append(target) or True)
+    _s2p_p3.ensure_spatial_eq_links(("game",), data=[])
+    return targets
+
+
+@pytest.mark.parametrize("spatial", [True, False])
+@pytest.mark.parametrize("dest_channels", [6, 8])
+def test_a_multichannel_destination_gets_the_channels_as_they_are(monkeypatch, spatial, dest_channels):
+    """A 5.1/7.1 receiver places the channels itself: no headphone render on
+    speakers, no downmix — Spatial Audio or not."""
+    assert _route(monkeypatch, spatial, dest_channels) == ["alsa_output.dest"]
+
+
+def test_spatial_off_on_stereo_goes_through_the_downmix(monkeypatch):
+    """The direct link only carries FL/FR: a 7.1 game would lose its centre."""
+    assert _route(monkeypatch, False, 2) == ["effect_input.sonar-game-downmix"]
+
+
+def test_spatial_off_falls_back_to_the_device_while_the_downmix_is_down(monkeypatch):
+    assert _route(monkeypatch, False, 2, downmix_up=False) == ["alsa_output.dest"]
+
+
+def test_hesuvi_conf_carries_the_stereo_downmix(monkeypatch):
+    monkeypatch.setattr(_s2p_p3, "_device_attached", lambda: True)
+    monkeypatch.setattr(_s2p_p3, "_get_physical_out_game", lambda: "alsa_output.dest")
+    conf = _s2p_p3.generate_hesuvi_conf(output_path=Path("/dev/null"))
+    assert 'node.name      = "effect_input.sonar-game-downmix"' in conf
+    assert '"Gain 2" = 0.7071' in conf          # centre at -3 dB
+    assert "dmLFE:Out" not in conf               # LFE left out (ITU-R BS.775)
 
 
 def test_ensure_spatial_eq_links_no_target_when_no_device(monkeypatch):
@@ -2196,6 +2239,10 @@ def test_ensure_physical_output_links_reuses_shared_pw_dump(monkeypatch):
         "arctis_sound_manager.pw_utils.ensure_loopback_link",
         lambda playback, target, data=None: seen_data.append(data) or True,
     )
+    # Only the downmix existence check reads `data` itself; a sentinel list
+    # is no pw-dump, so answer it here.
+    monkeypatch.setattr("arctis_sound_manager.pw_utils.pw_node_exists",
+                        lambda name, data=None: False)
     sentinel = ["sentinel-pw-dump"]
     _s2p_p3.ensure_physical_output_links(data=sentinel)
     # chat, game HeSuVi, and media's own HeSuVi chain (#169).

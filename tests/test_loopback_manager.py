@@ -1186,3 +1186,17 @@ class TestOrphanReaping:
             mgr.restart_dead()
 
         mock_kill.assert_any_call(orphan_pid, signal.SIGTERM)
+
+
+def test_sonar_game_media_aux_take_7_1_and_chat_stays_stereo():
+    """A game's real centre and surrounds reach the 8-channel EQ instead of a
+    stereo mix; Chat's EQ and simple mode's direct links are stereo."""
+    from arctis_sound_manager.loopback_manager import _build_pw_loopback_argv, make_specs
+    sonar = {s.channel: s for s in make_specs(True, "alsa.game", "alsa.chat", aux=True)}
+    assert {c: s.surround for c, s in sonar.items()} == {
+        "game": True, "chat": False, "media": True, "aux": True}
+    argv = " ".join(_build_pw_loopback_argv(sonar["game"]))
+    assert argv.count("audio.channels=8") == 2
+    assert "audio.position=[FL FR FC LFE RL RR SL SR]" in argv
+    assert " ".join(_build_pw_loopback_argv(sonar["chat"])).count("audio.channels=2") == 2
+    assert not any(s.surround for s in make_specs(False, "alsa.game", "alsa.chat"))

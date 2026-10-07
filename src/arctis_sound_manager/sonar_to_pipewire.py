@@ -311,7 +311,11 @@ def _conf_has_bare_ladspa(content: str) -> bool:
 # 5: the boost stage carries the curve's headroom (largest positive band
 #    gain), so a conf baked before it lets a hot source drive the HeSuVi
 #    limiter flat out. Regenerated from saved state on the next start.
-_CONF_VERSION = 5
+# 6: Game/Media/Aux take real 7.1 now, so the HeSuVi conf gained a second
+#    module: the channel's stereo downmix (see _downmix_module), which the
+#    Spatial-off path uses for a stereo destination instead of dropping
+#    every channel but FL/FR.
+_CONF_VERSION = 6
 
 _CONF_VERSION_RE = re.compile(r"^\s*#\s*ASM-CONF-VERSION:\s*(\d+)\s*$", re.MULTILINE)
 
@@ -498,6 +502,24 @@ def _hesuvi_input_node(channel: str) -> str:
 def _hesuvi_output_node(channel: str) -> str:
     """The ``playback.props`` node.name — links OUT to the physical output."""
     return f"effect_output.virtual-surround-7.1-hesuvi{_hesuvi_suffix(channel)}"
+
+
+def _downmix_input_node(channel: str) -> str:
+    """The 7.1 → stereo downmix *channel*'s EQ links into with Spatial off."""
+    return f"effect_input.sonar-{channel}-downmix"
+
+
+def _downmix_output_node(channel: str) -> str:
+    return f"effect_output.sonar-{channel}-downmix"
+
+
+# ITU-R BS.775 stereo downmix: centre and surrounds at -3 dB into their side,
+# LFE left out. A stereo source only ever fills FL/FR, so it comes out
+# untouched — this only changes anything for real multichannel content.
+_DOWNMIX_GAINS = {
+    "L": (("FL", 1.0), ("FC", 0.7071), ("SL", 0.7071), ("RL", 0.7071)),
+    "R": (("FR", 1.0), ("FC", 0.7071), ("SR", 0.7071), ("RR", 0.7071)),
+}
 
 
 # Bundled HRIR profile used when the user has not picked one, so the HeSuVi
@@ -3775,7 +3797,8 @@ def ensure_spatial_eq_links(
         # spelling it as a two-way choice sent Aux into Media's chain — which
         # is exactly the bleed between channels #169 set out to stop.
         surround_node = _hesuvi_input_node(channel)
-        target = surround_node if enabled else channel_destination(channel, data)
+        destination = channel_destination(channel, data)
+        target, enabled = _spatial_eq_target(channel, enabled, destination, data)
         if enabled and not pw_node_exists(surround_node, data):
             # HeSuVi is not in the graph. If its HRIR WAV is missing the
             # convolver can never load and the node will never appear —
@@ -3803,6 +3826,33 @@ def ensure_spatial_eq_links(
         playback_name = f"effect_output.sonar-{channel}-eq"
         results[channel] = ensure_loopback_link(playback_name, target, data=data)
     return results
+
+
+def _spatial_eq_target(
+    channel: str, spatial: bool, destination: str, data: list | None,
+) -> tuple[str, bool]:
+    """Where *channel*'s 7.1 EQ output goes, and whether that is HeSuVi.
+
+    - a multichannel destination (5.1/7.1 receiver, TV) gets the channels as
+      they are, Spatial Audio or not: a headphone render is wrong on speakers,
+      and that device can place them itself;
+    - otherwise Spatial Audio on goes through HeSuVi;
+    - otherwise the stereo downmix, so a 7.1 source does not lose its centre
+      and surrounds — the direct link only carries FL/FR. Straight to the
+      destination while the downmix is not up (filter-chain restarting), like
+      HeSuVi's own fallback: FL/FR still play.
+    """
+    from arctis_sound_manager.pw_utils import node_input_channel_count, pw_node_exists
+
+    channels = node_input_channel_count(destination, data) if destination else None
+    if channels is not None and channels > 2:
+        return destination, False
+    if spatial:
+        return _hesuvi_input_node(channel), True
+    downmix = _downmix_input_node(channel)
+    if destination and pw_node_exists(downmix, data):
+        return downmix, False
+    return destination, False
 
 
 _HESUVI_OUTPUT_NAME = "effect_output.virtual-surround-7.1-hesuvi"
@@ -4006,7 +4056,7 @@ def ensure_physical_output_links(
     """
     import time
 
-    from arctis_sound_manager.pw_utils import ensure_loopback_link
+    from arctis_sound_manager.pw_utils import ensure_loopback_link, pw_node_exists
 
     global _output_absent_since
 
@@ -4034,6 +4084,11 @@ def ensure_physical_output_links(
         # no separate existence check is needed here.
         _key = "hesuvi" if _ch == "game" else "hesuvi_media"
         results[_key] = ensure_loopback_link(_hes_node, _dest, data=data)
+        # The stereo downmix lives in the same conf and reaches the same
+        # device. Not reported: idle unless Spatial is off on a stereo device,
+        # and absent until the conf has been regenerated with it.
+        if pw_node_exists(_downmix_output_node(_ch), data):
+            ensure_loopback_link(_downmix_output_node(_ch), _dest, data=data)
 
     # The Output channel's last hop (EQ → external sink: HDMI, TV, speakers)
     # was owned by nobody at all. Unlike chat/game/media it is not covered by
@@ -4263,6 +4318,63 @@ _HESUVI_CONV_MIX_LINKS = [
     ("convLFE_R", "mixR", 8), ("convLFE_L", "mixL", 8),
 ]
 
+
+
+def _downmix_module(channel: str, destination: str) -> str:
+    """A filter-chain module folding *channel*'s 7.1 into stereo.
+
+    Lives in the channel's HeSuVi conf so it is created, restarted and kept
+    current with the chain it stands in for. ensure_spatial_eq_links sends the
+    EQ here when Spatial Audio is off and the destination is stereo; a
+    multichannel destination gets the 7.1 as it is.
+    """
+    I = "                    "  # noqa: E741 — indentation constant
+    nodes = [f'{I}{{ type = builtin  label = copy  name = dm{ch} }}' for ch in _HESUVI_CHANNELS]
+    links = []
+    for side, sources in _DOWNMIX_GAINS.items():
+        gains = "  ".join(f'"Gain {i}" = {g}' for i, (_, g) in enumerate(sources, start=1))
+        nodes.append(f'{I}{{ type = builtin  label = mixer  name = dmix{side}  control = {{ {gains} }} }}')
+        links += [f'{I}{{ output = "dm{ch}:Out"  input = "dmix{side}:In {i}" }}'
+                  for i, (ch, _) in enumerate(sources, start=1)]
+    inputs = " ".join(f'"dm{ch}:In"' for ch in _HESUVI_CHANNELS)
+    nodes_text = "\n".join(nodes)
+    links_text = "\n".join(links)
+    return f"""\
+  {{ name = libpipewire-module-filter-chain
+    flags = [ nofail ]
+    args = {{
+      node.description = "Stereo downmix ({channel.capitalize()})"
+      media.name       = "Stereo downmix ({channel.capitalize()})"
+      filter.graph = {{
+        nodes = [
+{nodes_text}
+        ]
+        links = [
+{links_text}
+        ]
+        inputs  = [ {inputs} ]
+        outputs = [ "dmixL:Out" "dmixR:Out" ]
+      }}
+      capture.props = {{
+        node.name      = "{_downmix_input_node(channel)}"
+        media.class    = Audio/Sink/Internal
+        audio.channels = 8
+        audio.position = [ FL FR FC LFE RL RR SL SR ]
+      }}
+      playback.props = {{
+        node.name          = "{_downmix_output_node(channel)}"
+        node.target        = "{destination}"
+        target.object      = "{destination}"
+        node.dont-fallback = true
+        node.linger        = true
+        node.autoconnect   = false
+        node.pause-on-idle = false
+        audio.channels     = 2
+        audio.position     = [ FL FR ]
+      }}
+    }}
+  }}
+"""
 
 
 def generate_hesuvi_conf(
@@ -4551,7 +4663,7 @@ context.modules = [
       }}
     }}
   }}
-]
+{_downmix_module(channel, _hes_dest)}]
 """
 
     _write_conf(output_path, text)
