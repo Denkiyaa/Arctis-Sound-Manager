@@ -754,13 +754,18 @@ _CONF_DIR = Path.home() / ".config" / "pipewire" / "filter-chain.conf.d"
 #
 # SC4M ports: RMS/peak, Attack (ms), Release (ms), Threshold (dB),
 #             Ratio (1:n), Knee (dB), Makeup (dB)
+#
+# Thresholds are Sonar's loudness targets (RenderSettings.
+# LoudnessTypeToLoudnessLevel: Soft -27, Balanced -18, Extreme -9 dB, sent as
+# Compressor1ThresholdDB). Ratio, knee, attack and release stay ours: Sonar's
+# live in its native DSP, which cannot be read.
 
 _SMART_PRESETS: dict[str, dict] = {
-    "quiet":    {"threshold": -30.0, "ratio": 6.0, "makeup": 4.0,
+    "quiet":    {"threshold": -27.0, "ratio": 6.0, "makeup": 4.0,
                  "attack": 5.0,  "release": 200.0, "knee": 8.0},
-    "balanced": {"threshold": -20.0, "ratio": 4.0, "makeup": 8.0,
+    "balanced": {"threshold": -18.0, "ratio": 4.0, "makeup": 8.0,
                  "attack": 10.0, "release": 200.0, "knee": 6.0},
-    "loud":     {"threshold": -12.0, "ratio": 3.0, "makeup": 12.0,
+    "loud":     {"threshold": -9.0,  "ratio": 3.0, "makeup": 12.0,
                  "attack": 15.0, "release": 300.0, "knee": 4.0},
 }
 

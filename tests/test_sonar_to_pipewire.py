@@ -4201,3 +4201,10 @@ def test_curve_draws_every_sonar_filter_type():
     assert notch[0] < -40
     peak_q = _biquad_response(EqBand(freq=1000, gain=0.0, q=4.0, type="bandPassPeakQ"), [1000])
     assert abs(peak_q[0] - 20 * __import__("math").log10(4.0)) < 0.05
+
+
+def test_smart_volume_targets_sonars_loudness_levels():
+    """RenderSettings.LoudnessTypeToLoudnessLevel: Soft -27, Balanced -18,
+    Extreme -9 dB."""
+    assert {m: p["threshold"] for m, p in _s2p._SMART_PRESETS.items()} == {
+        "quiet": -27.0, "balanced": -18.0, "loud": -9.0}
