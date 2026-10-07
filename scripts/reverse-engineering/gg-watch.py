@@ -9,10 +9,12 @@ What it does when a new version appears:
      the encrypted device specs, and Sonar's db-migrations;
   2. recovers the descriptor passphrase from SteelSeriesEngine.exe and
      decrypts the Arctis specs (recover-key.py + decode-arctis-specs.sh,
-     both already here);
+     both already here), then disassembles the engine builtins those specs
+     call and SSEdevice.dll's HID transport (gg-disasm.py);
   3. compares against the previous version using fingerprint index:
        * new .edevice files            → new hardware
        * changed Arctis .device files  → protocol changes worth reading
+       * changed builtins / transport  → GG now builds or sends bytes differently
        * presets in the catalogue that ASM does not ship
   4. acts:
        * presets  → writes the JSON into ASM, commits to main (the branch
@@ -113,7 +115,8 @@ def load_state() -> dict:
 
 def save_state(version: str, edevice_files: list[str], spec_hashes: dict[str, str],
                presets_added: list[str], new_files: list[str],
-               changed_specs: list[str], issue: str | None) -> None:
+               changed_specs: list[str], issue: str | None,
+               disasm_fingerprints: dict[str, str], changed_code: list[str]) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps({
         "version": version,
@@ -123,6 +126,8 @@ def save_state(version: str, edevice_files: list[str], spec_hashes: dict[str, st
         "presets_added": presets_added,
         "new_files": new_files,
         "changed_specs": changed_specs,
+        "disasm_fingerprints": dict(sorted(disasm_fingerprints.items())),
+        "changed_code": changed_code,
         "issue": issue,
     }, indent=2, ensure_ascii=False) + "\n")
 
@@ -173,6 +178,7 @@ def extract(installer: Path, version: str) -> Path:
     run(["7z", "x", "-y", f"-o{root}", str(installer),
          "apps/engine/deviceSpecifications/*",
          "apps/engine/SteelSeriesEngine.exe",
+         "apps/engine/SSEdevice.dll",
          "apps/sonar/db-migrations/*"])
     return root
 
@@ -194,6 +200,35 @@ def decode(root: Path, version: str) -> Path:
     run([str(Path(__file__).parent / "decode-arctis-specs.sh"),
          str(root / "apps/engine/deviceSpecifications"), str(key), str(out)])
     return out
+
+
+def disassemble(root: Path, decoded: Path, version: str) -> Path | None:
+    """Disassemble the GG code the specs lean on (see gg-disasm.py)."""
+    out = GG_WORKDIR / f"disasm-{version}"
+    if (out / "fingerprints.json").is_file():
+        log(f"  already disassembled into {out.name}")
+        return out
+    log("  disassembling the engine builtins and the HID transport …")
+    try:
+        run([sys.executable, str(Path(__file__).parent / "gg-disasm.py"),
+             str(root / "apps/engine/SteelSeriesEngine.exe"),
+             str(root / "apps/engine/SSEdevice.dll"), str(decoded), str(out)])
+    except (subprocess.CalledProcessError, OSError) as e:
+        # A layout change in GG must not cost the presets and the spec diff.
+        log(f"  disassembly failed, skipped: {e}")
+        return None
+    return out
+
+
+def changed_disassembly(disasm: Path | None, state: dict) -> list[str]:
+    """Builtins / transport code whose fingerprint moved since last version."""
+    if disasm is None:
+        return []
+    old = state.get("disasm_fingerprints", {})
+    new = json.loads((disasm / "fingerprints.json").read_text())
+    if not old:
+        return []
+    return sorted(n for n, h in new.items() if old.get(n) != h)
 
 
 # ── comparison (against state, not disk) ─────────────────────────────────────
@@ -398,8 +433,9 @@ def add_presets(new: dict[str, dict], version: str) -> list[str]:
     return written
 
 
-def push_specs_to_research_repo(decoded: Path, version: str) -> bool:
-    """Mirror this version's decrypted specs into the private research repo.
+def push_specs_to_research_repo(decoded: Path, disasm: Path | None, version: str) -> bool:
+    """Mirror this version's decrypted specs and disassembly into the private
+    research repo.
 
     Separate destination from ASM's own repo on purpose (see the module
     docstring: nothing SteelSeries ships reaches *this* repository) —
@@ -423,29 +459,32 @@ def push_specs_to_research_repo(decoded: Path, version: str) -> bool:
     url = f"https://x-access-token:{token}@github.com/{RESEARCH_REPO}.git"
     run(["git", "clone", "--depth", "1", url, str(clone_dir)])
 
-    dest = clone_dir / f"decoded-{version}"
-    if dest.is_dir():
-        shutil.rmtree(dest)
-    shutil.copytree(decoded, dest)
+    trees = [decoded] + ([disasm] if disasm else [])
+    for tree in trees:
+        dest = clone_dir / tree.name
+        if dest.is_dir():
+            shutil.rmtree(dest)
+        shutil.copytree(tree, dest)
 
     git = ["git", "-C", str(clone_dir)]
     run(git + ["config", "user.name", "github-actions[bot]"])
     run(git + ["config", "user.email", "github-actions[bot]@users.noreply.github.com"])
-    run(git + ["add", f"decoded-{version}"])
+    run(git + ["add"] + [tree.name for tree in trees])
     status = subprocess.run(git + ["status", "--porcelain"],
                              text=True, capture_output=True).stdout
     if not status.strip():
         log(f"  {RESEARCH_REPO} already has decoded-{version} — nothing to push")
         return False
-    run(git + ["commit", "-m", f"feat: add decoded Arctis specs for GG {version}\n\n"
+    run(git + ["commit", "-m", f"feat: add decoded Arctis specs and disassembly for GG {version}\n\n"
                "Automated by ASM's gg-watch (scripts/reverse-engineering/gg-watch.py)."])
     run(git + ["push", "origin", "HEAD"])
     log(f"  decoded-{version} pushed to {RESEARCH_REPO}")
     return True
 
 
-def open_issue(version: str, new_files: list[str], changed: list[str]) -> str | None:
-    if not new_files and not changed:
+def open_issue(version: str, new_files: list[str], changed: list[str],
+               changed_code: list[str]) -> str | None:
+    if not new_files and not changed and not changed_code:
         return None
     title = f"SteelSeries GG {version}: device specs changed"
     existing = subprocess.run(
@@ -473,6 +512,12 @@ def open_issue(version: str, new_files: list[str], changed: list[str]) -> str | 
         lines += ["", "Worth diffing against the previous version: these carry "
                   "opcodes, status layouts and screen geometry. A change here can "
                   "mean a new capability — or that one of ours moved.", ""]
+    if changed_code:
+        lines += [f"### Changed GG code the specs rely on ({len(changed_code)})", ""]
+        lines += [f"- `{f}`" for f in changed_code]
+        lines += ["", "The engine builtins (frame packing, conversions) or the HID "
+                  "transport in SSEdevice.dll changed. Diff `disasm-<version>/` "
+                  "in the research repo: ASM copies what these do.", ""]
     lines += ["<sub>Opened by the GG watcher. Decrypted specs are not attached: "
               "they are SteelSeries' material and stay off this repository.</sub>"]
 
@@ -510,20 +555,23 @@ def main() -> int:
     log(f"new version: {known} → {version}")
     root = extract(fetch(version, url), version)
     decoded = decode(root, version)
-    push_specs_to_research_repo(decoded, version)
+    disasm = disassemble(root, decoded, version)
+    push_specs_to_research_repo(decoded, disasm, version)
 
     edevice_files, spec_hashes = build_index(root, decoded)
     new_files, changed = compare_to_state(edevice_files, spec_hashes, state)
     presets = missing_presets(root)
+    changed_code = changed_disassembly(disasm, state)
 
     log(f"  new device files : {len(new_files)}")
     log(f"  changed specs    : {len(changed)}")
     log(f"  missing presets  : {len(presets)}")
+    log(f"  changed GG code  : {len(changed_code)}")
 
     written = add_presets(presets, version) if presets else []
     for n in written:
         log(f"    + {n}")
-    issue = open_issue(version, new_files, changed)
+    issue = open_issue(version, new_files, changed, changed_code)
     if issue:
         log(f"  issue: {issue}")
 
@@ -531,7 +579,10 @@ def main() -> int:
         log("[dry-run] state not written")
         return 0
 
-    save_state(version, edevice_files, spec_hashes, written, new_files, changed, issue)
+    fingerprints = (json.loads((disasm / "fingerprints.json").read_text())
+                    if disasm else state.get("disasm_fingerprints", {}))
+    save_state(version, edevice_files, spec_hashes, written, new_files, changed, issue,
+               fingerprints, changed_code)
     commit_state()
     log("done.")
     return 0

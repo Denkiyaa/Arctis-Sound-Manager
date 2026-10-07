@@ -45,4 +45,26 @@ for encrypted in "$SPECS_DIR"/arctis*.edevice \
     fi
 done
 
+# A headset spec can include a file outside those names — the Arctis Pro
+# Wireless takes its screen and battery from "siberia-840". Follow the
+# includes until every file they name is decoded too.
+while true; do
+    missing="$(grep -ohE '\(include "[^"]+"\)' "$OUT_DIR"/*.device \
+        | sed -E 's/\(include "([^"]+)"\)/\1/' | sort -u \
+        | while read -r name; do
+            [[ -f "$OUT_DIR/$name.device" || ! -f "$SPECS_DIR/$name.edevice" ]] || echo "$name"
+        done)"
+    [[ -n "$missing" ]] || break
+    while read -r name; do
+        if decode_one "$SPECS_DIR/$name.edevice" "$OUT_DIR/$name.device"; then
+            decoded=$((decoded + 1))
+        else
+            failed=$((failed + 1))
+            printf 'failed: %s\n' "$name" >&2
+            # Leave an empty file so a failed include is not retried forever.
+            : > "$OUT_DIR/$name.device"
+        fi
+    done <<< "$missing"
+done
+
 printf 'decoded=%d failed=%d\n' "$decoded" "$failed"

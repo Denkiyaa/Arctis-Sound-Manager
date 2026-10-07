@@ -5,7 +5,8 @@ name: SteelSeries GG watcher
 # Watch for new SteelSeries GG releases and act on what changed:
 #   - new Sonar presets → commit to main (preset_sync reads from main)
 #   - new device files or changed Arctis specs → open an issue
-#   - decoded specs, regardless → mirrored to the private
+#   - changed GG builtins / HID transport (gg-disasm.py) → issue
+#   - decoded specs and disassembly, regardless → mirrored to the private
 #     loteran/steelseries-research repo (RESEARCH_REPO_TOKEN secret; skipped
 #     if unset), never to this repo
 #
@@ -49,8 +50,10 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Install 7z
-        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+      - name: Install 7z and the disassembler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full python3-capstone python3-pefile
 
       - name: Configure git identity
         run: |
