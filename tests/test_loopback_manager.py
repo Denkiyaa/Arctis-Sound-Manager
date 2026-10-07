@@ -1200,3 +1200,19 @@ def test_sonar_game_media_aux_take_7_1_and_chat_stays_stereo():
     assert "audio.position=[FL FR FC LFE RL RR SL SR]" in argv
     assert " ".join(_build_pw_loopback_argv(sonar["chat"])).count("audio.channels=2") == 2
     assert not any(s.surround for s in make_specs(False, "alsa.game", "alsa.chat"))
+
+
+def test_a_5_1_receiver_gets_the_surround_pair_it_lacks_folded_in():
+    """7.1 → a 5.1 receiver that names its surrounds RL/RR (or SL/SR): the
+    other pair is summed into them instead of dropped."""
+    from arctis_sound_manager.pw_utils import _resolve_channel_pairs
+    src = {c: i for i, c in enumerate("FL FR FC LFE RL RR SL SR".split())}
+    rear = {c: 100 + i for i, c in enumerate("FL FR FC LFE RL RR".split())}
+    side = {c: 200 + i for i, c in enumerate("FL FR FC LFE SL SR".split())}
+    assert sorted(_resolve_channel_pairs(src, rear)) == sorted(
+        [(0, 100), (1, 101), (2, 102), (3, 103), (4, 104), (5, 105), (6, 104), (7, 105)])
+    assert sorted(_resolve_channel_pairs(src, side)) == sorted(
+        [(0, 200), (1, 201), (2, 202), (3, 203), (6, 204), (7, 205), (4, 204), (5, 205)])
+    # Stereo and full 7.1 targets are unchanged.
+    assert len(_resolve_channel_pairs(src, {"FL": 1, "FR": 2})) == 2
+    assert len(_resolve_channel_pairs(src, {c: 300 + i for i, c in enumerate(src)})) == 8

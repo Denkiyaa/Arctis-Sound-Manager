@@ -311,6 +311,7 @@ def _set_active_preset(channel: str, name: str) -> None:
 _SPATIAL_FILE = _CFG / "sonar_spatial_audio.json"
 _SPATIAL_DEFAULTS: dict = {
     "enabled": True,
+    "auto": False,           # surround sources only (5.1/7.1); off = Sonar's way
     "mode": "headphones",    # "headphones" | "speakers"
     "immersion": 50,         # 0–100, pending USB
     "distance": 50,          # 0–100, pending USB
@@ -2123,6 +2124,12 @@ class SpatialAudioWidget(QWidget):
         detail_layout.setContentsMargins(0, 0, 0, 0)
         detail_layout.setSpacing(12)
 
+        self._auto_cb = QCheckBox(_t("spatial_auto"))
+        self._auto_cb.setToolTip(_t("spatial_auto_hint"))
+        self._auto_cb.setChecked(bool(self._state.get("auto", False)))
+        self._auto_cb.toggled.connect(self._on_auto)
+        detail_layout.addWidget(self._auto_cb)
+
         # Immersion slider
         detail_layout.addWidget(self._slider_row("Performance / Immersion", "immersion"))
 
@@ -2181,6 +2188,11 @@ class SpatialAudioWidget(QWidget):
         self._detail.setVisible(enabled)
         self.state_changed.emit()
 
+    def _on_auto(self, checked: bool) -> None:
+        self._state["auto"] = checked
+        _save_spatial_audio(self._state, self._channel)
+        self.state_changed.emit()
+
     def _on_slider(self, key: str, value: int):
         self._state[key] = value
         _save_spatial_audio(self._state, self._channel)
@@ -2216,6 +2228,9 @@ class SpatialAudioWidget(QWidget):
         self._toggle.setChecked(self._state.get("enabled", False))
         self._toggle.blockSignals(False)
         self._detail.setVisible(self._state.get("enabled", False))
+        self._auto_cb.blockSignals(True)
+        self._auto_cb.setChecked(bool(self._state.get("auto", False)))
+        self._auto_cb.blockSignals(False)
         for key in ("immersion", "distance"):
             slider = self.__dict__.get(f"_slider_{key}")
             lbl = self.__dict__.get(f"_val_lbl_{key}")

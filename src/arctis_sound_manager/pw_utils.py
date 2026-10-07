@@ -1205,6 +1205,32 @@ def node_input_channel_count(name: str, data: list | None = None) -> int | None:
     return len(_node_ports(data, node_id, "in")) or None
 
 
+def sink_has_multichannel_stream(sink_name: str, data: list | None = None) -> bool:
+    """True when something plays 5.1 or more into the sink *sink_name*.
+
+    Read from each stream's negotiated Format, not its ports: a stream linked
+    into a 7.1 sink shows 8 ports even when it carries stereo.
+    """
+    if data is None:
+        data = _pw_dump()
+    sink_id = _resolve_unique_node_id(_index_nodes_by_name(data), sink_name,
+                                      "sink_has_multichannel_stream")
+    if sink_id is None:
+        return False
+    sources = {
+        obj["info"].get("output-node-id") for obj in data
+        if obj.get("type", "").endswith("Link")
+        and (obj.get("info") or {}).get("input-node-id") == sink_id
+    }
+    for obj in data:
+        if obj.get("id") not in sources:
+            continue
+        for fmt in ((obj.get("info") or {}).get("params") or {}).get("Format") or []:
+            if isinstance(fmt, dict) and (fmt.get("channels") or 0) > 2:
+                return True
+    return False
+
+
 # Canonical channel ordering used by the positional fallback below. Only the
 # relative order matters (not the exact set of names PipeWire may ever emit).
 _CANONICAL_CHANNEL_ORDER = ("FL", "FR", "FC", "LFE", "RL", "RR", "SL", "SR", "RC", "MONO")
@@ -1257,6 +1283,9 @@ def _channel_sort_key(channel: str) -> tuple:
     return (2, 0, channel)
 
 
+_SURROUND_FOLD = {"SL": "RL", "SR": "RR", "RL": "SL", "RR": "SR"}
+
+
 def _resolve_channel_pairs(
     out_ports: dict[str, int], in_ports: dict[str, int],
 ) -> list[tuple[int, int]]:
@@ -1280,7 +1309,15 @@ def _resolve_channel_pairs(
 
     common = [channel for channel in out_ports if channel in in_ports]
     if common:
-        return [(out_ports[channel], in_ports[channel]) for channel in common]
+        pairs = [(out_ports[channel], in_ports[channel]) for channel in common]
+        # A 5.1 receiver has one surround pair, named either side or rear;
+        # 7.1 has both. The pair it lacks folds into the pair it has (two
+        # links into one input port sum), as a 7.1 → 5.1 downmix does,
+        # rather than being dropped.
+        for channel, partner in _SURROUND_FOLD.items():
+            if channel in out_ports and channel not in in_ports and partner in in_ports:
+                pairs.append((out_ports[channel], in_ports[partner]))
+        return pairs
 
     # No shared channel name — positional fallback (issue #129).
     src = [out_ports[channel] for channel in sorted(out_ports, key=_channel_sort_key)]

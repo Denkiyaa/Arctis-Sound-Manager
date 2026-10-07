@@ -4255,3 +4255,51 @@ def test_smart_volume_targets_sonars_loudness_levels():
     Extreme -9 dB."""
     assert {m: p["threshold"] for m, p in _s2p._SMART_PRESETS.items()} == {
         "quiet": -27.0, "balanced": -18.0, "loud": -9.0}
+
+
+# ── Spatial Audio auto: virtual surround for 5.1/7.1 sources only ──────────
+
+def _sink_dump(stream_formats):
+    """A pw-dump with Arctis_Game and one stream per Format channel count. A
+    stream into a 7.1 sink shows 8 ports whatever it carries: only its
+    negotiated Format tells stereo from surround."""
+    dump = [{"id": 10, "type": "PipeWire:Interface:Node",
+             "info": {"props": {"node.name": "Arctis_Game"}}}]
+    for i, channels in enumerate(stream_formats):
+        dump.append({"id": 20 + i, "type": "PipeWire:Interface:Node",
+                     "info": {"props": {"node.name": f"stream{i}"},
+                              "params": {"Format": [{"channels": channels}]}}})
+        dump.append({"id": 40 + i, "type": "PipeWire:Interface:Link",
+                     "info": {"output-node-id": 20 + i, "input-node-id": 10}})
+    return dump
+
+
+@pytest.mark.parametrize("formats, expected", [
+    ([], False), ([2], False), ([2, 2], False), ([8], True), ([2, 6], True)])
+def test_a_surround_stream_is_told_from_stereo_by_its_format(formats, expected):
+    from arctis_sound_manager.pw_utils import sink_has_multichannel_stream
+    assert sink_has_multichannel_stream("Arctis_Game", _sink_dump(formats)) is expected
+
+
+@pytest.mark.parametrize("formats, target", [
+    ([2], "effect_input.sonar-game-downmix"),
+    ([8], "effect_input.virtual-surround-7.1-hesuvi"),
+])
+def test_spatial_auto_spatialises_surround_sources_only(monkeypatch, formats, target):
+    monkeypatch.setattr(_s2p_p3, "_spatial_enabled", lambda ch: True)
+    monkeypatch.setattr(_s2p_p3, "_spatial_auto", lambda ch: True)
+    monkeypatch.setattr(_s2p_p3, "_get_physical_out_game", lambda: "alsa_output.dest")
+    monkeypatch.setattr("arctis_sound_manager.pw_utils.node_input_channel_count",
+                        lambda name, data=None: 2)
+    monkeypatch.setattr("arctis_sound_manager.pw_utils.pw_node_exists",
+                        lambda name, data=None: True)
+    targets = []
+    monkeypatch.setattr("arctis_sound_manager.pw_utils.ensure_loopback_link",
+                        lambda playback, target, data=None: targets.append(target) or True)
+    _s2p_p3.ensure_spatial_eq_links(("game",), data=_sink_dump(formats))
+    assert targets == [target]
+
+
+def test_spatial_auto_is_off_by_default_like_sonar(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert _s2p_p3._spatial_auto("game") is False

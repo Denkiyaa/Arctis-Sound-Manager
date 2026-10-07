@@ -3686,6 +3686,21 @@ def ensure_sonar_eq_configs() -> bool:
 
 # ── Phase 3 — Spatial Audio toggle without a filter-chain restart (#100/#88) ──
 
+def _spatial_auto(channel: str) -> bool:
+    """Whether *channel*'s Spatial Audio only applies to surround sources.
+
+    Off by default, which is Sonar's behaviour: virtual surround on whatever
+    plays, stereo included. Same file as :func:`_spatial_enabled`.
+    """
+    suffix = "" if channel == "game" else f"_{channel}"
+    path = Path.home() / ".config" / "arctis_manager" / f"sonar_spatial_audio{suffix}.json"
+    try:
+        import json as _json
+        return bool((_json.loads(path.read_text()) if path.exists() else {}).get("auto", False))
+    except Exception:
+        return False
+
+
 def _spatial_enabled(channel: str) -> bool:
     """Read whether Spatial Audio is currently enabled for *channel*.
 
@@ -3777,7 +3792,8 @@ def ensure_spatial_eq_links(
         its target is not yet up (filter-chain starting/restarting, or no
         device attached) — treat as "retry later", not an error.
     """
-    from arctis_sound_manager.pw_utils import ensure_loopback_link, pw_node_exists
+    from arctis_sound_manager.pw_utils import (ensure_loopback_link, pw_node_exists,
+                                               sink_has_multichannel_stream)
 
     # None means "whatever carries a spatial chain right now", which is what
     # every caller wanted — spelling it as a default argument would freeze the
@@ -3790,6 +3806,12 @@ def ensure_spatial_eq_links(
         if channel not in spatial_channels():
             continue
         enabled = _spatial_enabled(channel)
+        if enabled and _spatial_auto(channel):
+            # Virtual surround for 5.1/7.1 sources only: stereo (music, a game
+            # already rendering for headphones) plays as it is. Re-evaluated
+            # every watchdog tick, and moving this link restarts nothing.
+            enabled = sink_has_multichannel_stream(
+                f"Arctis_{channel.capitalize()}", data)
         # Each channel links to its OWN HeSuVi chain (issue #169): Game keeps the
         # historical un-suffixed node, Media routes to effect_input.…-hesuvi-media,
         # so their independent Immersion/Distance never bleed into each other.
