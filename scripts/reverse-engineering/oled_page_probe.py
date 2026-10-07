@@ -12,7 +12,9 @@ utils.defConvertToColumnPackedByteFormat, whose disassembly (GG 118) reads:
 i.e. 8-row pages left to right, then top to bottom — and a capture of GG on
 the AIDA64 forum (topic 8288) shows the same frame. What is left to check is
 how the frame must be sent: the geometry probe drew different things on each
-run, so the transport is suspect too. This draws one test picture (border,
+run, so the transport is suspect too. GG's SSEdevice.dll empties the input
+queue before every report and paces reports time-between-commands apart;
+this does the same. This draws one test picture (border,
 filled block top-left, a big digit) four ways:
 
   1. as GG does: take the screen (0xD0, 0xD1), then the frame
@@ -102,7 +104,22 @@ def report(header: list[int], body: bytes, size: int) -> list[int]:
     return (payload + [0] * size)[:size]
 
 
+_in_endpoint = None
+
+
+def drain(dev) -> None:
+    """Read and drop pending input reports, as GG does before every report."""
+    if _in_endpoint is None:
+        return
+    for _ in range(64):
+        try:
+            dev.read(_in_endpoint, 512, timeout=10)
+        except usb.core.USBError:
+            return
+
+
 def send(dev, packet: list[int], control: bool = False) -> None:
+    drain(dev)
     bm = usb.util.build_request_type(
         direction=usb.util.CTRL_OUT,
         type=usb.util.CTRL_TYPE_CLASS,
@@ -175,6 +192,11 @@ def main() -> None:
             dev.detach_kernel_driver(INTERFACE)
             reattach = True
         usb.util.claim_interface(dev, INTERFACE)
+        global _in_endpoint
+        intf = dev.get_active_configuration()[(INTERFACE, 0)]
+        _in_endpoint = next((ep.bEndpointAddress for ep in intf
+                             if usb.util.endpoint_direction(ep.bEndpointAddress)
+                             == usb.util.ENDPOINT_IN), None)
     except usb.core.USBError as e:
         sys.exit(f"Cannot take interface {INTERFACE}: {e}\n"
                  "Is the ASM daemon still running? Stop it first (see the top of this file).")
