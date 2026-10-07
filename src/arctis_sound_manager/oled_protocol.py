@@ -51,8 +51,8 @@ class OledProtocol:
             min_brightness: lowest level the firmware accepts; the Elite
                        family's range is 1-10, so 0 cannot darken it.
             transpose: the controller addresses the panel rotated 90°
-                       (Arctis Pro GameDAC: a 128x52 panel drawn as 52
-                       columns of 128 rows).
+                       (Arctis Pro GameDAC: a 128x52 panel drawn as 128
+                       rows of 52 pixels, bottom pixel first).
         """
         self.report_id = report_id
         self.DISPLAY_WIDTH = width
@@ -78,7 +78,10 @@ class OledProtocol:
         self, pixel_data: bytes, width: int, height: int
     ) -> list[list[int]]:
         if self.transpose:
-            pixel_data, width, height = self._transpose(pixel_data, width, height)
+            # One frame, header in the controller's axes (width = panel height).
+            header = [self.report_id, self.CMD_SCREEN, 0, 0, height, width]
+            body = self._row_major_msb_to_rotated_lsb(pixel_data, width, height)
+            return [self._build_packet(header, body)]
         padded_height = self._pad_height(height)
         packets: list[list[int]] = []
 
@@ -124,19 +127,22 @@ class OledProtocol:
         )
 
     @staticmethod
-    def _transpose(
+    def _row_major_msb_to_rotated_lsb(
         pixel_data: bytes, width: int, height: int
-    ) -> tuple[bytes, int, int]:
-        """Swap axes of a row-major MSB-first 1-bpp image: pixel (x, y) → (y, x)."""
+    ) -> list[int]:
+        """GG's convert-to-column-packed-byte-format-with-LSB, read from its
+        disassembly (GG 121): panel column x is a run of whole bytes, bottom
+        pixel in bit 0 — bit x * padded_height + (height - 1 - y)."""
         src_stride = (width + 7) // 8
-        dst_stride = (height + 7) // 8
-        out = bytearray(dst_stride * width)
+        padded_height = math.ceil(height / 8) * 8
+        body = [0] * (width * padded_height // 8)
         for y in range(height):
             for x in range(width):
                 idx = y * src_stride + x // 8
                 if idx < len(pixel_data) and (pixel_data[idx] >> (7 - x % 8)) & 1:
-                    out[x * dst_stride + y // 8] |= 1 << (7 - y % 8)
-        return bytes(out), height, width
+                    bit = x * padded_height + (height - 1 - y)
+                    body[bit // 8] |= 1 << (bit % 8)
+        return body
 
     def _pad_height(self, height: int) -> int:
         return math.ceil(height / 8) * 8

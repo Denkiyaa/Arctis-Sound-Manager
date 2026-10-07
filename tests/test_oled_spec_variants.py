@@ -85,18 +85,19 @@ def test_pro_gamedac_sends_one_unnumbered_frame_with_the_spec_header():
     assert packets[0][:5] == [0x93, 0, 0, 52, 128]
 
 
-def test_pro_gamedac_packs_each_panel_row_as_a_controller_column():
+def test_pro_gamedac_packs_like_gg_column_packed_lsb():
     proto = _protocol(_oled("SteelSeries Arctis Pro GameDAC"))
     image = _blank(128, 52)
     _light(image, 128, x=0, y=0)
     _light(image, 128, x=9, y=3)
     _light(image, 128, x=127, y=51)
     body = proto.build_frame_packets(bytes(image), 128, 52)[0][5:]
-    # 52 columns of 128 rows: 16 bytes per column, LSB = lowest row.
-    lit = {(i // 16, (i % 16) * 8 + bit)
-           for i, byte in enumerate(body[:832]) for bit in range(8) if byte >> bit & 1}
-    assert lit == {(0, 0), (3, 9), (51, 127)}
-    assert not any(body[832:])
+    # GG's convert-to-column-packed-byte-format-with-LSB: 7 bytes per panel
+    # column (52 rows padded to 56), bottom pixel in bit 0.
+    lit = {i * 8 + bit for i, byte in enumerate(body[:896]) for bit in range(8)
+           if byte >> bit & 1}
+    assert lit == {0 * 56 + 51, 9 * 56 + 48, 127 * 56 + 0}
+    assert not any(body[896:])
 
 
 def test_pro_gamedac_control_reports_are_64_bytes_on_the_wire():
