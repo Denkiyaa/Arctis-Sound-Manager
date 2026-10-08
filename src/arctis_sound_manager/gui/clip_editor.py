@@ -148,9 +148,14 @@ class _TrackPrepWorker(QThread):
     one thread and one pass. Neither is allowed to hold the dialog closed: the
     split is a demux and takes milliseconds, but the level scan decodes each
     channel, and the editor is perfectly usable while the answer is on its way.
+
+    The two answers go out separately. They used to arrive together, so the
+    channels only came online once the scan had decoded every one of them —
+    seconds on a long clip — and a play pressed before then was silent.
     """
 
-    done = Signal(list, list)       # ([per-channel file], [is_silent])
+    split = Signal(list)            # [per-channel file]
+    scanned = Signal(list)          # [is_silent]
 
     def __init__(self, path: Path, count: int, workdir: Path, parent=None):
         super().__init__(parent)
@@ -165,11 +170,12 @@ class _TrackPrepWorker(QThread):
             files = split_tracks(self._path, self._count, self._workdir)
         except Exception:
             logger.debug("could not split the clip's channels", exc_info=True)
+        self.split.emit(files)
         try:
             flags = silent_tracks(self._path, self._count)
         except Exception:
             logger.debug("could not measure channel levels", exc_info=True)
-        self.done.emit(files, flags)
+        self.scanned.emit(flags)
 
 
 def preview_output_device():
@@ -215,6 +221,7 @@ class _ChannelMixer:
         self._players: list = []
         self._outputs: list = []
         self._positions: list[int] = []
+        self._playing = False
 
     @property
     def ready(self) -> bool:
@@ -256,14 +263,17 @@ class _ChannelMixer:
         for player in self._players:
             player.setPosition(ms)
             player.play()
+        self._playing = True
 
     def pause(self) -> None:
         for player in self._players:
             player.pause()
+        self._playing = False
 
     def stop(self) -> None:
         for player in self._players:
             player.stop()
+        self._playing = False
 
     def resync(self, ms: int) -> None:
         """Pull back any channel that has wandered away from the video.
@@ -275,7 +285,13 @@ class _ChannelMixer:
         underneath (a Bluetooth sink in error, a channel sink being rebuilt)
         that thread never answers and the whole GUI hangs on it. Reading the
         cached value costs nothing and only seeks when a channel has drifted.
+
+        Paused channels are left alone: they are not following the video, so
+        every one of them looks drifted, and seeking them on every tick only
+        loads the decoders the picture is competing with.
         """
+        if not self._playing:
+            return
         for index, player in enumerate(self._players):
             if abs(self._positions[index] - ms) > _SYNC_TOLERANCE_MS:
                 player.setPosition(ms)
@@ -296,6 +312,7 @@ class _ChannelMixer:
         self._players.clear()
         self._outputs.clear()
         self._positions.clear()
+        self._playing = False
 
 
 # ── channel strips ────────────────────────────────────────────────────────────
@@ -753,14 +770,21 @@ class ClipEditor(QDialog):
     def _start_track_prep(self, count: int) -> None:
         """Split the channels out and scan their levels, off the UI thread."""
         self._prep_worker = _TrackPrepWorker(self._path, count, self._workdir, self)
-        self._prep_worker.done.connect(self._on_tracks_prepared)
+        self._prep_worker.split.connect(self._on_tracks_split)
+        self._prep_worker.scanned.connect(self._on_tracks_scanned)
         self._prep_worker.start()
 
-    def _on_tracks_prepared(self, files: list, flags: list) -> None:
-        """Bring the channels online and say which of them are empty."""
+    def _on_tracks_split(self, files: list) -> None:
+        """Bring the channels online."""
         if files and self._mixer.load([Path(f) for f in files]):
             self._on_levels_changed()
-            if (band := getattr(self, "_band", None)) is not None:
+            if self._is_playing():
+                # Play was pressed before the channels existed. Left paused,
+                # they stayed silent until the next play — and resync kept
+                # seeking them after a video they were not following, which
+                # is what made that first playback stutter.
+                self._mixer.play(self._position)
+            elif (band := getattr(self, "_band", None)) is not None:
                 self._mixer.seek(int(band.start_s * 1000))
         else:
             # The channels could not be split, so there is no mixer — and the
@@ -782,6 +806,8 @@ class ClipEditor(QDialog):
                               "only affect the export.")
             self._status.setText("⚠ " + message)
 
+    def _on_tracks_scanned(self, flags: list) -> None:
+        """Say which channels are empty."""
         audible = False
         for index, is_silent in enumerate(flags):
             if index < len(self._silent_labels):
