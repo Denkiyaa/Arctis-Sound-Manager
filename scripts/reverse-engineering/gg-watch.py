@@ -421,9 +421,15 @@ def missing_presets(root: Path) -> dict[str, dict]:
 # ── actions ──────────────────────────────────────────────────────────────────
 
 def _safe(name: str) -> str:
+    """A filename every packager can unpack: ASCII only. bsdtar without a
+    locale fails on anything else, which broke the AUR build (#132) — GG 121's
+    "EA Sports FC™ 27" got through. Symbols go, accents fold to their letter."""
+    for ch in "™®©":
+        name = name.replace(ch, "")
+    name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
     for ch in ':/\\?*"<>|':
         name = name.replace(ch, "_")
-    return name.strip()
+    return " ".join(name.split())
 
 
 def add_presets(new: dict[str, dict], version: str) -> list[str]:
