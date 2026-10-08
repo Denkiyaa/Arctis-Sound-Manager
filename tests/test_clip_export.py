@@ -402,6 +402,54 @@ def test_the_mix_is_limited_so_summed_channels_cannot_clip():
     assert "level=false" in graph
 
 
+# ── re-encoding on the graphics card ──────────────────────────────────────────
+# libx264 at 1440p held nearly nine cores busy for a 30 s clip; NVENC does it
+# on one at the same quality for the size.
+
+def test_a_size_target_on_nvenc_drops_the_x264_options():
+    cmd = build_command(_plan(target_mb=10), encoder="h264_nvenc")
+    assert cmd[cmd.index("-c:v") + 1] == "h264_nvenc"
+    assert "libx264" not in cmd and "medium" not in cmd
+    assert "-b:v" in cmd and "-maxrate" in cmd
+
+
+def test_a_fixed_rate_on_nvenc_uses_constant_quality():
+    cmd = build_command(_plan(target_mb=None, fps=60), encoder="h264_nvenc")
+    assert cmd[cmd.index("-c:v") + 1] == "h264_nvenc"
+    assert "-crf" not in cmd
+    assert cmd[cmd.index("-cq") + 1] == "20"
+    assert cmd[cmd.index("-b:v") + 1] == "0"
+
+
+def test_a_stream_copy_never_asks_for_the_card(monkeypatch):
+    from arctis_sound_manager import clip_export
+
+    def boom():
+        raise AssertionError("probed the GPU for a stream copy")
+
+    ran = []
+    monkeypatch.setattr(clip_export, "gpu_encoder", boom)
+    monkeypatch.setattr(clip_export, "_run", lambda cmd, plan, t: ran.append(cmd) or plan.destination)
+    clip_export.export(_plan(target_mb=None))
+    assert ran and "copy" in ran[0]
+
+
+def test_a_card_that_refuses_falls_back_to_the_cpu(monkeypatch):
+    from arctis_sound_manager import clip_export
+
+    ran = []
+
+    def fake_run(cmd, plan, timeout):
+        ran.append(cmd[cmd.index("-c:v") + 1])
+        return None if cmd[cmd.index("-c:v") + 1] == "h264_nvenc" else plan.destination
+
+    monkeypatch.setattr(clip_export, "gpu_encoder", lambda: "h264_nvenc")
+    monkeypatch.setattr(clip_export, "_run", fake_run)
+    plan = _plan(target_mb=10)
+    assert clip_export.export(plan) == plan.destination
+    assert ran == ["h264_nvenc", "libx264"]
+
+
 # ── the rate a clip was recorded at ────────────────────────────────────────────
 # The editor's "As recorded" choice names it. It is counted rather than read
 # from the header, because older clips carry the compositor's ceiling there.
