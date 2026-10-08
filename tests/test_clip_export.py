@@ -400,3 +400,32 @@ def test_the_mix_is_limited_so_summed_channels_cannot_clip():
     graph = cmd[cmd.index("-filter_complex") + 1]
     assert "amix=inputs=3:normalize=0,alimiter=" in graph
     assert "level=false" in graph
+
+
+# ── the rate a clip was recorded at ────────────────────────────────────────────
+# The editor's "As recorded" choice names it. It is counted rather than read
+# from the header, because older clips carry the compositor's ceiling there.
+
+def test_recorded_fps_counts_the_frames_a_clip_holds(tmp_path):
+    import shutil as _shutil
+    import subprocess as _sp
+
+    if _shutil.which("ffmpeg") is None or _shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg not installed")
+
+    from arctis_sound_manager.clip_export import duration_s, recorded_fps
+
+    source = tmp_path / "clip.mkv"
+    _sp.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc=d=3:r=22:s=160x120",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source)],
+        check=True, capture_output=True, timeout=60)
+
+    assert recorded_fps(source, duration_s(source)) == pytest.approx(22, abs=1)
+
+
+def test_recorded_fps_is_unknown_without_a_length(tmp_path):
+    from arctis_sound_manager.clip_export import recorded_fps
+
+    assert recorded_fps(tmp_path / "missing.mkv", 0.0) is None
