@@ -42,7 +42,7 @@ import arctis_sound_manager.gui.theme as _theme
 from arctis_sound_manager.clip_export import (FPS_CHOICES, SHARE_SUFFIX,
                                              ExportPlan, TrackMix, duration_s,
                                              export, probe_tracks,
-                                             silent_tracks, split_tracks,
+                                             recorded_fps, silent_tracks, split_tracks,
                                              video_bitrate_kbps)
 from arctis_sound_manager.clip_library import (export_destination, read_mix,
                                                read_trim, share_dir, write_mix,
@@ -836,8 +836,14 @@ class ClipEditor(QDialog):
 
         row.addWidget(QLabel(_tr("clip_fps", "Frame rate:")))
         self._fps = QComboBox()
+        # "As recorded" on its own left the one number the choice is about
+        # unsaid — whether 30 or 60 is a step up or down depends on it.
+        source_fps = recorded_fps(self._path, self._duration)
         for label, value in FPS_LABELS:
-            self._fps.addItem(_tr(f"clip_fps_{value or 'source'}", label), value)
+            text = _tr(f"clip_fps_{value or 'source'}", label)
+            if value is None and source_fps is not None:
+                text += f" ({source_fps:.0f} fps)"
+            self._fps.addItem(text, value)
         self._fps.setToolTip(_tr(
             "clip_fps_hint",
             "The screen is captured whenever it changes, so a recording holds "

@@ -341,3 +341,27 @@ def duration_s(path: Path) -> float:
         return float((result.stdout or "0").strip() or 0.0)
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return 0.0
+
+
+def recorded_fps(path: Path, duration: float) -> float | None:
+    """The rate *path* actually holds: its video frames over its length.
+
+    Counted, not read from the header. The screencast is variable-rate, and
+    clips saved before the capture measured its rate carry the compositor's
+    ceiling there instead — 239 fps on a clip that held 22. Counting packets
+    is a demux, not a decode: under a tenth of a second for a 30 s clip.
+    """
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None or duration <= 0:
+        return None
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0", "-count_packets",
+             "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0",
+             str(path)],
+            capture_output=True, text=True, timeout=15)
+        frames = int((result.stdout or "").strip().split(",")[0])
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    fps = frames / duration
+    return fps if 1.0 <= fps <= 240.0 else None
