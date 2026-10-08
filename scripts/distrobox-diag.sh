@@ -4,12 +4,21 @@
 #
 # Usage:
 #   bash scripts/distrobox-diag.sh
+#   curl -fsSL …/scripts/distrobox-diag.sh | bash
 #
 # Output:
 #   - Real-time check results on stdout (colored ✓/✗)
 #   - Full log report at ~/asm-distrobox-diag-YYYYMMDD-HHMMSS.txt
 
 set -uo pipefail
+
+# Everything below sits in main() and runs from its last line, so bash reads
+# the whole file before running any of it. Fed through `curl … | bash`, the
+# script IS bash's stdin: a command that reads stdin (distrobox enter does)
+# swallowed the rest of it, bash found nothing left and quit without a word,
+# leaving a report with its header only (#181). The </dev/null on each
+# distrobox enter is the second guard.
+main() {
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -139,7 +148,7 @@ if distrobox list 2>/dev/null | grep "$CONTAINER_NAME" | grep -qi "running\|up";
     check "container is running" pass
 else
     # Try to enter briefly to start it; some distrobox versions auto-start on enter
-    if distrobox enter "$CONTAINER_NAME" -- true &>/dev/null 2>&1; then
+    if distrobox enter "$CONTAINER_NAME" </dev/null -- true &>/dev/null 2>&1; then
         check "container is running" pass "was stopped, started successfully"
     else
         check "container is running" fail "status: ${CONTAINER_STATUS:-unknown}"
@@ -224,7 +233,7 @@ fi
 # ---------------------------------------------------------------------------
 section "HID device access"
 
-HID_INSIDE="$(distrobox enter "$CONTAINER_NAME" -- bash -c 'ls /dev/hidraw* 2>/dev/null' 2>/dev/null || true)"
+HID_INSIDE="$(distrobox enter "$CONTAINER_NAME" </dev/null -- bash -c 'ls /dev/hidraw* 2>/dev/null' 2>/dev/null || true)"
 if [ -n "$HID_INSIDE" ]; then
     check "/dev/hidraw* visible inside container" pass "$(printf "%s" "$HID_INSIDE" | tr '\n' ' ')"
 else
@@ -236,7 +245,7 @@ fi
 # ---------------------------------------------------------------------------
 section "ASM daemon"
 
-ASM_STATUS="$(distrobox enter "$CONTAINER_NAME" -- bash -c 'asm-cli status 2>/dev/null' 2>/dev/null || true)"
+ASM_STATUS="$(distrobox enter "$CONTAINER_NAME" </dev/null -- bash -c 'asm-cli status 2>/dev/null' 2>/dev/null || true)"
 if [ -n "$ASM_STATUS" ]; then
     check "asm-cli status (D-Bus reachable)" pass "$(printf "%s" "$ASM_STATUS" | head -1)"
 else
@@ -279,10 +288,10 @@ report_cmd "udev rules (first 20 lines)" \
     bash -c "head -20 \"$UDEV_RULES\" 2>/dev/null || echo '(file not found)'"
 
 report_cmd "asm-cli version (inside container)" \
-    bash -c "distrobox enter \"$CONTAINER_NAME\" -- bash -c 'asm-cli version 2>/dev/null' 2>/dev/null || echo '(unavailable)'"
+    bash -c "distrobox enter \"$CONTAINER_NAME\" </dev/null -- bash -c 'asm-cli version 2>/dev/null' 2>/dev/null || echo '(unavailable)'"
 
 report_cmd_redacted "journalctl inside container — arctis-manager (last 1 hour)" \
-    bash -c "distrobox enter \"$CONTAINER_NAME\" -- bash -c 'journalctl --user -u arctis-manager --since \"1 hour ago\" --no-pager 2>/dev/null' 2>/dev/null || echo '(unavailable)'"
+    bash -c "distrobox enter \"$CONTAINER_NAME\" </dev/null -- bash -c 'journalctl --user -u arctis-manager --since \"1 hour ago\" --no-pager 2>/dev/null' 2>/dev/null || echo '(unavailable)'"
 
 report_cmd "uname -r (kernel version)" \
     uname -r
@@ -310,3 +319,6 @@ else
 fi
 
 printf "\n%sReport file:%s %s\n" "$BOLD" "$RESET" "$REPORT_FILE"
+}
+
+main "$@"
