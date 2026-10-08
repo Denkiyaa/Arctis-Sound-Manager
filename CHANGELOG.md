@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 8 October 2026
+
+### Added
+
+- **Real 7.1 for Game, Media and Aux.** These channels now accept 5.1/7.1, so a game set to surround sends its real centre and rear channels instead of a stereo mix. Spatial Audio (HeSuVi) now places those real channels around you; a stereo app still plays exactly as before.
+- **Surround passthrough to speakers.** A channel sent to a 5.1/7.1 receiver or TV gets its channels as they are, with no headphone rendering. A 5.1 receiver that only has side or rear surrounds gets the other pair folded in instead of losing it.
+- **Clean stereo downmix.** With Spatial Audio off on a stereo device, surround content is folded into stereo (centre and surrounds at -3 dB) instead of keeping only the front left/right, which used to drop a 7.1 game's dialogue.
+- **"Only for surround sources" option for Spatial Audio**, per channel, off by default (same as Sonar). When on, virtual surround applies only while something plays 5.1/7.1; music, video and games in their own headphone mode stay plain stereo. It switches by itself, without cutting the sound.
+- **Sonar mic presets set the mic processing too.** Loading one now applies its ClearCast, noise reduction, noise gate and volume stabilizer settings, not just its EQ.
+- **4 new Sonar presets** from SteelSeries GG 121: Aniimo, Bodycam, EA Sports FC 27, Wardogs.
+
+### Changed
+
+- **ChatMix follows Sonar's curve.** The quieter side now fades the way it does in SteelSeries GG: half way is about -9.5 dB, where ASM used to drop it to about -18 dB.
+- **Smart Volume uses Sonar's loudness targets** (Soft -27, Balanced -18, Extreme -9 dB).
+
+### Fixed
+
+- **EQ filters other than peak and shelf.** Notch, all-pass and band-pass filters in Sonar presets were played as a plain peak and drawn flat on the curve; they now sound and show as they should. The DOOM: The Dark Ages preset is the one shipped preset that used one.
+- **Arctis Pro GameDAC (gen 1) screen** now draws images the way SteelSeries GG does; the previous layout was a guess and scrambled them.
+- **Arctis Pro Wireless base screen (#305)** is left alone until its layout is confirmed: 1.4.34 drew noise on it.
+- **Ubuntu 24.04 / Linux Mint 22: package installable again**, and the GUI no longer fails to open when installed from a graphical installer.
+- **Clips (#307, #308, #313):** recovers from a dead video stream instead of recording audio only; no longer mistakes a video player on the Game channel or the Steam client for a game. Thanks to @Denkiyaa.
+- **NixOS build (#310):** a file the build needs was missing. Fixed by @Kolaigg.
+- **SteamOS/Bazzite diagnostic report (#181)** ran only its first lines when launched with `curl … | bash`.
+- **Preset file names are ASCII-only (#132):** one new preset's name would have broken the AUR build.
+
+### Other
+
+- The bundled HRIR profiles are now credited to HeSuVi (MIT License) in the README, `debian/copyright` and a license file next to them.
+
 ## [1.4.34] - 4 October 2026
 
 ### Added
