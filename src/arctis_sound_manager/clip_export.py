@@ -115,8 +115,8 @@ def video_bitrate_kbps(target_mb: float, duration_s: float,
     return video_kbps
 
 
-def build_command(plan: ExportPlan) -> list[str]:
-    """The ffmpeg invocation for *plan*.
+def build_command(plan: ExportPlan, encoder: str = "libx264") -> list[str]:
+    """The ffmpeg invocation for *plan*, re-encoding with *encoder* if at all.
 
     Tracks are mixed to stereo here rather than kept separate: the clip is
     being shared, and a multi-track file plays back as the first track alone in
@@ -158,7 +158,11 @@ def build_command(plan: ExportPlan) -> list[str]:
 
     if plan.target_mb:
         kbps = video_bitrate_kbps(plan.target_mb, plan.duration_s, len(audible) or 1)
-        cmd += ["-c:v", "libx264", "-preset", "medium", "-b:v", f"{kbps}k",
+        if encoder == "h264_nvenc":
+            cmd += ["-c:v", encoder, "-preset", "p5", "-rc", "vbr"]
+        else:
+            cmd += ["-c:v", "libx264", "-preset", "medium"]
+        cmd += ["-b:v", f"{kbps}k",
                 "-maxrate", f"{int(kbps * 1.2)}k", "-bufsize", f"{kbps * 2}k"]
     elif plan.fps:
         # A rate cannot be imposed on a stream copy, and asking anyway is worse
@@ -167,7 +171,13 @@ def build_command(plan: ExportPlan) -> list[str]:
         # it plays back at three times speed. The frames have to be produced,
         # which means re-encoding. CRF rather than a bitrate because no size was
         # asked for, so there is no budget to hit — only quality to keep.
-        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+        if encoder == "h264_nvenc":
+            # -cq is nvenc's CRF; -b:v 0 lifts the default bitrate cap that
+            # would otherwise override it.
+            cmd += ["-c:v", encoder, "-preset", "p5", "-rc", "vbr",
+                    "-cq", "20", "-b:v", "0"]
+        else:
+            cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
     else:
         cmd += ["-c:v", "copy"]
 
@@ -184,8 +194,48 @@ def build_command(plan: ExportPlan) -> list[str]:
     return cmd
 
 
+_gpu_encoder: str | None = None
+_gpu_encoder_probed = False
+
+
+def gpu_encoder() -> str | None:
+    """h264_nvenc when it can actually encode here, else None. Probed once.
+
+    Listed is not the same as usable: distribution ffmpeg builds carry nvenc
+    whether or not there is an NVIDIA card, so a tenth of a second of black is
+    encoded to find out.
+    """
+    global _gpu_encoder, _gpu_encoder_probed
+    if _gpu_encoder_probed:
+        return _gpu_encoder
+    _gpu_encoder_probed = True
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        return None
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+             "-i", "color=c=black:s=256x144:d=0.1", "-c:v", "h264_nvenc",
+             "-f", "null", "-"],
+            capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode == 0:
+        _gpu_encoder = "h264_nvenc"
+    return _gpu_encoder
+
+
 def export(plan: ExportPlan, timeout: float = 300.0) -> Path | None:
-    """Run the export. Returns the file written, or None on failure."""
+    """Run the export. Returns the file written, or None on failure.
+
+    A re-encode goes to the graphics card when it has an encoder. On the CPU,
+    libx264 at 1440p takes every core it can find for the length of the
+    export — measured at nearly nine busy cores for a 30 s clip, with the
+    fans to match — while NVENC does the same job in about half the time on
+    one core, at the same quality for the same size. Should the card refuse
+    (another program holding its sessions, a driver mismatch) the export is
+    run again on the CPU rather than failing.
+    """
     try:
         cmd = build_command(plan)
     except ValueError as exc:
@@ -193,6 +243,15 @@ def export(plan: ExportPlan, timeout: float = 300.0) -> Path | None:
         raise
 
     log.info("exporting %s → %s", plan.source.name, plan.destination.name)
+    if "libx264" in cmd and (encoder := gpu_encoder()) is not None:
+        result = _run(build_command(plan, encoder), plan, timeout)
+        if result is not None:
+            return result
+        log.warning("%s export failed — retrying on the CPU", encoder)
+    return _run(cmd, plan, timeout)
+
+
+def _run(cmd: list[str], plan: ExportPlan, timeout: float) -> Path | None:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
