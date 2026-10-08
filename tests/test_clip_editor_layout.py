@@ -65,3 +65,62 @@ def test_the_band_cannot_be_squeezed_under_its_own_markers():
 
     # A width the band is guaranteed by the dialog minimum, less the margins.
     assert MIN_SIZE.width() - 2 * 18 - 2 * EDGE_PAD >= 360
+
+
+# ── size and frame-rate pickers ────────────────────────────────────────────────
+
+def test_the_recorded_rate_is_offered_as_its_number_and_in_order():
+    from arctis_sound_manager.gui.clip_editor import fps_options
+
+    assert fps_options(23.1) == [("15 fps", 15), ("23 fps", None),
+                                 ("30 fps", 30), ("60 fps", 60)]
+
+
+def test_a_fixed_rate_next_to_the_recorded_one_is_not_offered():
+    """30 beside a 29.6 fps clip is the same rate, re-encoded for nothing."""
+    from arctis_sound_manager.gui.clip_editor import fps_options
+
+    assert fps_options(29.6) == [("15 fps", 15), ("30 fps", None), ("60 fps", 60)]
+
+
+def test_an_unknown_rate_still_has_a_free_default():
+    from arctis_sound_manager.gui.clip_editor import fps_options
+
+    options = fps_options(None)
+    assert options[0][1] is None
+    assert [v for _, v in options[1:]] == [15, 30, 60]
+
+
+@pytest.fixture
+def qapp():
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])
+
+
+def test_the_free_choice_starts_checked_and_a_click_moves_it(qapp):
+    from arctis_sound_manager.gui.clip_editor import _Choices, fps_options
+
+    picker = _Choices(fps_options(23.1))
+    assert picker.currentData() is None
+    seen = []
+    picker.changed.connect(lambda: seen.append(picker.currentData()))
+    picker.findChildren(type(picker._group.button(0)))[3].click()
+    assert picker.currentData() == 60 and seen == [60]
+
+
+def test_both_picker_rows_fit_the_minimum_width(qapp):
+    """Every option is on screen at once now, so the rows must fit."""
+    from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
+
+    from arctis_sound_manager.gui.clip_editor import (SIZE_CHOICES, _Choices,
+                                                      fps_options)
+
+    row = QWidget()
+    layout = QHBoxLayout(row)
+    layout.setSpacing(8)
+    layout.addWidget(QLabel("Share size:"))
+    layout.addWidget(_Choices(SIZE_CHOICES))
+    layout.addSpacing(16)
+    layout.addWidget(QLabel("Frame rate:"))
+    layout.addWidget(_Choices(fps_options(23.1)))
+    assert row.sizeHint().width() <= MIN_SIZE.width() - 2 * 18

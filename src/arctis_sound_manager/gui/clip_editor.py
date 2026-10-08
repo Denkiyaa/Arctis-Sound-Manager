@@ -27,7 +27,6 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QGridLayout,
     QHBoxLayout,
@@ -64,14 +63,69 @@ SIZE_CHOICES: list[tuple[str, float | None]] = [
     ("100 MB", 100.0),
 ]
 
-# Frame rates offered at export. "As recorded" is the default because it is the
-# only choice that costs nothing: the screencast is variable-rate, so picking a
-# number here re-encodes the clip to hold that rate exactly. Worth it when a
-# clip plays back unevenly somewhere it is being shared; not worth it by
-# default.
-FPS_LABELS: list[tuple[str, int | None]] = [
-    ("As recorded", None), *((f"{n} fps", n) for n in FPS_CHOICES),
-]
+def fps_options(recorded: float | None) -> list[tuple[str, int | None]]:
+    """Frame rates offered at export, as (label, value), in rising order.
+
+    The clip's own rate is the default and carries None: it is the only
+    choice that costs nothing, since the screencast is variable-rate and
+    picking a number re-encodes the clip to hold that rate exactly. It is
+    shown as its number — "As recorded" said nothing about whether 30 was a
+    step up or down. A fixed rate within a frame or two of it is the same
+    choice made expensive, so it is not offered beside it.
+    """
+    if recorded is None:
+        return [(_tr("clip_fps_source", "As recorded"), None),
+                *((f"{n} fps", n) for n in FPS_CHOICES)]
+    options: list[tuple[float, str, int | None]] = [
+        (recorded, f"{recorded:.0f} fps", None)]
+    options += [(n, f"{n} fps", n) for n in FPS_CHOICES if abs(n - recorded) > 2]
+    return [(label, value) for _, label, value in sorted(options, key=lambda o: o[0])]
+
+
+class _Choices(QWidget):
+    """A row of mutually exclusive buttons, all visible at once.
+
+    The size and frame-rate pickers were combo boxes, which hide every option
+    but the one chosen — easy to miss that there was a choice at all. The
+    option whose value is None (Original, the recorded rate) starts checked.
+    """
+
+    changed = Signal()
+
+    def __init__(self, options: list[tuple[str, object]], parent=None):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QButtonGroup
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._values: list[object] = []
+        for index, (label, value) in enumerate(options):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFixedHeight(26)
+            button.setStyleSheet(
+                f"QPushButton {{ background: {_theme.c('BG_BUTTON')}; border: none; "
+                f"border-radius: 4px; padding: 2px 10px; font-size: 9pt; "
+                f"color: {_theme.c('TEXT_SECONDARY')}; }}"
+                f"QPushButton:hover {{ background: {_theme.c('BG_BUTTON_HOVER')}; "
+                f"color: {_theme.c('TEXT_PRIMARY')}; }}"
+                f"QPushButton:checked {{ background: {_theme.c('ACCENT')}; "
+                f"color: {_theme.c('TEXT_PRIMARY')}; font-weight: 600; }}")
+            self._group.addButton(button, index)
+            self._values.append(value)
+            row.addWidget(button)
+        default = self._values.index(None) if None in self._values else 0
+        if self._values:
+            self._group.button(default).setChecked(True)
+        self._group.idToggled.connect(lambda _id, on: on and self.changed.emit())
+
+    def currentData(self):
+        index = self._group.checkedId()
+        return self._values[index] if 0 <= index < len(self._values) else None
 
 # How far a channel may drift from the video before it is pulled back into
 # line. Each channel is its own decoder with its own clock, so they wander
@@ -823,35 +877,37 @@ class ClipEditor(QDialog):
 
     # ── export ────────────────────────────────────────────────────────────────
 
-    def _build_export_row(self) -> QHBoxLayout:
+    def _build_export_row(self) -> QVBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(8)
 
-        row.addWidget(QLabel(_tr("clip_size", "Share size:")))
-        self._size = QComboBox()
-        for label, mb in SIZE_CHOICES:
-            self._size.addItem(label, mb)
-        self._size.currentIndexChanged.connect(self._update_estimate)
-        row.addWidget(self._size)
+        # The choices are their own row, the actions the row under it: side by
+        # side with the buttons, nine segments and two actions did not fit the
+        # dialog's minimum width.
+        choices = QHBoxLayout()
+        choices.setSpacing(8)
 
-        row.addWidget(QLabel(_tr("clip_fps", "Frame rate:")))
-        self._fps = QComboBox()
-        # "As recorded" on its own left the one number the choice is about
-        # unsaid — whether 30 or 60 is a step up or down depends on it.
-        source_fps = recorded_fps(self._path, self._duration)
-        for label, value in FPS_LABELS:
-            text = _tr(f"clip_fps_{value or 'source'}", label)
-            if value is None and source_fps is not None:
-                text += f" ({source_fps:.0f} fps)"
-            self._fps.addItem(text, value)
+        choices.addWidget(QLabel(_tr("clip_size", "Share size:")))
+        self._size = _Choices(SIZE_CHOICES)
+        self._size.changed.connect(self._update_estimate)
+        choices.addWidget(self._size)
+        choices.addSpacing(16)
+
+        choices.addWidget(QLabel(_tr("clip_fps", "Frame rate:")))
+        self._fps = _Choices(fps_options(recorded_fps(self._path, self._duration)))
         self._fps.setToolTip(_tr(
             "clip_fps_hint",
             "The screen is captured whenever it changes, so a recording holds "
             "whatever rate it managed. Choosing one here re-encodes the clip to "
             "hold it exactly — use it if a clip plays back unevenly."))
-        self._fps.currentIndexChanged.connect(self._update_estimate)
-        row.addWidget(self._fps)
+        self._fps.changed.connect(self._update_estimate)
+        choices.addWidget(self._fps)
+        choices.addStretch(1)
 
+        outer = QVBoxLayout()
+        outer.setSpacing(8)
+        outer.addLayout(choices)
+        outer.addLayout(row)
         row.addStretch(1)
 
         self._open_btn = QPushButton(_tr("clip_open_player", "Open in player"))
@@ -865,7 +921,7 @@ class ClipEditor(QDialog):
         self._export_btn.setDefault(True)
         self._export_btn.clicked.connect(self._on_export)
         row.addWidget(self._export_btn)
-        return row
+        return outer
 
     def _update_estimate(self) -> None:
         """Say up front whether the chosen size can hold the chosen trim.
