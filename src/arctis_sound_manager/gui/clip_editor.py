@@ -70,15 +70,17 @@ def fps_options(recorded: float | None) -> list[tuple[str, int | None]]:
     choice that costs nothing, since the screencast is variable-rate and
     picking a number re-encodes the clip to hold that rate exactly. It is
     shown as its number — "As recorded" said nothing about whether 30 was a
-    step up or down. A fixed rate within a frame or two of it is the same
-    choice made expensive, so it is not offered beside it.
+    step up or down — and marked as the original, since a bare "17 fps"
+    among 15, 30 and 60 read as a typo for 15. A fixed rate that rounds to
+    the same number is the same choice made expensive and is left out.
     """
     if recorded is None:
         return [(_tr("clip_fps_source", "As recorded"), None),
                 *((f"{n} fps", n) for n in FPS_CHOICES)]
-    options: list[tuple[float, str, int | None]] = [
-        (recorded, f"{recorded:.0f} fps", None)]
-    options += [(n, f"{n} fps", n) for n in FPS_CHOICES if abs(n - recorded) > 2]
+    original = _tr("clip_fps_original", "{n} fps (original)").replace(
+        "{n}", f"{recorded:.0f}")
+    options: list[tuple[float, str, int | None]] = [(recorded, original, None)]
+    options += [(n, f"{n} fps", n) for n in FPS_CHOICES if round(recorded) != n]
     return [(label, value) for _, label, value in sorted(options, key=lambda o: o[0])]
 
 

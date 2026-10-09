@@ -72,15 +72,23 @@ def test_the_band_cannot_be_squeezed_under_its_own_markers():
 def test_the_recorded_rate_is_offered_as_its_number_and_in_order():
     from arctis_sound_manager.gui.clip_editor import fps_options
 
-    assert fps_options(23.1) == [("15 fps", 15), ("23 fps", None),
+    assert fps_options(23.1) == [("15 fps", 15), ("23 fps (original)", None),
                                  ("30 fps", 30), ("60 fps", 60)]
 
 
-def test_a_fixed_rate_next_to_the_recorded_one_is_not_offered():
+def test_a_nearby_standard_rate_is_still_offered():
+    """A 17 fps clip can still be brought down to 15 — that is a real choice."""
+    from arctis_sound_manager.gui.clip_editor import fps_options
+
+    assert [v for _, v in fps_options(17.2)] == [15, None, 30, 60]
+
+
+def test_a_fixed_rate_that_rounds_to_the_recorded_one_is_not_offered():
     """30 beside a 29.6 fps clip is the same rate, re-encoded for nothing."""
     from arctis_sound_manager.gui.clip_editor import fps_options
 
-    assert fps_options(29.6) == [("15 fps", 15), ("30 fps", None), ("60 fps", 60)]
+    assert fps_options(29.6) == [("15 fps", 15), ("30 fps (original)", None),
+                                 ("60 fps", 60)]
 
 
 def test_an_unknown_rate_still_has_a_free_default():
