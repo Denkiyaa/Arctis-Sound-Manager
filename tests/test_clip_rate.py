@@ -245,16 +245,60 @@ def test_the_saved_rate_is_kept_for_reporting():
 
 # ── the rate offered, and where it is offered from ─────────────────────────────
 
-def test_capture_defaults_to_the_documented_rate():
-    """60 was a ceiling the screencast almost never reached, paid for in
-    keyframes and encoder budget on frames that never arrived."""
+def test_capture_leaves_the_default_rate_to_the_encoder():
+    """Under a 30 ceiling a game running between 30 and 60 recorded at 17-22
+    fps; a clip can be brought down at export but never up."""
     import inspect
 
-    from arctis_sound_manager.clip_capture import DEFAULT_FPS, ClipCapture
+    from arctis_sound_manager.clip_capture import (CPU_DEFAULT_FPS,
+                                                   DEFAULT_FPS, ClipCapture)
 
-    assert DEFAULT_FPS == 30
+    assert DEFAULT_FPS == 60 and CPU_DEFAULT_FPS == 30
     signature = inspect.signature(ClipCapture.__init__)
-    assert signature.parameters["fps"].default == DEFAULT_FPS
+    assert signature.parameters["fps"].default is None
+
+
+class _FakeGst:
+    """Just enough of Gst for default_fps: which encoders are installed."""
+
+    def __init__(self, installed):
+        installed = set(installed)
+
+        class _Factory:
+            @staticmethod
+            def find(name):
+                return name if name in installed else None
+
+        self.ElementFactory = _Factory
+
+
+@pytest.mark.parametrize("installed, expected", [
+    ({"nvh264enc", "x264enc"}, 60),
+    ({"vah264enc", "x264enc"}, 60),
+    ({"x264enc"}, 30),
+    ({"openh264enc"}, 30),
+])
+def test_a_gpu_encoder_records_at_60_and_the_cpu_at_30(installed, expected):
+    from arctis_sound_manager.clip_capture import default_fps
+
+    assert default_fps(_FakeGst(installed)) == expected
+
+
+def test_the_page_lets_the_capture_choose_until_a_rate_is_picked(monkeypatch):
+    from arctis_sound_manager.gui import clips_page
+    from arctis_sound_manager import settings as settings_mod
+
+    class _Settings:
+        clips_fps = 0
+
+    monkeypatch.setattr(settings_mod.GeneralSettings, "read_from_file",
+                        staticmethod(lambda: _Settings()))
+    assert clips_page._chosen_fps() is None
+    assert clips_page._saved_fps() == clips_page._DEFAULT_FPS
+
+    _Settings.clips_fps = 30
+    assert clips_page._chosen_fps() == 30
+    assert clips_page._saved_fps() == 30
 
 
 def test_the_page_offers_exactly_what_capture_supports():
