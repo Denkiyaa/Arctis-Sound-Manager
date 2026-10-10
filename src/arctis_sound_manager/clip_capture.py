@@ -141,15 +141,21 @@ _RATE_WINDOW_S = 4.0
 
 # Capture rates offered, and the one used unless asked otherwise.
 #
-# 30 rather than 60: the portal stream only produces a frame when the screen
-# changes, so the ceiling is a ceiling and nothing more — asking for 60 does not
-# make a compositor send 60. What it does do is set the keyframe interval (gop
-# == fps) and the encoder's workload against a rate that is rarely reached,
-# which costs bitrate and CPU for frames that never arrive. 60 is kept for the
-# machines that genuinely sustain it, and 15 for the ones that would rather
-# spend nothing on the clip than record a smooth one.
+# 60 when the frames are encoded on the graphics card. The default was 30,
+# reasoned as "a ceiling the compositor rarely reaches" — but it was reached,
+# and under it a game running between 30 and 60 came out at 17-22 fps with
+# frames held for 100 ms at a time, while the editor can always bring a clip
+# down at export and can never bring one up. On a GPU encoder the higher
+# ceiling costs next to nothing; the bitrate is fixed, so neither do the
+# buffer or the file grow.
+#
+# 30 on the CPU encoders (x264, openh264), where every frame is real work at
+# 1440p and a game is already competing for the same cores. Either default
+# applies only until a rate is chosen by hand.
 FPS_CHOICES = (15, 30, 60)
-DEFAULT_FPS = 30
+DEFAULT_FPS = 60
+CPU_DEFAULT_FPS = 30
+_GPU_ENCODERS = frozenset({"nvh264enc", "vah264enc", "vah264lpenc"})
 
 SONAR_MONITORS = [
     ("game", "Arctis_Game.monitor"),
@@ -1011,10 +1017,18 @@ def pick_encoder(Gst, gop: int, kbps: int) -> tuple[str, bool]:
         "No usable H.264 encoder (looked for nvh264enc, vah264enc, x264enc).")
 
 
+def default_fps(Gst) -> int:
+    """The ceiling to record at when none was chosen — see DEFAULT_FPS."""
+    for element, _props, _needs_gl in ENCODERS:
+        if Gst.ElementFactory.find(element):
+            return DEFAULT_FPS if element in _GPU_ENCODERS else CPU_DEFAULT_FPS
+    return CPU_DEFAULT_FPS
+
+
 class ClipCapture:
     """Runs the capture and answers save_clip() from the rolling buffer."""
 
-    def __init__(self, history_s: float = 90.0, fps: int = DEFAULT_FPS,
+    def __init__(self, history_s: float = 90.0, fps: int | None = None,
                  bitrate_kbps: int = 20000, window: bool = False,
                  game: str | None = None):
         self._Gio, self._GLib, self._Gst = _require_gst()
@@ -1022,8 +1036,9 @@ class ClipCapture:
 
         # The ceiling handed to videorate — not the rate being achieved. What
         # capture is actually managing is measured from the buffer and read off
-        # the `fps` property below.
-        self.max_fps = fps
+        # the `fps` property below. None means nobody chose one, and the
+        # encoder decides (see DEFAULT_FPS).
+        self.max_fps = fps or default_fps(self._Gst)
         # What the last saved clip actually measured, so a save can report the
         # number that ended up in the file rather than leaving it to be
         # discovered in a player. See `fps` for why the two differ.

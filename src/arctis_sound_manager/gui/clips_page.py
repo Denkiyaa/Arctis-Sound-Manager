@@ -72,7 +72,7 @@ _THUMB_THREADS = 2
 # so this page still builds its controls on a machine with no GStreamer — the
 # rule the module docstring sets out. test_clip_rate keeps the two in step.
 _FPS_CHOICES = (15, 30, 60)
-_DEFAULT_FPS = 30
+_DEFAULT_FPS = 60
 
 
 # How often the page asks whether a game is playing, and how long a game has to
@@ -88,16 +88,22 @@ _GAME_GONE_GRACE_S = 45.0
 _VIDEO_STALL_S = 10.0
 
 
-def _saved_fps() -> int:
-    """The remembered frame-rate ceiling, or the default when none is saved
-    or the saved one is not on offer any more."""
+def _chosen_fps() -> int | None:
+    """The frame-rate ceiling picked by hand, or None when none was — or the
+    one saved is not on offer any more. None lets the capture choose by
+    encoder (clip_capture.DEFAULT_FPS)."""
     try:
         from arctis_sound_manager.settings import GeneralSettings
         value = int(GeneralSettings.read_from_file().clips_fps or 0)
     except Exception:  # noqa: BLE001 — a broken settings file is not worth the page
         logger.debug("could not read clips_fps, using the default", exc_info=True)
-        return _DEFAULT_FPS
-    return value if value in _FPS_CHOICES else _DEFAULT_FPS
+        return None
+    return value if value in _FPS_CHOICES else None
+
+
+def _saved_fps() -> int:
+    """The ceiling to show selected: the chosen one, else the default."""
+    return _chosen_fps() or _DEFAULT_FPS
 
 
 def _autostart_enabled() -> bool:
@@ -788,7 +794,10 @@ class ClipsPage(QWidget):
         self._status.setText(_tr("clips_starting", "Starting capture…"))
         try:
             capture = ClipCapture(history_s=max(90.0, self._seconds.value() * 2.0),
-                                  fps=int(self._fps.currentData() or _DEFAULT_FPS),
+                                  # Not the combo's value: until a rate is
+                                  # picked by hand (which saves it) the
+                                  # capture chooses by encoder.
+                                  fps=_chosen_fps(),
                                   window=bool(self._source_kind.currentData()),
                                   game=self._last_detected_game)
             capture.start()

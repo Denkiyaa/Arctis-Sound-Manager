@@ -30,7 +30,7 @@ from arctis_sound_manager.log_setup import configure_logging
 def main() -> int:
     # Safe this early: clip_capture keeps GStreamer behind _require_gst(), so
     # importing it for two constants does not pull gi in on a machine without it.
-    from arctis_sound_manager.clip_capture import DEFAULT_FPS
+    from arctis_sound_manager.clip_capture import CPU_DEFAULT_FPS, DEFAULT_FPS
 
     parser = argparse.ArgumentParser(prog="asm-clipd", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -38,8 +38,9 @@ def main() -> int:
                         help="clip length to save (default: 30)")
     parser.add_argument("--history", type=float, default=90.0,
                         help="seconds of history to keep buffered (default: 90)")
-    parser.add_argument("--fps", type=int, default=DEFAULT_FPS,
-                        help=f"capture rate ceiling (default: {DEFAULT_FPS}); "
+    parser.add_argument("--fps", type=int, default=None,
+                        help=f"capture rate ceiling (default: {DEFAULT_FPS} on a "
+                             f"GPU encoder, {CPU_DEFAULT_FPS} on the CPU); "
                              "the screencast decides the real rate")
     parser.add_argument("--bitrate", type=int, default=20000, help="kbit/s")
     # default=None, not False: the flag has to be distinguishable from its own
