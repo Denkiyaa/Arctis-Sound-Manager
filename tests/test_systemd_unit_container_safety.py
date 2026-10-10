@@ -60,6 +60,36 @@ def test_a_correct_host_unit_is_left_alone(home, monkeypatch):
     assert home.read_text() == correct
 
 
+def test_inside_a_container_the_host_unit_is_still_started(home, monkeypatch):
+    """Quit stops the daemon; the next GUI launch must start it again even in
+    a container, or the headset is never detected (#181)."""
+    home.parent.mkdir(parents=True)
+    correct = ("[Service]\n"
+               "ExecStart=/usr/bin/distrobox enter arctis-sound-manager -- /usr/bin/asm-daemon\n")
+    home.write_text(correct)
+    monkeypatch.setenv("container", "distrobox")
+    enabled = []
+    monkeypatch.setattr(asm_systemd.sc, "enable",
+                        lambda *units, now=False: enabled.append((units, now)))
+
+    asm_systemd.ensure_systemd_unit(enable=True)
+
+    assert enabled == [(("arctis-manager",), True)]
+    assert home.read_text() == correct
+
+
+def test_inside_a_container_without_a_host_unit_nothing_is_started(home, monkeypatch):
+    monkeypatch.setenv("container", "distrobox")
+    enabled = []
+    monkeypatch.setattr(asm_systemd.sc, "enable",
+                        lambda *units, now=False: enabled.append((units, now)))
+
+    asm_systemd.ensure_systemd_unit(enable=True)
+
+    assert enabled == []
+    assert not home.exists()
+
+
 def test_a_native_install_without_a_packaged_unit_gets_its_own(home, monkeypatch):
     """A source or pip install has no packaged unit — writing one is the whole
     point of this function. Where the distribution DOES ship one, nothing is

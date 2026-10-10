@@ -114,10 +114,18 @@ def ensure_systemd_unit(enable: bool = False) -> None:
     # The Distrobox installers already write the correct host units
     # (`distrobox enter <container> -- /usr/bin/asm-daemon`, see
     # scripts/distrobox/_common.sh). Overwriting those is strictly destructive.
-    if _running_in_container():
-        return
-
+    #
+    # Starting it is another matter. Quit stops the daemon, and this is what
+    # brings it back on the next launch; returning before the enable left
+    # Distrobox users with a GUI and no daemon — "headset not detected" until
+    # they ran `systemctl --user enable --now arctis-manager` by hand (#181).
+    # systemctl inside the container reaches the host's user manager (Quit
+    # relies on that too), so only the write is skipped.
     path = HOME_SYSTEMD_SERVICE_FOLDER / SYSTEMD_SERVICE_NAME
+    if _running_in_container():
+        if enable and path.exists():
+            sc.enable("arctis-manager", now=True)
+        return
 
     # A packaged unit outranks anything this function can write, and a file of
     # the same name under ~/.config/systemd/user REPLACES it rather than
