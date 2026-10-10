@@ -52,6 +52,7 @@ def valid_colors() -> dict[str, str]:
         "TOGGLE_ON":        "#FF6B6B",
         "TOGGLE_OFF":       "#2B2B4B",
         "COLOR_MASTER":     "#9E9E9E",
+        "COLOR_MIC":        "#E05A8A",
     }
     assert set(base.keys()) == set(THEME_KEYS), "Fixture must cover all THEME_KEYS"
     return base

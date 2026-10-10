@@ -637,6 +637,7 @@ class QMainApp(QBaseDesktopApp):
     def _on_apply_profile(self, profile) -> None:
         from arctis_sound_manager.profile_manager import apply_profile
         apply_profile(profile)
+        self._home_page.reload_channel_visibility()
         # Trigger EQ re-apply (single pipewire restart for all 3 channels)
         self._equalizer_page._sonar_page.apply_all_from_files()
 

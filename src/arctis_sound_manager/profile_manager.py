@@ -91,6 +91,10 @@ class Profile:
     # Per-channel output device mapping. Older profiles don't have this — defaults
     # to {} (no change on restore).
     output_devices: dict = field(default_factory=dict)
+    # Which cards the Channels page shows: {"hidden": [...], "aux": bool,
+    # "output": bool}. Older profiles don't have this — {} leaves the page
+    # as it is.
+    channels: dict = field(default_factory=dict)
 
     def slug(self) -> str:
         return re.sub(r"[^\w-]", "_", self.name.lower().strip())
@@ -111,6 +115,7 @@ class Profile:
         data.setdefault("dac", {})           # pre-v1.0.80
         data.setdefault("custom_eq_bands", [])  # pre-v1.1.25
         data.setdefault("output_devices", {})   # pre-v1.1.29
+        data.setdefault("channels", {})         # pre-v1.5.1
         return Profile(**data)
 
     @staticmethod
@@ -156,7 +161,45 @@ def snapshot_current() -> Profile:
     return Profile(name="", presets=presets, macros=macros,
                    spatial_audio=spatial, volumes=volumes, eq_mode=eq_mode,
                    dac=dac, custom_eq_bands=custom_eq_bands,
-                   output_devices=_load_channel_outputs())
+                   output_devices=_load_channel_outputs(),
+                   channels=_snapshot_channels())
+
+
+def _snapshot_channels() -> dict:
+    try:
+        from arctis_sound_manager.settings import GeneralSettings
+        gs = GeneralSettings.read_from_file()
+        return {"hidden": list(gs.hidden_channels or []),
+                "aux": bool(gs.aux_enabled),
+                "output": bool(gs.output_channel_visible)}
+    except Exception as e:  # noqa: BLE001
+        _log.warning("could not snapshot the visible channels: %r", e)
+        return {}
+
+
+def _apply_channels(channels: dict) -> None:
+    """Restore which cards are shown. Aux is a real channel the daemon builds,
+    so it is told too; the rest is display-only."""
+    try:
+        from arctis_sound_manager.settings import GeneralSettings
+        gs = GeneralSettings.read_from_file()
+        aux_before = bool(gs.aux_enabled)
+        if "hidden" in channels:
+            gs.hidden_channels = list(channels["hidden"])
+        if "output" in channels:
+            gs.output_channel_visible = bool(channels["output"])
+        if "aux" in channels:
+            gs.aux_enabled = bool(channels["aux"])
+        gs.write_to_file()
+    except Exception as e:  # noqa: BLE001
+        _log.warning("could not restore the visible channels: %r", e)
+        return
+    if "aux" in channels and bool(channels["aux"]) != aux_before:
+        try:
+            from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
+            DbusWrapper.change_setting("aux_enabled", bool(channels["aux"]))
+        except Exception:  # noqa: BLE001
+            _log.debug("could not notify the daemon about aux_enabled", exc_info=True)
 
 
 def _snapshot_custom_eq() -> list[int]:
@@ -245,6 +288,10 @@ def apply_profile(profile: Profile) -> None:
     output_devices = getattr(profile, "output_devices", None) or {}
     if output_devices:
         _apply_output_devices(output_devices)
+
+    channels = getattr(profile, "channels", None) or {}
+    if channels:
+        _apply_channels(channels)
 
     set_active_profile(profile.name)
 

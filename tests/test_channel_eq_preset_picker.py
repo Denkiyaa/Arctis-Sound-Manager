@@ -125,6 +125,12 @@ class _FakePicker:
 
     def pick(self, device_id):
         self.picked.append(device_id)
+        self.label = dict(self.options())[device_id]
+
+    label = "Arctis Nova Pro"
+
+    def current_label(self):
+        return self.label
 
 
 def test_output_button_hidden_until_picker_given(card):
@@ -161,6 +167,36 @@ def test_output_button_picks_through_the_selector(card, monkeypatch):
     card._on_output_clicked()
     assert picker.picked == ["bt"]
     assert opened[0] == ([("", "Arctis Nova Pro"), ("bt", "Earbuds")], "")
+
+
+def test_card_shows_the_selected_output_without_opening_the_picker(card, monkeypatch):
+    """#316: the device a channel plays on is readable on the card itself."""
+    assert card._output_lbl.isHidden()
+    picker = _FakePicker()
+    card.set_output_picker(picker)
+    assert not card._output_lbl.isHidden()
+    assert card._output_lbl.toolTip() == "Arctis Nova Pro"
+
+    class _Dlg:
+        DialogCode = SimpleNamespace(Accepted=1)
+
+        def __init__(self, *a, **k):
+            self.selected_key = "bt"
+
+        def exec(self):
+            return 1
+
+        def result(self):
+            return 1
+
+    monkeypatch.setattr(home_page, "SearchPickDialog", _Dlg)
+    card._on_output_clicked()
+    assert card._output_lbl.toolTip() == "Earbuds"
+
+
+def test_no_output_label_without_a_picker(card):
+    card.set_output_picker(None)
+    assert card._output_lbl.isHidden()
 
 
 # ── HomePage wiring ────────────────────────────────────────────────────────────

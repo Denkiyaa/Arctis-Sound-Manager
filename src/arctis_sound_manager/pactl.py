@@ -505,3 +505,48 @@ class PulseAudioManager:
 
         apply_mix_to_streams(self.pulse, media_mix, chat_mix, self._chatmix_channels())
 
+
+def micro_source_options(sources) -> list[tuple[str, str]]:
+    """(node.name, label) of every real input that can feed the Sonar Micro EQ.
+
+    Shared by the daemon's settings list and the Channels page Mic card (#315),
+    so both offer exactly the same microphones.
+    """
+    result: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for s in sources:
+        node_name = s.proplist.get('node.name', '')
+        if not node_name:
+            continue
+        # Skip monitors (loopback/recording taps of a sink, not a real
+        # input device) and ASM's own effect nodes (the Micro EQ capture
+        # itself, or any other Sonar filter-chain node) — none of these
+        # make sense as a "feed the Micro EQ from this" choice.
+        if node_name.endswith('.monitor'):
+            continue
+        if s.proplist.get('media.class', '') == 'Audio/Source/Virtual':
+            continue
+        if s.proplist.get('device.class', '') == 'monitor':
+            continue
+        if node_name.startswith('effect_') or 'sonar-' in node_name:
+            continue
+
+        # `node.description` is optional, and Bluetooth headsets routinely
+        # ship without it: a bluez source then labelled itself with its raw
+        # node.name ("bluez_input.30:96:10:49:54:E2"), which reads as a MAC
+        # address rather than a device — users report the headset as simply
+        # "not in the list" because nothing in the entry names it. pulsectl
+        # resolves the friendly name ("HUAWEI FreeBuds 6") even when the
+        # PipeWire property is absent, so fall back to it before giving up
+        # on node.name. Same ladder build_sink_options() already uses for
+        # the output pickers (#134 / #146) — the input list simply never
+        # got it.
+        name = (s.proplist.get('node.description', '')
+                or getattr(s, 'description', '')
+                or node_name)
+
+        if node_name not in seen:
+            seen.add(node_name)
+            result.append((node_name, name))
+
+    return result

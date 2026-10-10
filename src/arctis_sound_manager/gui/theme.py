@@ -17,6 +17,7 @@ THEMES = {
         "COLOR_GAME": "#04C5A8", "COLOR_CHAT": "#2791CE", "COLOR_AUX": "#FB4A00", "COLOR_HDMI": "#9B59B6", "COLOR_AUX2": "#E4B53C",
         "TOGGLE_ON": "#FB4A00", "TOGGLE_OFF": "#2D363E",
         "COLOR_MASTER": "#9E9E9E",
+        "COLOR_MIC": "#E05A8A",
     },
     "aurora": {
         "BG_MAIN": "#0d0d1f", "BG_SIDEBAR": "#0a0a1a", "BG_CARD": "#121224",
@@ -26,6 +27,7 @@ THEMES = {
         "COLOR_GAME": "#7B2FFF", "COLOR_CHAT": "#00D4FF", "COLOR_AUX": "#f472b6", "COLOR_HDMI": "#34d399", "COLOR_AUX2": "#facc15",
         "TOGGLE_ON": "#7B2FFF", "TOGGLE_OFF": "#1a1a3a",
         "COLOR_MASTER": "#9E9E9E",
+        "COLOR_MIC": "#a3e635",
     },
     "neon": {
         "BG_MAIN": "#07070f", "BG_SIDEBAR": "#050508", "BG_CARD": "#0b0b15",
@@ -35,6 +37,7 @@ THEMES = {
         "COLOR_GAME": "#00ffcc", "COLOR_CHAT": "#ff00aa", "COLOR_AUX": "#ff6600", "COLOR_HDMI": "#9b59b6", "COLOR_AUX2": "#ffe600",
         "TOGGLE_ON": "#00ffcc", "TOGGLE_OFF": "#0f0f1e",
         "COLOR_MASTER": "#9E9E9E",
+        "COLOR_MIC": "#00aaff",
     },
     "premium": {
         "BG_MAIN": "#131a24", "BG_SIDEBAR": "#0f1520", "BG_CARD": "#18202c",
@@ -44,6 +47,7 @@ THEMES = {
         "COLOR_GAME": "#F59E0B", "COLOR_CHAT": "#EF4444", "COLOR_AUX": "#3b82f6", "COLOR_HDMI": "#8b5cf6", "COLOR_AUX2": "#10b981",
         "TOGGLE_ON": "#F59E0B", "TOGGLE_OFF": "#1e2938",
         "COLOR_MASTER": "#9E9E9E",
+        "COLOR_MIC": "#f472b6",
     },
     "arctic": {
         "BG_MAIN": "#111d2c", "BG_SIDEBAR": "#0c1825", "BG_CARD": "#162030",
@@ -53,6 +57,7 @@ THEMES = {
         "COLOR_GAME": "#4cc9f0", "COLOR_CHAT": "#0ea5e9", "COLOR_AUX": "#06b6d4", "COLOR_HDMI": "#6366f1", "COLOR_AUX2": "#a78bfa",
         "TOGGLE_ON": "#4cc9f0", "TOGGLE_OFF": "#1c2d40",
         "COLOR_MASTER": "#9E9E9E",
+        "COLOR_MIC": "#94e2d5",
     },
     "matcha_sv": {
         "BG_MAIN": "#141a16", "BG_SIDEBAR": "#0f1411", "BG_CARD": "#1a221c",
@@ -62,6 +67,7 @@ THEMES = {
         "COLOR_GAME": "#8fbf5a", "COLOR_CHAT": "#e8a0a8", "COLOR_AUX": "#d9b779", "COLOR_HDMI": "#7fb7a4", "COLOR_AUX2": "#b39ddb",
         "TOGGLE_ON": "#8fbf5a", "TOGGLE_OFF": "#243028",
         "COLOR_MASTER": "#b8b2a2",
+        "COLOR_MIC": "#9ec1e0",
     },
 }
 
@@ -79,7 +85,7 @@ THEME_KEYS: tuple[str, ...] = (
     "BG_SIDEBAR_ACTIVE", "ACCENT", "ACCENT2", "TEXT_PRIMARY",
     "TEXT_SECONDARY", "BORDER", "COLOR_GAME", "COLOR_CHAT",
     "COLOR_AUX", "COLOR_HDMI", "COLOR_AUX2", "TOGGLE_ON", "TOGGLE_OFF",
-    "COLOR_MASTER",
+    "COLOR_MASTER", "COLOR_MIC",
 )
 
 # Colours added after the share format shipped. A link written before they
@@ -88,12 +94,15 @@ THEME_KEYS: tuple[str, ...] = (
 # keys is still rejected, because that means it is truncated or corrupt rather
 # than merely older. Anything added here in future goes in this set too.
 THEME_KEYS_OPTIONAL: frozenset[str] = frozenset({"COLOR_AUX2", "TOGGLE_ON", "TOGGLE_OFF",
-                                                "COLOR_MASTER"})
+                                                "COLOR_MASTER", "COLOR_MIC"})
 
 # Optional colours that are better derived from the theme's own palette than
 # taken from the default one: a theme made before the toggle colours existed
 # keeps the switches it always had (accent when on, button background off).
-DERIVED_DEFAULTS: dict[str, str] = {"TOGGLE_ON": "ACCENT", "TOGGLE_OFF": "BG_BUTTON"}
+# The Mic card (#315) arrived after many themes were made: it takes their
+# Master colour, which those themes already use for a non-routable card.
+DERIVED_DEFAULTS: dict[str, str] = {"TOGGLE_ON": "ACCENT", "TOGGLE_OFF": "BG_BUTTON",
+                                    "COLOR_MIC": "COLOR_MASTER"}
 
 
 def default_for(key: str, colors: dict[str, str]) -> str:
@@ -108,7 +117,7 @@ THEME_GROUPS: dict[str, tuple[str, ...]] = {
                                 "BG_BUTTON_HOVER", "BG_SIDEBAR_ACTIVE"),
     "theme_group_accents":     ("ACCENT", "ACCENT2", "BORDER"),
     "theme_group_text":        ("TEXT_PRIMARY", "TEXT_SECONDARY"),
-    "theme_group_channels":    ("COLOR_MASTER", "COLOR_GAME", "COLOR_CHAT", "COLOR_AUX",
+    "theme_group_channels":    ("COLOR_MIC", "COLOR_MASTER", "COLOR_GAME", "COLOR_CHAT", "COLOR_AUX",
                                 "COLOR_AUX2", "COLOR_HDMI"),
     "theme_group_toggles":     ("TOGGLE_ON", "TOGGLE_OFF"),
 }
@@ -126,6 +135,7 @@ COLOR_LABEL_KEYS: dict[str, str] = {
     "COLOR_AUX2": "theme_color_aux2",
     "TOGGLE_ON": "theme_color_toggle_on", "TOGGLE_OFF": "theme_color_toggle_off",
     "COLOR_MASTER": "theme_color_master",
+    "COLOR_MIC": "theme_color_mic",
 }
 
 USER_THEMES_DIR = Path(os.environ.get('XDG_CONFIG_HOME') or (Path.home() / '.config')) / "arctis-sound-manager" / "themes"

@@ -46,6 +46,7 @@ def valid_colors() -> dict[str, str]:
         "TOGGLE_ON":        "#E94560",
         "TOGGLE_OFF":       "#533483",
         "COLOR_MASTER":     "#9E9E9E",
+        "COLOR_MIC":        "#E05A8A",
     }
     assert set(base) == set(THEME_KEYS)
     return base

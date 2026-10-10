@@ -73,6 +73,8 @@ class ProfileBar(QWidget):
     # directly, since a checkable menu action already carries it.
     sig_toggle_aux = Signal(bool)
     sig_toggle_output = Signal(bool)
+    # (channel, visible) for the cards with no setting of their own (#315)
+    sig_toggle_channel = Signal(str, bool)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -143,6 +145,20 @@ class ProfileBar(QWidget):
 
         self._layout.addStretch(1)
 
+    # Menu order = the cards' order on the page. Aux and Output keep their
+    # own settings and signals; the others share hidden_channels.
+    _CHANNEL_ROWS = (("mic", "mic"), ("master", "master"), ("game", "game"),
+                     ("chat", "chat"), ("media", "media"),
+                     ("aux", "aux_channel"), ("output", "output_channel"))
+
+    @staticmethod
+    def _read_hidden() -> set[str]:
+        from arctis_sound_manager.settings import GeneralSettings
+        try:
+            return set(GeneralSettings.read_from_file().hidden_channels or [])
+        except Exception:  # noqa: BLE001
+            return set()
+
     @staticmethod
     def _read_visibility() -> tuple[bool, bool]:
         """(aux_enabled, output_channel_visible), tolerant of a broken file."""
@@ -178,21 +194,23 @@ class ProfileBar(QWidget):
         # "Channels" button. A widget action's own checkbox isn't wired to
         # the menu's close-on-trigger behaviour, so the menu stays open and
         # both can be flipped in the same pass.
-        aux_cb = QCheckBox(I18n.translate('ui', 'aux_channel'))
-        aux_cb.setStyleSheet(cb_style)
-        aux_cb.setChecked(aux_on)
-        aux_cb.toggled.connect(self.sig_toggle_aux.emit)
-        aux_action = QWidgetAction(menu)
-        aux_action.setDefaultWidget(aux_cb)
-        menu.addAction(aux_action)
-
-        output_cb = QCheckBox(I18n.translate('ui', 'output_channel'))
-        output_cb.setStyleSheet(cb_style)
-        output_cb.setChecked(output_on)
-        output_cb.toggled.connect(self.sig_toggle_output.emit)
-        output_action = QWidgetAction(menu)
-        output_action.setDefaultWidget(output_cb)
-        menu.addAction(output_action)
+        hidden = self._read_hidden()
+        for channel, label_key in self._CHANNEL_ROWS:
+            cb = QCheckBox(I18n.translate('ui', label_key))
+            cb.setStyleSheet(cb_style)
+            cb.setProperty("channel", channel)
+            if channel == "aux":
+                cb.setChecked(aux_on)
+                cb.toggled.connect(self.sig_toggle_aux.emit)
+            elif channel == "output":
+                cb.setChecked(output_on)
+                cb.toggled.connect(self.sig_toggle_output.emit)
+            else:
+                cb.setChecked(channel not in hidden)
+                cb.toggled.connect(lambda on, ch=channel: self.sig_toggle_channel.emit(ch, on))
+            action = QWidgetAction(menu)
+            action.setDefaultWidget(cb)
+            menu.addAction(action)
 
         return menu
 

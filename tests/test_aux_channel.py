@@ -90,42 +90,42 @@ def page():
     widget.deleteLater()
 
 
-def test_four_cards_keep_the_full_width(page):
-    from arctis_sound_manager.gui.home_page import CARD_MIN_WIDTH
-
-    page._apply_aux_visibility(False)
-
-    assert page._game_card.minimumWidth() == CARD_MIN_WIDTH
+def _shown(page):
+    return [c for c in (*page._all_cards(), page._mic_card) if not c.isHidden()]
 
 
-def test_a_fifth_card_narrows_all_of_them(page):
-    """All of them, not just the new one: a row of four wide cards and one
-    narrow one is not a mixer."""
-    from arctis_sound_manager.gui.home_page import CARD_MIN_WIDTH_TIGHT
-
-    page._apply_aux_visibility(True)
-
-    assert {c.minimumWidth() for c in page._all_cards()} == {CARD_MIN_WIDTH_TIGHT}
+def test_all_cards_share_one_width(page):
+    """All of them, not just the new one: a row of wide cards and one narrow
+    one is not a mixer."""
+    for aux in (False, True):
+        page._apply_aux_visibility(aux)
+        assert len({c.minimumWidth() for c in _shown(page)}) == 1
 
 
 def test_the_row_fits_a_laptop_screen(page):
-    """The number that made this necessary. Five cards, four 20 px gaps, and
-    the row takes three quarters of the window."""
-    from arctis_sound_manager.gui.home_page import CARD_MIN_WIDTH_TIGHT
+    """The number that made this necessary: the row, gaps included, takes
+    three quarters of a window that must fit a 1366 px laptop screen."""
+    for aux in (False, True):
+        page._apply_aux_visibility(aux)
+        cards = _shown(page)
+        row = sum(c.minimumWidth() for c in cards) + 20 * (len(cards) - 1)
+        assert row / 0.75 <= 1500, "a 1366 px laptop cannot show the mixer"
 
+
+def test_aux_on_narrows_the_cards(page):
+    page._apply_aux_visibility(False)
+    wide = page._game_card.minimumWidth()
     page._apply_aux_visibility(True)
-    row = 5 * CARD_MIN_WIDTH_TIGHT + 4 * 20
-
-    assert row / 0.75 <= 1500, "a 1366 px laptop cannot show the mixer"
+    assert page._game_card.minimumWidth() < wide
 
 
 def test_turning_it_off_gives_the_width_back(page):
-    from arctis_sound_manager.gui.home_page import CARD_MIN_WIDTH
-
+    page._apply_aux_visibility(False)
+    wide = page._game_card.minimumWidth()
     page._apply_aux_visibility(True)
     page._apply_aux_visibility(False)
 
-    assert page._game_card.minimumWidth() == CARD_MIN_WIDTH
+    assert page._game_card.minimumWidth() == wide
 
 
 def test_the_button_lives_with_the_other_page_actions(page):
@@ -150,11 +150,15 @@ def test_the_menu_reflects_which_channels_are_currently_on(monkeypatch):
     bar = ProfileBar()
 
     monkeypatch.setattr(bar, "_read_visibility", lambda: (True, False))
+    monkeypatch.setattr(bar, "_read_hidden", lambda: {"master"})
     menu = bar._build_channels_menu()
     checkboxes = [a.defaultWidget() for a in menu.actions()]
 
     assert all(isinstance(cb, QCheckBox) for cb in checkboxes)
-    assert [cb.isChecked() for cb in checkboxes] == [True, False]
+    # every card, in the order the page shows them (#315)
+    assert [(cb.property("channel"), cb.isChecked()) for cb in checkboxes] == [
+        ("mic", True), ("master", False), ("game", True), ("chat", True),
+        ("media", True), ("aux", True), ("output", False)]
 
 
 def test_checking_a_box_emits_the_matching_signal(monkeypatch):
@@ -165,8 +169,15 @@ def test_checking_a_box_emits_the_matching_signal(monkeypatch):
     bar = ProfileBar()
 
     monkeypatch.setattr(bar, "_read_visibility", lambda: (False, True))
+    monkeypatch.setattr(bar, "_read_hidden", lambda: set())
     menu = bar._build_channels_menu()
-    aux_cb, output_cb = (a.defaultWidget() for a in menu.actions())
+    boxes = {a.defaultWidget().property("channel"): a.defaultWidget() for a in menu.actions()}
+    aux_cb, output_cb = boxes["aux"], boxes["output"]
+
+    channel_calls = []
+    bar.sig_toggle_channel.connect(lambda ch, on: channel_calls.append((ch, on)))
+    boxes["mic"].setChecked(False)
+    assert channel_calls == [("mic", False)]
 
     aux_calls = []
     bar.sig_toggle_aux.connect(aux_calls.append)

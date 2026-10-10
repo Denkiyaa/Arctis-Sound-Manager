@@ -362,6 +362,12 @@ class GeneralSettings(JsonSerializable):
     # shows. Hiding it only frees up room for someone who never uses it.
     output_channel_visible: bool = True
 
+    # The other cards the Channels page can tuck away, same display-only
+    # nature as output_channel_visible: "mic", "master", "game", "chat",
+    # "media" (#315). Hiding a playback channel's card keeps its sink and its
+    # routing button; it only frees room on the page.
+    hidden_channels: list[str] = []
+
     # Which channels the ChatMix bar/dial's non-chat side moves (#249, #269).
     # Chat is always the other, fixed side. "game" is the only member out of
     # the box, reproducing the pre-#249 behaviour; the user can add

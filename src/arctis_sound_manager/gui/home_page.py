@@ -9,7 +9,7 @@ import json
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import (QMimeData, QPoint, QRect, QSize, Qt, QTimer, QUrl,
+from PySide6.QtCore import (QEvent, QMimeData, QObject, QPoint, QRect, QSize, Qt, QTimer, QUrl,
                             Signal, Slot)
 from PySide6.QtGui import (QColor, QDesktopServices, QDrag, QIcon, QPainter, QPen,
                            QPixmap)
@@ -76,6 +76,7 @@ def _save_hidden_apps(keys: set[str]) -> None:
 from arctis_sound_manager.gui.app_icons import app_icon, icon_hint
 from arctis_sound_manager.gui.components import (
     AUX_ICON,
+    MIC_ICON,
     CHAT_ICON,
     EQUALIZER_ICON,
     GAME_ICON,
@@ -114,7 +115,8 @@ from arctis_sound_manager.gui.tray_eq_presets import (SonarPresetApplier,
                                                       get_sonar_active_preset,
                                                       list_sonar_channel_presets)
 from arctis_sound_manager.i18n import I18n
-from arctis_sound_manager.pactl import apply_mix_to_streams, mix_stream_levels
+from arctis_sound_manager.pactl import (apply_mix_to_streams, micro_source_options,
+                                        mix_stream_levels)
 from arctis_sound_manager.power_status import HeadsetPower, normalize_power_value
 from arctis_sound_manager.pw_utils import (
     app_override_key,
@@ -337,11 +339,20 @@ def chatmix_bar_position(pct_by_channel: dict, chat_pct, channels: list[str]) ->
     return chatmix_percentages_to_bar_position(round(sum(values) / len(values)), chat_pct)
 
 
-# What one channel card needs, and what it may be squeezed to when the optional
-# Aux channel makes a fifth. The narrow figure still fits the slider, the value
-# and the device picker; below it the picker starts eliding names to nothing.
+# What one channel card would like, and the row it must fit in: the cards take
+# three quarters of the window, and the window has to fit a 1366 px laptop
+# screen (~1500 px of budget). The row grows with Aux (#209) and the Mic card
+# (#315), so the floor is shared out rather than fixed.
 CARD_MIN_WIDTH = 260
-CARD_MIN_WIDTH_TIGHT = 205
+CARD_ROW_BUDGET = 1125
+CARD_GAP = 20
+
+
+def card_min_width(count: int) -> int:
+    """Minimum width each of *count* side-by-side cards may ask for."""
+    if count <= 1:
+        return CARD_MIN_WIDTH
+    return min(CARD_MIN_WIDTH, (CARD_ROW_BUDGET - CARD_GAP * (count - 1)) // count)
 
 
 def _read_aux_enabled() -> bool:
@@ -358,6 +369,14 @@ def _read_aux_enabled() -> bool:
         return False
 
 
+def _read_hidden_channels() -> set[str]:
+    try:
+        from arctis_sound_manager.settings import GeneralSettings
+        return set(GeneralSettings.read_from_file().hidden_channels or [])
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def _read_output_channel_visible() -> bool:
     """Whether the Output card should be shown (#262) — a display preference only."""
     try:
@@ -365,6 +384,52 @@ def _read_output_channel_visible() -> bool:
         return bool(GeneralSettings.read_from_file().output_channel_visible)
     except Exception:  # noqa: BLE001 — a broken settings file is not worth the page
         return True
+
+
+class _ElidedLabel(QLabel):
+    """A label that shortens its text with "…" to whatever width it gets,
+    full text in the tooltip. Cards narrow as more of them are shown, and a
+    plain QLabel then just cut names off mid-letter."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._full = ""
+        self.set_full_text(text)
+
+    def set_full_text(self, text: str) -> None:
+        self._full = text or ""
+        self.setToolTip(self._full)
+        self._elide()
+
+    def full_text(self) -> str:
+        return self._full
+
+    # Asks for the full text, accepts down to a few letters: a layout gives it
+    # all the room it wants when there is some, and squeezes it otherwise.
+    def sizeHint(self):
+        m = self.contentsMargins()
+        return QSize(self.fontMetrics().horizontalAdvance(self._full) + m.left() + m.right() + 2,
+                     super().sizeHint().height())
+
+    def minimumSizeHint(self):
+        return QSize(self.fontMetrics().horizontalAdvance("W…") , super().minimumSizeHint().height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide()
+
+    def changeEvent(self, event):
+        # The card's stylesheet sets the font after construction: ask the
+        # layout for room again, or the width it gave matches the old font.
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self.updateGeometry()
+            self._elide()
+
+    def _elide(self):
+        m = self.contentsMargins()
+        width = max(1, self.width() - m.left() - m.right())
+        super().setText(self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, width))
 
 
 class AudioCard(QWidget):
@@ -420,7 +485,7 @@ class AudioCard(QWidget):
             self._icon = SvgIconWidget(svg_path, accent_color, size=36, width=48)
             header_layout.addWidget(self._icon)
 
-        self._name_lbl = QLabel(channel_name)
+        self._name_lbl = _ElidedLabel(channel_name)
         self._name_lbl.setStyleSheet(
             f"color: {accent_color}; font-size: 14pt; font-weight: normal; background: transparent;"
         )
@@ -514,6 +579,14 @@ class AudioCard(QWidget):
         buttons_row.addStretch(1)
         outer.addLayout(buttons_row)
 
+        # Where the channel plays, readable without opening the picker (#316).
+        self._output_lbl = _ElidedLabel()
+        self._output_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._output_lbl.setContentsMargins(8, 4, 8, 0)
+        self._style_output_label()
+        self._output_lbl.hide()
+        outer.addWidget(self._output_lbl)
+
         outer.addSpacing(8)
 
         # ── Applications section ───────────────────────────────────────────────
@@ -577,6 +650,7 @@ class AudioCard(QWidget):
         if self._icon is not None:
             self._icon.set_color(self._accent)
         self._style_card_buttons()
+        self._style_output_label()
         # Slider groove color follows the theme; accent stays per-channel
         self._slider.setStyleSheet(_make_vertical_slider_qss(self._accent))
         self._hw_slider.setStyleSheet(_make_vertical_slider_qss(self._accent))
@@ -605,7 +679,7 @@ class AudioCard(QWidget):
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def set_name(self, name: str):
-        self._name_lbl.setText(name)
+        self._name_lbl.set_full_text(name)
 
     def set_on_drop(self, callback):
         self._on_drop_callback = callback
@@ -740,6 +814,26 @@ class AudioCard(QWidget):
         Picking through it keeps both pages showing the same device."""
         self._output_picker = picker
         self._output_btn.setVisible(picker is not None)
+        if picker is not None and hasattr(picker, "target_changed"):
+            # Queued: the combo updates its text after emitting
+            picker.target_changed.connect(
+                lambda *_: QTimer.singleShot(0, self._refresh_output_label))
+        self._refresh_output_label()
+
+    def _style_output_label(self):
+        self._output_lbl.setStyleSheet(
+            f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 9pt; background: transparent;"
+        )
+
+    def _refresh_output_label(self):
+        label = ""
+        if self._output_picker is not None and hasattr(self._output_picker, "current_label"):
+            label = self._output_picker.current_label()
+        if not label:
+            self._output_lbl.hide()
+            return
+        self._output_lbl.set_full_text(label)
+        self._output_lbl.show()
 
     def _on_output_clicked(self):
         if self._output_picker is None:
@@ -752,6 +846,7 @@ class AudioCard(QWidget):
         if dlg.result() != dlg.DialogCode.Accepted or device_id is None or device_id == current:
             return
         self._output_picker.pick(device_id)
+        self._refresh_output_label()
 
     def set_disconnected(self):
         self._ignore_change = True
@@ -767,6 +862,18 @@ class AudioCard(QWidget):
                     hint: tuple = ("", "", "")):
         """Add an application icon to the Applications section."""
         tag = _AppTag(app_name, si_index, pid, bg_color, hint)
+        self._apps_area.addWidget(tag)
+
+    def add_recorder_tag(self, app_name: str, hint: tuple = ("", "", "")):
+        """An application recording this source: icon + name, nothing to
+        click or drag (a recording cannot be moved to a playback channel)."""
+        tag = QLabel()
+        tag.setFixedSize(_APP_ICON_SIZE + 10, _APP_ICON_SIZE + 10)
+        tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tag.setPixmap(_app_pixmap(app_name, hint, self._accent, _APP_ICON_SIZE))
+        tag.setToolTip(app_name)
+        tag.setStyleSheet(
+            f"background-color: #1e2530; border: 1px solid {self._accent}; border-radius: 6px;")
         self._apps_area.addWidget(tag)
 
     def clear_apps(self):
@@ -1282,6 +1389,73 @@ def _battery_color(pct: int) -> str:
 
 # ── Home Page ──────────────────────────────────────────────────────────────────
 
+# The Mic card's volume acts on what applications record from: the Sonar Micro
+# EQ's output when the mic chain is up, the default input otherwise (#315).
+MICRO_EQ_SOURCE = "effect_output.sonar-micro-eq"
+
+
+class _MicInputPicker(QObject):
+    """The Mic card's input picker: same choices as the Settings page's
+    "Sonar Micro EQ input" (micro_input_source), written the same way —
+    through the daemon, whose watchdog then relinks the mic chain.
+
+    Exposes the options / current_id / current_label / pick interface that
+    AudioCard.set_output_picker expects."""
+
+    target_changed = Signal(str)
+
+    def __init__(self, get_pulse, parent=None):
+        super().__init__(parent)
+        self._get_pulse = get_pulse
+        self._labels: dict[str, str] = {}
+        self._current: str | None = None
+
+    @staticmethod
+    def _setting() -> str:
+        try:
+            from arctis_sound_manager.settings import GeneralSettings
+            return GeneralSettings.read_from_file().micro_input_source or "__auto__"
+        except Exception:  # noqa: BLE001
+            return "__auto__"
+
+    def options(self) -> list[tuple[str, str]]:
+        entries = [
+            ("__auto__", I18n.translate("settings_values", "micro_source_auto")),
+            ("__manual__", I18n.translate("settings_values", "micro_source_manual")),
+        ]
+        pulse = self._get_pulse()
+        if pulse is not None:
+            try:
+                entries += micro_source_options(pulse.source_list())
+            except Exception:  # noqa: BLE001
+                logger.debug("could not list the inputs", exc_info=True)
+        self._labels = dict(entries)
+        return entries
+
+    def current_id(self) -> str | None:
+        return self._setting()
+
+    def current_label(self) -> str:
+        current = self._setting()
+        if current not in self._labels:
+            self.options()
+        return self._labels.get(current, current)
+
+    def refresh(self) -> None:
+        """Tell the card when the input changed elsewhere (Settings page,
+        auto mic-switch)."""
+        current = self._setting()
+        if current != self._current:
+            self._current = current
+            self.target_changed.emit(current)
+
+    def pick(self, source_id: str) -> None:
+        from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
+        DbusWrapper.change_setting("micro_input_source", source_id)
+        self._current = source_id
+        self.target_changed.emit(source_id)
+
+
 class HomePage(QWidget):
     """
     Home page showing:
@@ -1384,46 +1558,21 @@ class HomePage(QWidget):
         root.addWidget(self._status_bar)
         root.addSpacing(24)
 
-        # ── Enable sliders toggle + Profiles bar (same row) ───────────────────
+        # ── Profiles bar ──────────────────────────
         toggle_row = QWidget()
         toggle_row.setStyleSheet("background: transparent;")
         toggle_layout = QHBoxLayout(toggle_row)
         toggle_layout.setContentsMargins(0, 0, 0, 0)
         toggle_layout.setSpacing(16)
 
-        self._toggle_lbl = QLabel(I18n.translate("ui", "enable_volume_sliders"))
-        self._toggle_lbl.setStyleSheet(
-            f"color: {TEXT_PRIMARY}; font-size: 11pt; background: transparent;"
-        )
-        toggle_layout.addWidget(self._toggle_lbl)
-
-        self._toggle = ToggleSwitch()
-        self._toggle.set_checked(True)
-        self._toggle.checkbox.toggled.connect(self._on_toggle_changed)
-        toggle_layout.addWidget(self._toggle)
-
-        # Spacer between toggle and profiles
-        toggle_layout.addSpacing(24)
-
         # Profiles bar inline
         from arctis_sound_manager.gui.profile_bar import ProfileBar
         self.profile_bar = ProfileBar()
         self.profile_bar.sig_toggle_aux.connect(self._set_aux_enabled)
         self.profile_bar.sig_toggle_output.connect(self._set_output_channel_visible)
+        self.profile_bar.sig_toggle_channel.connect(self._set_channel_visible)
         toggle_layout.addWidget(self.profile_bar, stretch=1)
 
-        # Reclaim audio — one-click fix for apps stuck on a non-ASM output
-        # device (HDMI, S/PDIF, another DAC…)
-        self._reclaim_btn = QPushButton(I18n.translate("ui", "reclaim_audio"))
-        self._reclaim_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._reclaim_btn.setToolTip(I18n.translate("ui", "reclaim_audio_tip"))
-        self._reclaim_btn.setStyleSheet(
-            f"QPushButton {{ background: {ACCENT}; border: none; border-radius: 4px; "
-            f"color: #fff; font-size: 10pt; padding: 4px 14px; }}"
-            f"QPushButton:hover {{ background: #FF6A28; }}"
-        )
-        self._reclaim_btn.clicked.connect(self._on_reclaim_audio)
-        toggle_layout.addWidget(self._reclaim_btn)
 
         root.addWidget(toggle_row)
         root.addSpacing(24)
@@ -1452,6 +1601,17 @@ class HomePage(QWidget):
         self._cards_layout = QHBoxLayout(self._cards_widget)
         self._cards_layout.setSpacing(20)
         self._cards_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Mic card (#315), leftmost: volume of what applications record, the
+        # input feeding it, and the applications recording. Not a playback channel,
+        # so nothing can be dropped on it and it stays out of _all_cards().
+        self._mic_card = AudioCard(I18n.translate("ui", "mic"), _theme.c("COLOR_MIC"), MIC_ICON)
+        self._mic_card.set_on_change(self._on_mic_volume_changed)
+        self._mic_picker = _MicInputPicker(self._get_pulse, self)
+        self._mic_card.set_output_picker(self._mic_picker)
+        self._mic_card._output_btn.setToolTip(I18n.translate("ui", "mic_input_device"))
+        self._source_mic = None
+        self._cards_layout.addWidget(self._mic_card, stretch=1)
 
         # Master card: the headset's own physical volume, downstream of every
         # channel below. Kept separate from Output (an unrelated external
@@ -1496,6 +1656,7 @@ class HomePage(QWidget):
         self._ext_card.set_on_change(self._on_ext_volume_changed)
         self._ext_card.set_on_drop(self._on_stream_drop_ext)
         self._cards_layout.addWidget(self._ext_card, stretch=1)
+
 
         # EQ preset picker on every card but Master, keyed by Sonar channel
         # (#256). One applier per channel, so picking on one card never gets
@@ -1594,6 +1755,8 @@ class HomePage(QWidget):
 
         self._apply_aux_visibility(_read_aux_enabled())
         self._apply_output_visibility(_read_output_channel_visible())
+        for channel in _read_hidden_channels():
+            self._apply_channel_visibility(channel, False)
 
         root.addWidget(cards_outer, stretch=1)
         root.addWidget(chatmix_bar_outer)
@@ -1785,11 +1948,7 @@ class HomePage(QWidget):
                 f"QPushButton:hover {{ color: {_theme.c('TEXT_PRIMARY')}; }}"
             )
 
-        # Toggle label and disconnected label
-        if hasattr(self, "_toggle_lbl"):
-            self._toggle_lbl.setStyleSheet(
-                f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; background: transparent;"
-            )
+        # Disconnected label
         if hasattr(self, "_disconnected_label"):
             self._disconnected_label.setStyleSheet(
                 f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 14pt; font-style: italic; background: transparent;"
@@ -1814,8 +1973,9 @@ class HomePage(QWidget):
         self._ext_card._accent = color_hdmi
         self._master_card._accent = color_master
 
+        self._mic_card._accent = _theme.c("COLOR_MIC")
         for card in (self._game_card, self._chat_card, self._media_card,
-                     self._aux_card, self._master_card, self._ext_card):
+                     self._aux_card, self._master_card, self._ext_card, self._mic_card):
             card.apply_theme(t)
 
         # The ChatMix bar's fill mirrors the channel sliders' colours (#269)
@@ -1841,27 +2001,6 @@ class HomePage(QWidget):
         self._style_unassigned()
 
     # ── Toggle handler ─────────────────────────────────────────────────────────
-
-    def _on_toggle_changed(self, enabled: bool):
-        self._game_card.setEnabled(enabled)
-        self._chat_card.setEnabled(enabled)
-        self._media_card.setEnabled(enabled)
-
-    # ── Reclaim audio handler ────────────────────────────────────────────────
-
-    def _on_reclaim_audio(self):
-        try:
-            from arctis_sound_manager.pw_utils import reclaim_misrouted_streams
-            count, names = reclaim_misrouted_streams()
-            if count > 0:
-                logger.info("Reclaimed %d misrouted stream(s): %s", count, ", ".join(names))
-            else:
-                logger.debug("Reclaim audio: nothing to move, all apps already on headset")
-            # Refresh the app lists shown on the cards immediately rather than
-            # waiting for the next poll tick.
-            self._poll_volumes()
-        except Exception as exc:
-            logger.warning("_on_reclaim_audio failed: %s", exc)
 
     # ── D-Bus status signal handler ───────────────────────────────────────────
 
@@ -2437,6 +2576,8 @@ class HomePage(QWidget):
             # Anything playing that no card above represents.
             self._refresh_unassigned(sink_inputs, sinks, sink_ext)
 
+            self._poll_mic(pulse)
+
         except Exception as exc:
             logger.warning("Error polling PulseAudio: %s", exc)
             try:
@@ -2445,6 +2586,45 @@ class HomePage(QWidget):
                 pass
             self._pulse = None
             self._set_disconnected()
+
+    def _poll_mic(self, pulse) -> None:
+        """Mic card: the source applications record from, its volume, and
+        who is recording it (#315)."""
+        try:
+            sources = pulse.source_list()
+            source = next((s for s in sources if s.name == MICRO_EQ_SOURCE), None)
+            if source is None:
+                default = pulse.server_info().default_source_name
+                source = next((s for s in sources if s.name == default), None)
+            self._mic_picker.refresh()
+            if source is None:
+                self._source_mic = None
+                self._mic_card.set_disconnected()
+                self._mic_card.clear_apps()
+                return
+            self._source_mic = source
+            self._mic_card.set_connected()
+            self._mic_card.set_volume(round(source.volume.value_flat * 100))
+
+            recorders = []
+            for so in pulse.source_output_list():
+                if so.source != source.index:
+                    continue
+                props = so.proplist
+                # Peak meters and other passive taps are not recordings
+                if props.get("stream.monitor") == "true" or props.get("media.class") == "Stream/Input/Audio/Monitor":
+                    continue
+                name = self._friendly_app_name(props)
+                recorders.append((name, so.index, int(props.get("application.process.id", 0) or 0),
+                                  icon_hint(props)))
+            sig = tuple((n, i) for n, i, _, _ in recorders)
+            if sig != self._mic_card._app_sig:
+                self._mic_card.clear_apps()
+                self._mic_card._app_sig = sig
+                for name, index, pid, hint in recorders:
+                    self._mic_card.add_recorder_tag(name, hint)
+        except Exception:  # noqa: BLE001 — the card just waits for the next tick
+            logger.debug("could not poll the mic", exc_info=True)
 
     # application.name is often a generic audio-engine label rather than the
     # actual program name (e.g. Discord streams report "WEBRTC VoiceEngine").
@@ -2883,6 +3063,18 @@ class HomePage(QWidget):
     def _on_aux_channel_volume_changed(self, value: int):
         self._apply_volume(getattr(self, "_sink_aux", None), value)
 
+    def _on_mic_volume_changed(self, value: int):
+        pulse = self._get_pulse()
+        if pulse is None or self._source_mic is None:
+            return
+        try:
+            fresh = next((s for s in pulse.source_list()
+                          if s.name == self._source_mic.name), None)
+            if fresh is not None:
+                pulse.volume_set_all_chans(fresh, value / 100.0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Error setting mic volume: %s", exc)
+
     # ── the optional Aux channel (#209) ──────────────────────────────────────
 
     def _set_aux_enabled(self, enabled: bool) -> None:
@@ -2935,6 +3127,44 @@ class HomePage(QWidget):
         self._ext_card.setVisible(bool(visible))
         self._fit_cards_to_row()
         self._refresh_app_tag_buttons()
+
+    # ── the other hideable cards (#315) ──────────────────────────────────────
+
+    def reload_channel_visibility(self) -> None:
+        """Show the cards the settings file says, e.g. after a profile was
+        applied."""
+        hidden = _read_hidden_channels()
+        for channel in ("mic", "master", "game", "chat", "media"):
+            self._apply_channel_visibility(channel, channel not in hidden)
+        self._apply_aux_visibility(_read_aux_enabled())
+        self._apply_output_visibility(_read_output_channel_visible())
+
+    def _channel_card(self, channel: str) -> "AudioCard | None":
+        return {"mic": self._mic_card, "master": self._master_card,
+                "game": self._game_card, "chat": self._chat_card,
+                "media": self._media_card}.get(channel)
+
+    def _set_channel_visible(self, channel: str, visible: bool) -> None:
+        """Persist one card's visibility in hidden_channels. Display-only,
+        like Output: the channel and its routing keep working."""
+        try:
+            from arctis_sound_manager.settings import GeneralSettings
+            gs = GeneralSettings.read_from_file()
+            hidden = [c for c in (gs.hidden_channels or []) if c != channel]
+            if not visible:
+                hidden.append(channel)
+            gs.hidden_channels = hidden
+            gs.write_to_file()
+        except Exception:  # noqa: BLE001
+            logger.warning("could not persist hidden_channels", exc_info=True)
+        self._apply_channel_visibility(channel, visible)
+
+    def _apply_channel_visibility(self, channel: str, visible: bool) -> None:
+        card = self._channel_card(channel)
+        if card is None:
+            return
+        card.setVisible(bool(visible))
+        self._fit_cards_to_row()
 
     # ── ChatMix channels (#249, #269) ─────────────────────────────────────────
 
@@ -3080,9 +3310,10 @@ class HomePage(QWidget):
         # a window that has not been shown yet, so asking it during start-up
         # counts zero cards and picks the wrong width. isHidden() answers about
         # the widget itself, whatever its parent is doing.
-        shown = [c for c in self._all_cards() if not c.isHidden()]
-        width = CARD_MIN_WIDTH_TIGHT if len(shown) > 5 else CARD_MIN_WIDTH
-        for card in self._all_cards():
+        cards = (*self._all_cards(), self._mic_card)
+        shown = [c for c in cards if not c.isHidden()]
+        width = card_min_width(len(shown))
+        for card in cards:
             card.setMinimumWidth(width)
 
     def _refresh_app_tag_buttons(self) -> None:

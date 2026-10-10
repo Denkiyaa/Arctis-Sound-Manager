@@ -150,6 +150,10 @@ class ChannelOutputSelector(QWidget):
     def current_id(self) -> str | None:
         return self._current
 
+    def current_label(self) -> str:
+        """Name of the device currently selected, as the combo shows it."""
+        return self._combo.currentText()
+
     def pick(self, device_id: str) -> None:
         """Choose *device_id* exactly as if it were picked in the combo."""
         index = self._combo.findData(device_id)
