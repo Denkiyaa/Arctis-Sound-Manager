@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 11 October 2026
+
+### Added
+
+- **Mic card on the Channels page.** A new card on the far left sets the volume of what your apps record, picks which microphone feeds it (same choices as Settings) and shows which apps are recording. (#315)
+- **See where each channel plays.** Every channel card now shows the name of its output device under its buttons, without opening the picker. (#316)
+- **Hide any card.** The Channels menu now lists every card (Mic, Master, Game, Chat, Media, Aux, Output), so you can keep only the ones you use. Hiding a card only removes it from the page; the channel keeps working.
+- **Profiles remember which cards are shown**, and restore them when applied.
+- **Mic colour in every theme**, editable in the theme editor. Older custom themes use their Master colour for it.
+
+### Changed
+
+- **Removed the "Enable Game/Chat Volume Sliders" switch and the "Bring audio to headset" button** from the Channels page. Bringing audio back to the headset is still in the tray menu.
+- **Cards fit a laptop screen with all seven shown**, and long channel or device names end with "…" instead of being cut off.
+
+### Fixed
+
+- **Headset not detected after quitting ASM on SteamOS/Bazzite (Distrobox).** Opening ASM again now restarts its background service. Diagnosed by @baccatuesday. (#181)
+- **No sound with Spatial Audio on some SteamOS systems.** ASM mistook harmless PipeWire messages for a refused permission and never connected the channels. (#181)
+- **Theme editor showed "Aux channel" twice.** The two colours are now labelled Media and Output.
+
 ## [1.5.0] - 8 October 2026
 
 ### Added
