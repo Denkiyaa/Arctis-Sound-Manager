@@ -98,3 +98,44 @@ def test_the_original_error_is_always_quoted():
     bug report is diagnosed from, and paraphrasing it loses the symbol."""
     for exc in (_MISMATCH, ImportError("No module named 'PySide6'")):
         assert str(exc) in _qt_import_help(exc)
+
+
+# ── libxcb-cursor0 (Mint 22, PySide6 from pip) ───────────────────────────────
+# Qt aborts inside QApplication() when it is missing, so this check is the only
+# chance to say anything at all.
+
+from arctis_sound_manager.scripts.gui import _xcb_cursor_help  # noqa: E402
+
+
+def _missing(_name):
+    return None
+
+
+def _present(_name):
+    return "libxcb-cursor.so.0"
+
+
+def test_x11_without_xcb_cursor_names_the_package():
+    out = _xcb_cursor_help({"DISPLAY": ":0"}, _missing)
+
+    assert out is not None
+    assert "sudo apt install libxcb-cursor0" in out
+
+
+def test_x11_with_xcb_cursor_says_nothing():
+    assert _xcb_cursor_help({"DISPLAY": ":0"}, _present) is None
+
+
+def test_wayland_session_never_loads_xcb():
+    env = {"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0"}
+    assert _xcb_cursor_help(env, _missing) is None
+
+
+def test_forced_xcb_on_wayland_is_still_checked():
+    env = {"WAYLAND_DISPLAY": "wayland-0", "QT_QPA_PLATFORM": "xcb"}
+    assert _xcb_cursor_help(env, _missing) is not None
+
+
+def test_another_forced_platform_is_left_alone():
+    env = {"DISPLAY": ":0", "QT_QPA_PLATFORM": "offscreen"}
+    assert _xcb_cursor_help(env, _missing) is None

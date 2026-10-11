@@ -1014,6 +1014,24 @@ report, under *Filter-chain safe mode & config presence*.
 
 ---
 
+### The GUI does not open on X11 (Linux Mint, Ubuntu 24.04…)
+
+If `asm-gui` in a terminal ends with *"xcb-cursor0 or libxcb-cursor0 is needed
+to load the Qt xcb platform plugin"*, Qt is missing one system library. This
+happens when PySide6 was installed with pip (Ubuntu 24.04 / Mint 22 have no
+PySide6 package). Install it and start ASM again:
+
+```bash
+sudo apt install libxcb-cursor0      # Debian / Ubuntu / Mint
+sudo dnf install xcb-util-cursor     # Fedora
+sudo pacman -S xcb-util-cursor       # Arch
+```
+
+The `.deb` now depends on it, and `asm-gui` names the package instead of
+crashing.
+
+---
+
 ### An app has no sound / plays on the wrong device
 
 Sometimes an application ends up playing to the wrong output — a TV over HDMI,

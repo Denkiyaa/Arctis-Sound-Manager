@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **ASM would not open on Linux Mint 22 / Ubuntu 24.04 (X11).** There PySide6 comes from pip, which does not bring the `libxcb-cursor0` library Qt needs to open a window on X11, so the app crashed silently at launch. The `.deb` now depends on it, and if it is ever missing `asm-gui` shows the exact install command instead of crashing.
+
 ## [1.5.2] - 11 October 2026
 
 ### Added

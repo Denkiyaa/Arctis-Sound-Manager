@@ -43,6 +43,36 @@ def _check_display_or_exit() -> None:
     sys.exit(2)
 
 
+def _xcb_cursor_help(environ=os.environ, find_library=None) -> str | None:
+    """The advice to print when Qt is about to abort on a missing libxcb-cursor.
+
+    Qt >= 6.5 refuses to load its xcb plugin without libxcb-cursor.so.0, and
+    it does not raise: QApplication() calls abort(), so the ``except`` around
+    it never runs and the menu launch just "does not open". The distro
+    PySide6 packages depend on the library; a pip-installed PySide6 (the only
+    option on Ubuntu 24.04 / Mint 22) does not, and a Mint 22 user hit exactly
+    that. Only checked when Qt will actually pick xcb — a Wayland session
+    never loads it.
+    """
+    platform = environ.get('QT_QPA_PLATFORM', '').split(';')[0].split(':')[0]
+    if platform and platform != 'xcb':
+        return None
+    if not platform and environ.get('WAYLAND_DISPLAY'):
+        return None
+    if find_library is None:
+        import ctypes.util
+        find_library = ctypes.util.find_library
+    if find_library('xcb-cursor'):
+        return None
+    return (
+        "asm-gui: cannot start — libxcb-cursor0 is missing.\n"
+        "Qt needs it to open a window on X11. Install it, then start ASM again:\n"
+        "      Debian/Ubuntu/Mint : sudo apt install libxcb-cursor0\n"
+        "      Fedora/Nobara      : sudo dnf install xcb-util-cursor\n"
+        "      Arch/Cachy         : sudo pacman -S xcb-util-cursor\n"
+    )
+
+
 _QT_ABI_VERSION_RE = re.compile(r"QtPrivate_(\d+)_(\d+)(?:_(\d+))?")
 _MISSING_MODULE_RE = re.compile(r"No module named '(PySide6[\w.]*)'")
 
@@ -282,6 +312,12 @@ def main():
 
     _check_display_or_exit()
     QTimer, QLocalServer, QLocalSocket, QApplication, QDialog = _import_qt_or_exit()
+
+    xcb_help = _xcb_cursor_help()
+    if xcb_help:
+        sys.stderr.write(xcb_help)
+        _notify_desktop("Arctis Sound Manager cannot start", xcb_help)
+        sys.exit(4)
 
     from arctis_sound_manager.bug_reporter import read_crash_report, write_crash_report
     from arctis_sound_manager.gui.systray_app import QSystrayApp
