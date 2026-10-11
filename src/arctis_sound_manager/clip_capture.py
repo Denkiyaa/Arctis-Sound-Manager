@@ -358,6 +358,26 @@ def _process_environ(pid: int) -> str:
         return ""       # not ours to read; only a hint is lost
 
 
+def process_environ_dict(pid: int) -> dict[str, str]:
+    """A process's environment as a case-preserving ``{name: value}`` map.
+
+    ``_process_environ`` lowercases everything for substring hints; launcher
+    variables (``SteamAppId``, ``GAME_NAME``) need their exact spelling.
+    Empty when the process is not ours to read or has gone away.
+    """
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return {}
+    env: dict[str, str] = {}
+    for item in raw.split(b"\0"):
+        key, sep, value = item.partition(b"=")
+        if sep and key:
+            env[key.decode("utf-8", "replace")] = value.decode("utf-8", "replace")
+    return env
+
+
 # PulseAudio's "no sink": a stream that exists but is connected to nothing.
 _PA_INVALID_INDEX = 0xFFFFFFFF
 
@@ -376,6 +396,16 @@ def _is_audible(si) -> bool:
 
 
 def detect_game(strict: bool = False) -> str | None:
+    """Name the app a clip is most likely about, for labelling it.
+
+    Thin wrapper over :func:`detect_game_process`, which carries the full
+    description of the detection rules; only the name is returned here.
+    """
+    found = detect_game_process(strict)
+    return found[0] if found else None
+
+
+def detect_game_process(strict: bool = True) -> tuple[str, int | None] | None:
     """Name the app a clip is most likely about, for labelling it.
 
     With ``strict`` only the positive rules answer — a stream the user put on
@@ -415,6 +445,12 @@ def detect_game(strict: bool = False) -> str | None:
     except ImportError:
         return None
 
+    def pid_of(si) -> int | None:
+        try:
+            return int(si.proplist.get("application.process.id", ""))
+        except (TypeError, ValueError):
+            return None
+
     def label(si) -> str:
         name = (si.proplist.get("application.name")
                 or si.proplist.get("application.process.binary") or "")
@@ -434,7 +470,7 @@ def detect_game(strict: bool = False) -> str | None:
                     continue
                 name = label(si)
                 if name and not _is_not_a_game(name):
-                    return name
+                    return name, pid_of(si)
 
             # 1. A stream running under a known game runtime. The blocklist
             # still applies: the Steam client runs from the same tree as its
@@ -449,7 +485,7 @@ def detect_game(strict: bool = False) -> str | None:
                 if any(hint in haystack for hint in _GAME_RUNTIME_HINTS):
                     name = label(si)
                     if name and not _is_not_a_game(name):
-                        return name
+                        return name, pid
 
             # 2. Fall back to "a playback stream that is not obviously not a game".
             if strict:
@@ -457,7 +493,7 @@ def detect_game(strict: bool = False) -> str | None:
             for si in streams:
                 name = label(si)
                 if name and not _is_not_a_game(name):
-                    return name
+                    return name, pid_of(si)
     except Exception as exc:
         log.debug("game detection failed: %s", exc)
     return None

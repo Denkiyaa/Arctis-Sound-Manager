@@ -183,6 +183,17 @@ class QSystrayApp(QBaseDesktopApp):
         self._sonar_applier = SonarPresetApplier(self)
         self._sonar_applier.done.connect(self._on_sonar_preset_applied)
 
+        # Automatic Sonar Game preset per detected game (opt-in; the toggle on
+        # the Sonar page is read from disk each tick, so no cross-widget wiring).
+        self._game_preset_watcher = None
+        try:
+            from arctis_sound_manager.gui.game_preset_watcher import GamePresetWatcher
+            self._game_preset_watcher = GamePresetWatcher(self._sonar_applier, self)
+            self._game_preset_watcher.notify.connect(self._on_game_preset_notify)
+            self._game_preset_watcher.start()
+        except Exception as e:
+            self.logger.warning("Automatic game preset unavailable: %s", e)
+
         # Keep references to in-flight maintenance workers (service restarts)
         # so PySide6 doesn't GC a running QThread out from under itself.
         self._maintenance_workers: list = []
@@ -482,6 +493,12 @@ class QSystrayApp(QBaseDesktopApp):
         except Exception as e:
             self.logger.error('EQ presets section failed: %s', e, exc_info=True)
 
+        # Per-game preset choice (only while a game is detected)
+        try:
+            self._add_game_preset_menu()
+        except Exception as e:
+            self.logger.error('game preset section failed: %s', e, exc_info=True)
+
         # Reclaim audio (move misrouted app streams back to the headset)
         _sep()
         self._menu_actions['reclaim_audio'] = _add(QAction(I18n.translate('ui', 'reclaim_audio')))
@@ -618,6 +635,57 @@ class QSystrayApp(QBaseDesktopApp):
                 f"{I18n.translate('ui', 'applying_preset')} {name}"
             )
             self._sonar_applier.apply(channel, name)
+
+    def _add_game_preset_menu(self) -> None:
+        watcher = self._game_preset_watcher
+        game = watcher.current_game if watcher is not None else None
+        if game is None:
+            return
+        from arctis_sound_manager import game_presets as gp
+        from PySide6.QtGui import QActionGroup
+        if not gp.is_enabled():
+            return
+        has_entry, forced = gp.get_association(game.key)
+        sub = QMenu(I18n.translate('ui', 'preset_for_game').format(game=game.title))
+        self._menu_action_refs.append(sub)
+        group = QActionGroup(sub)
+        group.setExclusive(True)
+        self._menu_action_refs.append(group)
+
+        def _choice(label: str, checked: bool, automatic: bool, preset: str | None) -> None:
+            a = sub.addAction(label)
+            a.setCheckable(True)
+            a.setChecked(checked)
+            group.addAction(a)
+            self._menu_action_refs.append(a)
+            a.triggered.connect(
+                lambda _=False, au=automatic, p=preset: self._on_game_preset_choice(game, p, au)
+            )
+
+        _choice(I18n.translate('ui', 'preset_automatic'), not has_entry, True, None)
+        _choice(I18n.translate('ui', 'preset_do_not_change'), has_entry and forced is None, False, None)
+        favs = list_sonar_channel_presets('game')
+        if favs:
+            sep = sub.addSeparator()
+            self._menu_action_refs.append(sep)
+        for name in favs:
+            _choice(name, has_entry and forced == name, False, name)
+        self.menu.addMenu(sub)
+
+    def _on_game_preset_choice(self, game, preset: str | None, automatic: bool) -> None:
+        try:
+            from arctis_sound_manager import game_presets as gp
+            gp.set_association(game.key, game.title, preset, automatic=automatic)
+            if self._game_preset_watcher is not None:
+                self._game_preset_watcher.association_changed()
+        except Exception as e:
+            self.logger.warning("Could not save game preset choice: %s", e)
+
+    @Slot(str)
+    def _on_game_preset_notify(self, message: str) -> None:
+        self.tray_icon.showMessage(
+            "Arctis Sound Manager", message, QSystemTrayIcon.MessageIcon.Information, 4000
+        )
 
     def _on_reclaim_audio(self) -> None:
         try:

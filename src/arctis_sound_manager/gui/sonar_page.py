@@ -3355,6 +3355,64 @@ class _StreamGuardBar(QFrame):
         )
 
 
+class _AutoGamePresetBar(QFrame):
+    """Opt-in switch: apply a Sonar Game preset automatically per detected game.
+
+    The tray process polls ``game_presets.is_enabled()`` on every tick, so this
+    widget only has to persist the choice (the tray resets itself on disable)."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("autoGamePresetBar")
+        from arctis_sound_manager import game_presets as gp
+        self._gp = gp
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(14, 8, 14, 8)
+        row.setSpacing(12)
+
+        self._toggle = QToggle(is_checkbox=True)
+        try:
+            self._toggle.setChecked(bool(gp.is_enabled()))
+        except Exception:
+            pass
+        self._toggle.stateChanged.connect(self._on_changed)
+        row.addWidget(self._toggle)
+
+        self._title = QLabel(_t("auto_game_preset"))
+        row.addWidget(self._title)
+        row.addStretch(1)
+
+        self._hint = QLabel(_t("auto_game_preset_hint"))
+        self._hint.setWordWrap(True)
+        row.addWidget(self._hint, 2)
+        self.setToolTip(_t("auto_game_preset_hint"))
+        self.apply_theme()
+
+    def _on_changed(self, *_args) -> None:
+        try:
+            self._gp.set_enabled(self._toggle.isChecked())
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Could not save auto game preset: %s", exc)
+
+    def apply_theme(self, t=None) -> None:
+        self.setStyleSheet(f"""
+            QFrame#autoGamePresetBar {{
+                background-color: {_theme.c('BG_CARD')};
+                border: 1px solid {_theme.c('BORDER')};
+                border-radius: 10px;
+            }}
+        """)
+        self._title.setStyleSheet(
+            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; font-weight: bold; "
+            f"background: transparent;"
+        )
+        self._hint.setStyleSheet(
+            f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 9pt; background: transparent;"
+        )
+
+
 class SonarPage(QWidget):
     def __init__(self, embedded: bool = False, parent: QWidget | None = None):
         super().__init__(parent)
@@ -3415,6 +3473,8 @@ class SonarPage(QWidget):
         # which of the channels below are allowed out to a Discord screen share.
         self._stream_guard_bar = _StreamGuardBar()
         root.addWidget(self._stream_guard_bar)
+        self._auto_game_preset_bar = _AutoGamePresetBar()
+        root.addWidget(self._auto_game_preset_bar)
         root.addSpacing(12)
 
         # ── Channel tabs ──────────────────────────────────────────────────────
@@ -3779,6 +3839,8 @@ class SonarPage(QWidget):
 
         if hasattr(self, "_stream_guard_bar"):
             self._stream_guard_bar.apply_theme(t)
+        if hasattr(self, "_auto_game_preset_bar"):
+            self._auto_game_preset_bar.apply_theme(t)
 
         self._tabs.setStyleSheet(f"""
             QTabWidget::pane {{

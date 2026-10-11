@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Automatic Sonar preset per game.** Turn on "Automatic preset per game" on the Sonar page and ASM applies a Game channel preset when a game starts, then restores your previous preset 15 s after it closes. The tray menu lets you force a preset for the running game or choose "Do not change". Off by default; switching preset restarts the filter-chain (short audio dropout, same as GG).
+
 ## [1.5.1] - 11 October 2026
 
 ### Added
