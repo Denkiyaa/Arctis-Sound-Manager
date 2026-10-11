@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Streamer mode.** Like Sonar's Stream mode in GG: a second, independent mix of Game, Chat, Media, Aux and the processed Mic, each with its own volume and mute, delivered as a "<device> Stream Mix" source for OBS or any recorder. Turn it on with the Streamer mode switch next to the Channels menu and every card gets a compact Stream slider and mute button. The mix is taken before your headphone volumes and EQ/spatial audio, so viewers hear the clean game (7.1 is downmixed to stereo with the dialogue kept), and your headset mix and ChatMix are unaffected. Off by default; toggling it restarts the filter-chain once (short audio dropout, same as switching a preset), volume and mute changes are live.
 
+- **GameBuds charging case.** With the case plugged into the computer over USB, the Headset page shows its battery, charging state, lid (open/closed) and which earbuds are seated in it, like GG. The case is read next to the dongle, never instead of it: plugging or unplugging it leaves your audio alone.
+
 ### Fixed
 
 - **ASM would not open on Linux Mint 22 / Ubuntu 24.04 (X11).** There PySide6 comes from pip, which does not bring the `libxcb-cursor0` library Qt needs to open a window on X11, so the app crashed silently at launch. The `.deb` now depends on it, and if it is ever missing `asm-gui` shows the exact install command instead of crashing.
