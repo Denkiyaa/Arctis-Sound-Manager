@@ -1409,14 +1409,21 @@ class _MicInputPicker(QObject):
         self._get_pulse = get_pulse
         self._labels: dict[str, str] = {}
         self._current: str | None = None
+        # Picked but not yet written: the daemon saves the setting after the
+        # D-Bus call returns, so the file still holds the old input (#318).
+        self._pending: str | None = None
 
-    @staticmethod
-    def _setting() -> str:
+    def _setting(self) -> str:
         try:
             from arctis_sound_manager.settings import GeneralSettings
-            return GeneralSettings.read_from_file().micro_input_source or "__auto__"
+            saved = GeneralSettings.read_from_file().micro_input_source or "__auto__"
         except Exception:  # noqa: BLE001
-            return "__auto__"
+            saved = "__auto__"
+        if self._pending is None:
+            return saved
+        if saved == self._pending:
+            self._pending = None
+        return self._pending or saved
 
     def options(self) -> list[tuple[str, str]]:
         entries = [
@@ -1452,6 +1459,7 @@ class _MicInputPicker(QObject):
     def pick(self, source_id: str) -> None:
         from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
         DbusWrapper.change_setting("micro_input_source", source_id)
+        self._pending = source_id
         self._current = source_id
         self.target_changed.emit(source_id)
 
