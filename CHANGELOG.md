@@ -5,11 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.5.2] - 11 October 2026
 
 ### Added
 
-- **Automatic Sonar preset per game.** Turn on "Automatic preset per game" on the Sonar page and ASM applies a Game channel preset when a game starts, then restores your previous preset 15 s after it closes. The tray menu lets you force a preset for the running game or choose "Do not change". Off by default; switching preset restarts the filter-chain (short audio dropout, same as GG).
+- **Automatic Sonar preset per game.** Turn on "Automatic preset per game" on the Sonar page and ASM applies the matching Game channel preset as soon as a game starts (Steam, Lutris, Heroic or by executable name), like GG's QuickSet. A preset you pick by hand while the game runs is remembered for that game. The tray menu lets you force a preset for the running game or choose "Do not change". Off by default; switching preset restarts the filter-chain (short audio dropout, same as GG).
+- **The OLED screen shows the EQ of what you are listening to.** The EQ line used to always show the Game preset; it now follows the channel actually playing (Media, Chat, Output…) and is labelled with its name. A Discord call never takes it over from a running game.
+- **Bug reports include the kernel's USB and sound messages**, from the current and the previous boot, so a report made after rebooting still shows what went wrong. (#317)
+
+### Fixed
+
+- **Mic card showed the previously selected input.** Picking a microphone switched the input but the card kept the old name until the next pick. (#318)
 
 ## [1.5.1] - 11 October 2026
 
