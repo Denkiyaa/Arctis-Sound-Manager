@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.6.0] - 11 October 2026
 
 ### Added
 
@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Arctis Nova Pro Wired: the volume knob no longer cuts the sound, maxes the volume or kills the mic, and no longer lags (#321).** Thanks @TheV-git for the detailed report. ASM was talking to the wired DAC in the Nova Pro Wireless base's language: it polled a settings frame and set a mic-mute LED level that the wired DAC does not have, which it refuses with a `Pipe error` in the log and which could leave it in a broken state until it was replugged. Those two commands are gone (the mic-mute LED brightness slider with them), and the daemon now asks for the wheel position instead. The OLED is also drawn the way SteelSeries' own app does it (below the DAC's status area, in the report size the spec gives) and handed back to the DAC when ASM stops, so restarting ASM no longer meets a DAC stuck in custom-draw mode. Separately, the knob lagged because the daemon read the DAC's reports ten times a second; a quick turn of the knob now registers immediately.
+- **Arctis Nova Pro Wired: fixes for the volume knob cutting the sound, maxing the volume, killing the mic or lagging (#321).** Thanks @TheV-git for the detailed report. ASM was talking to the wired DAC in the Nova Pro Wireless base's language: it polled a settings frame and set a mic-mute LED level that the wired DAC does not have, which it refuses with a `Pipe error` in the log. Those two commands are gone (the mic-mute LED brightness slider with them), and the daemon now asks for the wheel position instead. The OLED is drawn the way SteelSeries' own app does it (below the DAC's status area, in the report size the spec gives) and handed back to the DAC when ASM stops. The daemon also reads the knob's reports as fast as they come instead of ten a second. These changes follow SteelSeries' specification but are not yet confirmed on this DAC: if the knob still misbehaves, please comment on #321.
 
 - **No Sonar audio on SteamOS and other distrobox setups (#181).** Inside the container, `pw-link` could not see the Arctis and Sonar EQ ports and failed with "No such file or directory" on every channel, so the EQ stayed silent even though the same link works from the host. ASM now retries such a link through `distrobox-host-exec` and remembers that it works. Nothing changes outside a container. Thanks @baccatuesday for the detailed logs.
 
