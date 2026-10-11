@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 import arctis_sound_manager.gui.theme as _theme
+from arctis_sound_manager.gui.qt_widgets.q_toggle import QToggle
 from arctis_sound_manager.i18n import I18n
 from arctis_sound_manager.profile_manager import (
     Profile, active_profile_name, snapshot_current,
@@ -145,7 +146,33 @@ class ProfileBar(QWidget):
         self._channels_btn.clicked.connect(self._on_channels_menu)
         self._layout.addWidget(self._channels_btn)
 
+        # Streamer mode is not a card, so it is not in the Channels menu: a
+        # switch of its own right after it, the same QToggle as the other pages.
+        tip = I18n.translate('ui', 'streamer_mode_tooltip')
+        streamer_lbl = QLabel(I18n.translate('ui', 'streamer_mode'))
+        streamer_lbl.setStyleSheet(
+            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; background: transparent;"
+        )
+        streamer_lbl.setToolTip(tip)
+        self._layout.addSpacing(8)
+        self._layout.addWidget(streamer_lbl)
+        self._streamer_toggle = QToggle(width=46, is_checkbox=True)
+        self._streamer_toggle.setToolTip(tip)
+        self._streamer_toggle.setChecked(self._read_streamer())
+        self._streamer_toggle.toggled.connect(self.sig_toggle_streamer.emit)
+        self._layout.addWidget(self._streamer_toggle)
+
         self._layout.addStretch(1)
+
+    def set_streamer(self, on: bool) -> None:
+        """Reflect a change made elsewhere (profile apply, settings reload)
+        without echoing it back as a user toggle."""
+        t = self._streamer_toggle
+        if t.isChecked() != bool(on):
+            t.blockSignals(True)
+            t.setChecked(bool(on))
+            t.blockSignals(False)
+            t.update()
 
     # Menu order = the cards' order on the page. Aux and Output keep their
     # own settings and signals; the others share hidden_channels.
@@ -221,19 +248,6 @@ class ProfileBar(QWidget):
             action = QWidgetAction(menu)
             action.setDefaultWidget(cb)
             menu.addAction(action)
-
-        # Streamer mode sits below the channels it mixes, behind a separator:
-        # it is not a card, it adds a Stream control to the cards above.
-        menu.addSeparator()
-        cb = QCheckBox(I18n.translate('ui', 'streamer_mode'))
-        cb.setStyleSheet(cb_style)
-        cb.setProperty("channel", "streamer")
-        cb.setToolTip(I18n.translate('ui', 'streamer_mode_tooltip'))
-        cb.setChecked(self._read_streamer())
-        cb.toggled.connect(self.sig_toggle_streamer.emit)
-        action = QWidgetAction(menu)
-        action.setDefaultWidget(cb)
-        menu.addAction(action)
 
         return menu
 

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Streamer mode.** Like Sonar's Stream mode in GG: a second, independent mix of Game, Chat, Media, Aux and the processed Mic, each with its own volume and mute, delivered as a "<device> Stream Mix" source for OBS or any recorder. Turn it on from the Channels menu and every card gets a compact Stream slider and mute button. The mix is taken before your headphone volumes and EQ/spatial audio, so viewers hear the clean game (7.1 is downmixed to stereo with the dialogue kept), and your headset mix and ChatMix are unaffected. Off by default; toggling it restarts the filter-chain once (short audio dropout, same as switching a preset), volume and mute changes are live.
+- **Streamer mode.** Like Sonar's Stream mode in GG: a second, independent mix of Game, Chat, Media, Aux and the processed Mic, each with its own volume and mute, delivered as a "<device> Stream Mix" source for OBS or any recorder. Turn it on with the Streamer mode switch next to the Channels menu and every card gets a compact Stream slider and mute button. The mix is taken before your headphone volumes and EQ/spatial audio, so viewers hear the clean game (7.1 is downmixed to stereo with the dialogue kept), and your headset mix and ChatMix are unaffected. Off by default; toggling it restarts the filter-chain once (short audio dropout, same as switching a preset), volume and mute changes are live.
 
 ### Fixed
 

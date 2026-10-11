@@ -20,7 +20,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QCheckBox
+from PySide6.QtWidgets import QApplication
 
 CHANNELS = ("game", "chat", "media", "aux", "mic")
 
@@ -125,6 +125,21 @@ def test_mute_toggles_and_persists(page, fake_mix):
     assert fake_mix.saved[-1] == ("media", 100, False)
 
 
+def test_mute_button_uses_icons_and_tooltip_follows_state(page, fake_mix):
+    page._apply_streamer_visibility(True)
+    btn = page._media_card._stream_mute_btn
+    assert btn.text() == ""
+    assert not btn.icon().isNull()
+    assert btn.toolTip() == "Mute in the stream (you still hear it)"
+    unmuted = btn.icon().pixmap(16, 16).toImage()
+    btn.click()
+    assert btn.toolTip() == "Unmute in the stream"
+    assert btn.icon().pixmap(16, 16).toImage() != unmuted
+    btn.click()
+    assert btn.toolTip() == "Mute in the stream (you still hear it)"
+    assert btn.icon().pixmap(16, 16).toImage() == unmuted
+
+
 def test_toggle_tells_the_daemon(page):
     page._set_streamer_mode(True)
     page._set_streamer_mode(False)
@@ -132,24 +147,62 @@ def test_toggle_tells_the_daemon(page):
     assert page.dbus_calls == [("streamer_mode", True), ("streamer_mode", False)]
 
 
-def test_the_menu_has_a_streamer_row_with_a_tooltip_and_signal(page):
+def test_the_toggle_sits_next_to_the_channels_button_not_in_the_menu():
     from arctis_sound_manager.gui.profile_bar import ProfileBar
+    from arctis_sound_manager.gui.qt_widgets.q_toggle import QToggle
 
     bar = ProfileBar()
     menu = bar._build_channels_menu()
-    boxes = {a.defaultWidget().property("channel"): a.defaultWidget()
-             for a in menu.actions() if not a.isSeparator()}
+    assert not any(a.isSeparator() for a in menu.actions())
+    assert all(a.defaultWidget().property("channel") != "streamer" for a in menu.actions())
+
+    layout = bar._layout
+    widgets = [layout.itemAt(i).widget() for i in range(layout.count())]
+    after = widgets[widgets.index(bar._channels_btn) + 1:]
+    assert bar._streamer_toggle in after
+    assert isinstance(bar._streamer_toggle, QToggle)
+    assert "OBS" in bar._streamer_toggle.toolTip()
+
+
+def test_clicking_the_toggle_emits_the_new_state():
+    from arctis_sound_manager.gui.profile_bar import ProfileBar
+
+    bar = ProfileBar()
     got = []
     bar.sig_toggle_streamer.connect(got.append)
-    boxes["streamer"].setChecked(True)
+    bar._streamer_toggle.click()
+    bar._streamer_toggle.click()
 
-    assert isinstance(boxes["streamer"], QCheckBox)
-    assert "OBS" in boxes["streamer"].toolTip()
-    assert got == [True]
+    assert got == [True, False]
+
+
+def test_the_toggle_starts_from_the_saved_setting(monkeypatch):
+    from arctis_sound_manager.gui.profile_bar import ProfileBar
+
+    monkeypatch.setattr(ProfileBar, "_read_streamer", staticmethod(lambda: True))
+    assert ProfileBar()._streamer_toggle.isChecked()
+
+
+def test_following_the_setting_does_not_emit(page):
+    got = []
+    page.profile_bar.sig_toggle_streamer.connect(got.append)
+    page._apply_streamer_visibility(True)
+
+    assert page.profile_bar._streamer_toggle.isChecked()
+    page._apply_streamer_visibility(False)
+    assert not page.profile_bar._streamer_toggle.isChecked()
+    assert got == [] and page.dbus_calls == []
+
+
+def test_clicking_the_toggle_reaches_the_daemon(page):
+    page.profile_bar._streamer_toggle.click()
+
+    assert ("streamer_mode", True) in page.dbus_calls
 
 
 def test_the_en_ini_keys_exist():
     from pathlib import Path
     text = (Path(__file__).parent.parent / "src" / "arctis_sound_manager" / "lang" / "en.ini").read_text()
-    for key in ("streamer_mode", "streamer_mode_tooltip", "stream_label", "stream_mute"):
+    for key in ("streamer_mode", "streamer_mode_tooltip", "stream_label", "stream_mute",
+                "stream_mute_tooltip", "stream_unmute_tooltip"):
         assert f"\n{key} = " in text

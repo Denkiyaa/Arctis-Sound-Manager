@@ -13,6 +13,7 @@ from PySide6.QtCore import (QEvent, QMimeData, QObject, QPoint, QRect, QSize, Qt
                             Signal, Slot)
 from PySide6.QtGui import (QColor, QDesktopServices, QDrag, QIcon, QPainter, QPen,
                            QPixmap)
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -797,8 +798,28 @@ class AudioCard(QWidget):
     def _refresh_stream_label(self) -> None:
         pct = "—" if self._stream_muted() else f"{self._stream_slider.value()}%"
         self._stream_lbl.setText(f"{I18n.translate('ui', 'stream_label')} {pct}")
-        self._stream_mute_btn.setText("M")
-        self._stream_mute_btn.setToolTip(I18n.translate("ui", "stream_mute"))
+        self._refresh_stream_mute_icon()
+
+    def _refresh_stream_mute_icon(self) -> None:
+        """Speaker / crossed-out speaker + matching tooltip for the mute state."""
+        muted = self._stream_muted()
+        # Checked state paints the button in the accent, so the glyph goes white.
+        color = "#ffffff" if muted else _theme.c("TEXT_PRIMARY")
+        name = "speaker_muted_icon.svg" if muted else "speaker_icon.svg"
+        svg = (Path(__file__).parent / "images" / name).read_text(encoding="utf-8")
+        svg = svg.replace('stroke="currentColor"', f'stroke="{color}"')
+        pix = QPixmap(32, 32)
+        pix.fill(QColor(0, 0, 0, 0))
+        renderer = QSvgRenderer(svg.encode("utf-8"))
+        if renderer.isValid():
+            painter = QPainter(pix)
+            renderer.render(painter)
+            painter.end()
+        self._stream_mute_btn.setIcon(QIcon(pix))
+        self._stream_mute_btn.setIconSize(QSize(16, 16))
+        self._stream_mute_btn.setAccessibleName(I18n.translate("ui", "stream_mute"))
+        self._stream_mute_btn.setToolTip(I18n.translate(
+            "ui", "stream_unmute_tooltip" if muted else "stream_mute_tooltip"))
 
     def _on_stream_slider_changed(self, value: int) -> None:
         self._stream_volume = int(value)
@@ -826,6 +847,7 @@ class AudioCard(QWidget):
             QPushButton:hover {{ border-color: {self._accent}; }}
             QPushButton:checked {{ background-color: {self._accent}; color: #fff; }}
         """)
+        self._refresh_stream_mute_icon()
 
     def set_volume(self, pct: int):
         self._ignore_change = True
@@ -3273,6 +3295,7 @@ class HomePage(QWidget):
 
     def _apply_streamer_visibility(self, enabled: bool) -> None:
         """Show or hide the Stream controls, loading their state when shown."""
+        self.profile_bar.set_streamer(enabled)
         if enabled:
             try:
                 from arctis_sound_manager import stream_mix
