@@ -4381,7 +4381,7 @@ def ensure_stream_mix_links(data: list | None = None) -> bool:
     not a failure.
     """
     from arctis_sound_manager.pw_utils import (
-        _LINK_DENIED, _index_nodes_by_name, _node_ports, _pw_dump, _pw_run,
+        _LINK_DENIED, _index_nodes_by_name, _node_ports, _pw_dump, _pw_link,
         _resolve_unique_node_id, grant_link_permissions,
     )
     from arctis_sound_manager.loopback_manager import DEFAULT_SINKS
@@ -4437,19 +4437,16 @@ def ensure_stream_mix_links(data: list | None = None) -> bool:
                 stray.append(pair)
 
         for out_port, in_port in stray:
-            _pw_run(["pw-link", "-d", str(out_port), str(in_port)],
-                    check=False, timeout=3, capture_output=True)
+            _pw_link(out_port, in_port, delete=True)
 
         ok = True
         created = 0
         for out_port, in_port in sorted(wanted - existing):
-            r = _pw_run(["pw-link", str(out_port), str(in_port)],
-                        check=False, timeout=3, capture_output=True)
+            r = _pw_link(out_port, in_port)
             err = (r.stderr or b"").decode(errors="replace").strip()
             if r.returncode != 0 and _LINK_DENIED in err.lower():
                 if grant_link_permissions(out_port, in_port):
-                    r = _pw_run(["pw-link", str(out_port), str(in_port)],
-                                check=False, timeout=3, capture_output=True)
+                    r = _pw_link(out_port, in_port)
                     err = (r.stderr or b"").decode(errors="replace").strip()
             if r.returncode == 0:
                 created += 1

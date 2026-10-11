@@ -54,6 +54,84 @@ def _pw_run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(resolved, **kwargs)
 
 _LINK_DENIED = "not permitted"
+
+# --- pw-link from inside a container (#181) ------------------------------
+# On SteamOS ASM runs in a distrobox while PipeWire runs on the host. There,
+# ``pw-link`` inside the container answered "failed to link ports: No such file
+# or directory" for every Arctis_*_sink_out -> effect_input.sonar-*-eq link,
+# while the very same command typed on the host worked. In pw-link.c ENOENT
+# means *its own registry* had no matching port (a server refusal is EPERM):
+# the container's pw-link cannot resolve ports that pw-dump and pw-cli can see.
+# Port ids are global, so the identical argv run through ``distrobox-host-exec``
+# links the same ports. Only ever tried in a container, only after ENOENT, and
+# remembered once it has worked.
+_LINK_NOT_FOUND = "no such file or directory"
+_LINK_EXISTS = "file exists"
+# True once a host-side pw-link has succeeded after an in-container ENOENT:
+# later links go to the host first instead of failing once more each. Module
+# state, so it resets with the daemon like _perm_repair_attempted.
+_host_link_works = False
+# (out, in) pairs already announced at WARNING; afterwards it is debug.
+_host_link_logged: set[tuple[str, str]] = set()
+
+
+def _link_err(r: subprocess.CompletedProcess) -> str:
+    return (r.stderr or b"").decode(errors="replace").strip()
+
+
+def _link_exists_ok(r: subprocess.CompletedProcess, delete: bool):
+    """"File exists" means the link is already there: that is the goal."""
+    if not delete and r.returncode != 0 and _LINK_EXISTS in _link_err(r).lower():
+        return subprocess.CompletedProcess(r.args, 0, r.stdout, r.stderr)
+    return r
+
+
+def _pw_link(out_port, in_port, delete: bool = False) -> subprocess.CompletedProcess:
+    """Run ``pw-link [-d] <out> <in>``, falling back to the host in a container.
+
+    Every pw-link call site goes through here so the #181 SteamOS fix lives in
+    one place. Outside a container this is exactly ``_pw_run(["pw-link", ...])``.
+    Inside one, an ENOENT (PipeWire tools may print it on stderr and still exit
+    0, so stderr is checked, not just the status) is retried once through
+    ``distrobox-host-exec``; the host result is final, so a host that fails too
+    cannot loop.
+    """
+    global _host_link_works
+    argv = ["pw-link", *(["-d"] if delete else []), str(out_port), str(in_port)]
+    kw = dict(check=False, timeout=3, capture_output=True)
+
+    from arctis_sound_manager import container
+    prefix = None
+    if container.running_in_container():
+        prefix = container.host_exec() or None
+
+    if prefix and _host_link_works:
+        return _link_exists_ok(_pw_run([*prefix, *argv], **kw), delete)
+
+    r = _link_exists_ok(_pw_run(argv, **kw), delete)
+    if not prefix or _LINK_NOT_FOUND not in _link_err(r).lower():
+        return r
+
+    pair = (str(out_port), str(in_port))
+    if pair not in _host_link_logged:
+        _host_link_logged.add(pair)
+        logger.warning(
+            "pw-link inside the container could not see the ports; "
+            "linked from the host instead (#181) [%s -> %s]", *pair)
+    else:
+        logger.debug("pw-link %s -> %s: retrying from the host", *pair)
+    try:
+        h = _link_exists_ok(_pw_run([*prefix, *argv], **kw), delete)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("host pw-link could not run: %r", exc)
+        return r
+    if h.returncode == 0 and _LINK_NOT_FOUND not in _link_err(h).lower():
+        _host_link_works = True
+        return h
+    if h.returncode == 0:  # exit 0 but ENOENT on stderr: still a failure
+        return subprocess.CompletedProcess(h.args, 1, h.stdout, h.stderr)
+    return h
+
 # When each (out, in) pair was last repaired. Cleared on every daemon start.
 #
 # This used to be a set — one attempt per pair, for the lifetime of the daemon
@@ -111,6 +189,17 @@ def _port_owner(port_id: int, dump: list | None = None) -> tuple[str | None, str
     return None, ""
 
 
+def _port_node_id(port_id: int, dump: list) -> int | None:
+    """Id of the node a port belongs to, None when the port is unknown."""
+    for obj in dump:
+        if obj.get("type") == "PipeWire:Interface:Port" and obj.get("id") == port_id:
+            try:
+                return int(((obj.get("info") or {}).get("props") or {})["node.id"])
+            except (KeyError, TypeError, ValueError):
+                return None
+    return None
+
+
 def grant_link_permissions(out_port: int, in_port: int) -> bool:
     """Give the clients owning these two ports permission to link (#181).
 
@@ -132,6 +221,17 @@ def grant_link_permissions(out_port: int, in_port: int) -> bool:
     Without the separator this whole repair could not run at all, on any
     system: it failed instantly, in a debug-level log nobody sees, and the
     caller went on retrying a link that stayed refused (#181).
+
+    ``-1`` alone is not always enough (#181, SteamOS after switching to Game
+    Mode): it only changes the client's *default* permission, and
+    ``pw_impl_client_update_permissions`` skips every global that already has
+    an explicit per-object entry (``if (p->id != PW_ID_ANY) continue``). When
+    the session manager has set explicit permissions, the link stays refused
+    (``check_owner_permissions`` in impl-link.c) however often ``-1`` is
+    granted. So each ASM-owned client is also given ``rwxml`` explicitly on
+    the four globals the refused link involves: both ports and both nodes.
+    That is the whole set the check looks at; the other end's client object
+    is not touched.
 
     Deliberately narrow. Only the two clients at the ends of a link ASM was
     already trying to make are touched, at most once a minute per port pair,
@@ -167,7 +267,9 @@ def grant_link_permissions(out_port: int, in_port: int) -> bool:
     if not owners:
         return False
 
-    granted = _grant_owners_rwxml(owners, context="link")
+    objects = [i for i in (_port_node_id(out_port, dump), _port_node_id(in_port, dump),
+                           out_port, in_port) if i is not None]
+    granted = _grant_owners_rwxml(owners, context="link", objects=objects)
     if granted:
         logger.warning(
             "Link was refused by PipeWire; granted link permission to client(s) %s "
@@ -186,9 +288,17 @@ def grant_link_permissions(out_port: int, in_port: int) -> bool:
 _PW_CLI_REGISTRY_RACE = re.compile(r"\bno global \d+|\bunknown resource \d+ op:")
 
 
-def _grant_owners_rwxml(owners: set[str], context: str) -> bool:
+def _grant_owners_rwxml(owners: set[str], context: str,
+                        objects: list[int] | None = None) -> bool:
     """Raise each of *owners* to ``rwxml`` on every object. Shared by
     :func:`grant_link_permissions` and :func:`grant_props_permissions`.
+
+    *objects* are global ids that additionally get an explicit ``rwxml`` entry
+    for each owner: the ``-1`` default is ignored for any global that already
+    carries an explicit permission (#181). ``pw-cli permissions`` takes a
+    single ``<client> <object> <perm>`` triple per call, hence one call per id.
+    A successful per-object grant counts as granted too: it is the one that
+    matters when the session set explicit entries.
 
     Returns True if at least one owner was actually granted — pw-cli reports
     a failed grant on stderr while still exiting 0, so the exit status alone
@@ -212,6 +322,22 @@ def _grant_owners_rwxml(owners: set[str], context: str) -> bool:
         else:
             logger.warning("pw-cli permissions %s failed: %s", owner,
                            err or f"exit status {r.returncode}")
+        for obj_id in dict.fromkeys(objects or ()):
+            try:
+                r = _pw_run(["pw-cli", "--", "permissions", owner, str(obj_id), "rwxml"],
+                            check=False, timeout=5, capture_output=True)
+            except Exception as exc:
+                logger.debug("could not grant %s permission on %s to client %s: %r",
+                             context, obj_id, owner, exc)
+                continue
+            err = "\n".join(
+                line for line in (r.stderr or b"").decode(errors="replace").splitlines()
+                if line.strip() and not _PW_CLI_REGISTRY_RACE.search(line))
+            if r.returncode == 0 and not err:
+                granted = True
+            else:
+                logger.debug("pw-cli permissions %s %s failed: %s", owner, obj_id,
+                             err or f"exit status {r.returncode}")
     return granted
 
 
@@ -262,7 +388,9 @@ def grant_props_permissions(node_name: str, dump: list | None = None) -> bool:
     if owner is None:
         return False
 
-    granted = _grant_owners_rwxml({owner}, context="props")
+    # Also the node itself, explicitly: a ``-1`` grant skips globals that carry
+    # an explicit permission entry (see grant_link_permissions, #181).
+    granted = _grant_owners_rwxml({owner}, context="props", objects=[node_id])
     if granted:
         logger.warning(
             "set-param on '%s' was refused by PipeWire; granted permission to "
@@ -1561,10 +1689,7 @@ def ensure_loopback_link(
         # autoconnect=false there should be none, but this keeps the graph clean
         # if a stray link was created before the flag took effect or by a user.
         for out_port, in_port in stray:
-            _pw_run(
-                ["pw-link", "-d", str(out_port), str(in_port)],
-                check=False, timeout=3, capture_output=True,
-            )
+            _pw_link(out_port, in_port, delete=True)
 
         # Resolve which output port links to which input port: channel-NAME
         # matching first (FL→FL, FR→FR, …); only if no name is shared between
@@ -1593,10 +1718,7 @@ def ensure_loopback_link(
             if (out_port, in_port) in existing:
                 linked_any = True
                 continue
-            r = _pw_run(
-                ["pw-link", str(out_port), str(in_port)],
-                check=False, timeout=3, capture_output=True,
-            )
+            r = _pw_link(out_port, in_port)
             err = (r.stderr or b"").decode(errors="replace").strip()
 
             # A refused link is not a broken graph: on systems that start our
@@ -1606,10 +1728,7 @@ def ensure_loopback_link(
             # than reporting a failure the user cannot act on.
             if r.returncode != 0 and _LINK_DENIED in err.lower():
                 if grant_link_permissions(out_port, in_port):
-                    r = _pw_run(
-                        ["pw-link", str(out_port), str(in_port)],
-                        check=False, timeout=3, capture_output=True,
-                    )
+                    r = _pw_link(out_port, in_port)
                     err = (r.stderr or b"").decode(errors="replace").strip()
 
             if r.returncode == 0:
@@ -1764,10 +1883,7 @@ def ensure_capture_link(
         # reported (a competing mic stealing the micro EQ capture after a
         # config regen / filter-chain restart).
         for out_port, in_port in stray:
-            _pw_run(
-                ["pw-link", "-d", str(out_port), str(in_port)],
-                check=False, timeout=3, capture_output=True,
-            )
+            _pw_link(out_port, in_port, delete=True)
 
         # Resolve which output port links to which input port: channel-NAME
         # matching first; only if no name is shared between the two sides
@@ -1794,10 +1910,7 @@ def ensure_capture_link(
             if (out_port, in_port) in existing:
                 linked_any = True
                 continue
-            r = _pw_run(
-                ["pw-link", str(out_port), str(in_port)],
-                check=False, timeout=3, capture_output=True,
-            )
+            r = _pw_link(out_port, in_port)
             if r.returncode == 0:
                 linked_any = True
                 created += 1

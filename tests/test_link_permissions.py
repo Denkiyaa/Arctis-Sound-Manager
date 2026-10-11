@@ -70,7 +70,7 @@ def test_grants_only_the_two_clients_at_the_ends():
          patch.object(pw_utils.shutil, 'which', lambda _: '/usr/bin/pw-cli'):
         assert pw_utils.grant_link_permissions(10, 20) is True
 
-    targets = sorted(c[3] for c in calls if c[:3] == ['pw-cli', '--', 'permissions'])
+    targets = sorted({c[3] for c in calls if c[:3] == ['pw-cli', '--', 'permissions']})
     assert targets == ['184', '232']
     # The linking flag is the point: "rwxm" alone would not help (#181).
     assert all(c[-1] == 'rwxml' for c in calls)
@@ -101,7 +101,7 @@ def test_third_party_clients_are_never_granted_anything():
         # Our node at one end, the device at the other.
         assert pw_utils.grant_link_permissions(10, 40) is True
 
-    targets = [c[3] for c in calls if c[:3] == ['pw-cli', '--', 'permissions']]
+    targets = sorted({c[3] for c in calls if c[:3] == ['pw-cli', '--', 'permissions']})
     assert targets == ['232'], 'only the ASM-owned end may be granted'
     assert '56' not in targets, "WirePlumber's client must be left alone"
 
@@ -172,7 +172,8 @@ def test_command_separates_options_from_the_subcommand():
 
     for argv in calls:
         assert argv[1] == '--', f'{argv}: pw-cli would read -1 as an option'
-        assert argv.index('--') < argv.index('-1')
+        if '-1' in argv:
+            assert argv.index('--') < argv.index('-1')
 
 
 def test_stderr_beats_a_zero_exit_status():
@@ -350,7 +351,7 @@ def test_grant_props_permissions_grants_the_owning_client():
          patch.object(pw_utils.shutil, 'which', lambda _: '/usr/bin/pw-cli'):
         assert pw_utils.grant_props_permissions('effect_input.sonar-game-eq', _dump()) is True
 
-    targets = [c[3] for c in calls if c[:3] == ['pw-cli', '--', 'permissions']]
+    targets = sorted({c[3] for c in calls if c[:3] == ['pw-cli', '--', 'permissions']})
     assert targets == ['184']
     assert all(c[-1] == 'rwxml' for c in calls)
 
@@ -456,3 +457,71 @@ def test_set_filter_controls_reports_pw_cli_error_despite_exit_0():
         ok = pw_utils.set_filter_controls('effect_input.sonar-game-eq', {'bq0:Gain': 3.0})
 
     assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# Explicit per-object grants (#181, rasmus91, SteamOS Game Mode): "-1" only
+# sets the default and skips globals with an explicit permission entry.
+# ---------------------------------------------------------------------------
+
+def _perm_calls(calls):
+    return [c for c in calls if c[:3] == ['pw-cli', '--', 'permissions']]
+
+
+def test_link_grant_adds_per_object_grants_for_ports_and_nodes():
+    calls: list[list[str]] = []
+
+    def run(argv, **_k):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+
+    with patch.object(pw_utils, '_pw_dump', _dump), \
+         patch.object(pw_utils, '_pw_run', run), \
+         patch.object(pw_utils.shutil, 'which', lambda _: '/usr/bin/pw-cli'):
+        assert pw_utils.grant_link_permissions(10, 20) is True
+
+    perms = _perm_calls(calls)
+    for client in ('232', '184'):
+        mine = [c[4] for c in perms if c[3] == client]
+        assert mine[0] == '-1'
+        assert sorted(mine[1:]) == ['10', '100', '20', '200']
+    assert ['pw-cli', '--', 'permissions', '232', '100', 'rwxml'] in perms
+    assert all(c[-1] == 'rwxml' for c in perms)
+
+
+def test_per_object_grant_alone_counts_when_default_grant_fails():
+    def run(argv, **_k):
+        if argv[4] == '-1':
+            return SimpleNamespace(returncode=1, stdout=b'', stderr=b'denied')
+        return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+
+    with patch.object(pw_utils, '_pw_dump', _dump), \
+         patch.object(pw_utils, '_pw_run', run), \
+         patch.object(pw_utils.shutil, 'which', lambda _: '/usr/bin/pw-cli'):
+        assert pw_utils.grant_link_permissions(10, 20) is True
+
+
+def test_registry_race_on_per_object_grant_is_filtered():
+    def run(argv, **_k):
+        return SimpleNamespace(returncode=0, stdout=b'', stderr=(
+            b'remote 0: error id:65 seq:128 res:-2 (No such file or directory): no global 83\n'))
+
+    with patch.object(pw_utils, '_pw_dump', _dump), \
+         patch.object(pw_utils, '_pw_run', run), \
+         patch.object(pw_utils.shutil, 'which', lambda _: '/usr/bin/pw-cli'):
+        assert pw_utils.grant_link_permissions(10, 20) is True
+
+
+def test_props_grant_adds_the_node_explicitly():
+    calls: list[list[str]] = []
+
+    def run(argv, **_k):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+
+    with patch.object(pw_utils, '_pw_run', run), \
+         patch.object(pw_utils.shutil, 'which', lambda _: '/usr/bin/pw-cli'):
+        assert pw_utils.grant_props_permissions('effect_input.sonar-game-eq', _dump()) is True
+
+    assert [c[3:] for c in _perm_calls(calls)] == [
+        ['184', '-1', 'rwxml'], ['184', '200', 'rwxml']]

@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **No Sonar audio on SteamOS and other distrobox setups (#181).** Inside the container, `pw-link` could not see the Arctis and Sonar EQ ports and failed with "No such file or directory" on every channel, so the EQ stayed silent even though the same link works from the host. ASM now retries such a link through `distrobox-host-exec` and remembers that it works. Nothing changes outside a container. Thanks @baccatuesday for the detailed logs.
+
+- **"Operation not permitted" kept coming back after the permission repair on SteamOS (#181).** After switching to Game Mode, the session sets permissions object by object, and the repair's blanket grant skips those. ASM now also grants its own clients access to the exact ports and nodes of the refused link. Thanks @rasmus91.
+
 - **ASM would not open on Linux Mint 22 / Ubuntu 24.04 (X11).** There PySide6 comes from pip, which does not bring the `libxcb-cursor0` library Qt needs to open a window on X11, so the app crashed silently at launch. The `.deb` now depends on it, and if it is ever missing `asm-gui` shows the exact install command instead of crashing.
 
 ## [1.5.2] - 11 October 2026
