@@ -357,8 +357,10 @@ def _conf_is_outdated(content: str) -> bool:
 
     True when the ``# ASM-CONF-VERSION:`` marker is absent entirely (every
     conf written before this mechanism existed — pre-1.2.6 — including the
-    pre-1.2.5 HeSuVi confs missing the limiter node) or when it names a value
-    lower than _CONF_VERSION (any later shape change). False only when the
+    pre-1.2.5 HeSuVi confs missing the limiter node) or when it names any
+    other value than _CONF_VERSION: lower is a later shape change, higher is a
+    develop test build whose shape the release replacing it may not share
+    (the bump can be reverted before shipping). False only when the
     marker is present and already current, so a stable, up-to-date conf is
     never rewritten (and never triggers a needless filter-chain restart) just
     because check_and_fix_stale_configs() ran again.
@@ -367,7 +369,7 @@ def _conf_is_outdated(content: str) -> bool:
     if not match:
         return True
     try:
-        return int(match.group(1)) < _CONF_VERSION
+        return int(match.group(1)) != _CONF_VERSION
     except ValueError:
         return True
 

@@ -162,6 +162,27 @@ def _run_out(cmd: list[str], timeout: float = 5.0) -> str:
         return ''
 
 
+# Kernel lines worth keeping: the headset leaving the bus, or snd-usb-audio
+# erroring on it, is invisible from PipeWire's side except as "No such device".
+_KERNEL_USB_AUDIO_RE = re.compile(r'usb|xhci|snd|hid|steelseries|arctis', re.IGNORECASE)
+
+
+def _kernel_usb_audio_log(boot: str, limit: int = 60) -> str:
+    """USB/sound kernel messages of *boot* ('0' = this one, '-1' = previous).
+
+    Issue #317: a report is often made after the reboot that cleared the
+    problem, so the previous boot is the one holding the answer. Reading the
+    kernel journal needs the systemd-journal/wheel/adm group; without it, or
+    without a persistent journal, this returns ''.
+    """
+    raw = _run_out(['journalctl', '-k', '-b', boot, '--no-pager', '-o', 'short'],
+                   timeout=10.0)
+    if not raw and boot == '0':
+        raw = _run_out(['dmesg', '-T'])
+    kept = [line for line in raw.splitlines() if _KERNEL_USB_AUDIO_RE.search(line)]
+    return '\n'.join(kept[-limit:])
+
+
 _ARCTIS_PATTERNS = ('arctis', '1038', 'steelseries')
 
 
@@ -1018,6 +1039,9 @@ def collect_system_info() -> dict:
         ['journalctl', '--user', '-u', 'filter-chain', '-n', '80', '--no-pager'],
     )
 
+    info['kernel_usb_audio'] = _kernel_usb_audio_log('0')
+    info['kernel_usb_audio_prev'] = _kernel_usb_audio_log('-1')
+
     # A filter-chain SIGSEGV (issue #88) leaves a coredump whose backtrace names
     # the offending module — the single most useful artifact to locate the crash.
     # coredumpctl is systemd-only; _run_out returns '' when it's absent.
@@ -1540,6 +1564,17 @@ def format_bug_report(traceback_str: Optional[str] = None) -> str:
             '## filter-chain logs (`journalctl --user -u filter-chain`, last 80)',
             '```',
             jc_fc[-6000:],
+            '```',
+            '',
+        ]
+
+    for key, title in (('kernel_usb_audio', 'this boot'),
+                       ('kernel_usb_audio_prev', 'previous boot')):
+        lines += [
+            f'## Kernel USB/sound messages ({title})',
+            '```',
+            info.get(key) or '(none — or kernel journal unreadable: '
+                             'needs the systemd-journal/wheel group and a persistent journal)',
             '```',
             '',
         ]
