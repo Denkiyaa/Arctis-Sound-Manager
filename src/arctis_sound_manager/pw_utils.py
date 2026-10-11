@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 logger = logging.getLogger("pw_utils")
 
@@ -1018,6 +1019,63 @@ def get_native_streams(data: list | None = None) -> list[dict]:
         s.setdefault("sink_id", None)
 
     return list(streams.values())
+
+
+_CHANNEL_SINKS = {
+    "Arctis_Game": "game",
+    "Arctis_Chat": "chat",
+    "Arctis_Media": "media",
+    "Arctis_Aux": "aux",
+    "effect_input.sonar-output-eq": "output",
+}
+
+
+def playing_channels(data: list | None = None) -> set[str] | None:
+    """Return the ASM channels ("game", "chat", ...) an app is playing into.
+
+    A channel counts when at least one app stream — native or pipewire-pulse,
+    unlike :func:`get_native_streams` — is linked to its sink and running.
+    The virtual sinks themselves are always running (the loopback drives
+    them), so only the app side says whether anything is actually heard.
+    Output has no virtual sink: an app played straight into an external
+    device (the same ones the Output card lists) counts as Output too.
+    A paused/corked stream is ``"paused"``/``"idle"`` and does not count.
+
+    ``None`` when the graph could not be read.
+    """
+    if data is None:
+        data = pw_dump_or_none()
+        if data is None:
+            return None
+
+    sinks: dict[int, str] = {}      # node-id -> channel
+    running: set[int] = set()       # running app stream node-ids
+    for obj in data:
+        if obj.get("type") != "PipeWire:Interface:Node":
+            continue
+        info = obj.get("info") or {}
+        props = info.get("props") or {}
+        mc = props.get("media.class", "")
+        name = props.get("node.name", "")
+        if mc == "Audio/Sink" and name in _CHANNEL_SINKS:
+            sinks[obj.get("id", -1)] = _CHANNEL_SINKS[name]
+        elif mc == "Audio/Sink" and is_external_output_sink(
+                SimpleNamespace(name=name, proplist=props)):
+            sinks[obj.get("id", -1)] = "output"
+        elif (mc == "Stream/Output/Audio" and info.get("state") == "running"
+              and not is_asm_internal_stream(name)):
+            running.add(obj.get("id", -1))
+
+    channels: set[str] = set()
+    for obj in data:
+        if obj.get("type") != "PipeWire:Interface:Link":
+            continue
+        info = obj.get("info") or {}
+        if info.get("output-node-id") in running:
+            ch = sinks.get(info.get("input-node-id"))
+            if ch:
+                channels.add(ch)
+    return channels
 
 
 def loopback_link_target(playback_name: str, data: list | None = None) -> str | None:

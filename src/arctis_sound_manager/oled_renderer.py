@@ -250,10 +250,10 @@ class OledRenderer:
                 break
         return last_x + 1 if last_x >= 0 else estimate
 
-    def measure_eq_text(self, eq_preset: str, sz_eq: int) -> int:
-        """Return pixel width of 'EQ: <eq_preset>' at the given font size."""
+    def measure_eq_text(self, eq_preset: str, sz_eq: int, eq_label: str = "EQ") -> int:
+        """Return pixel width of '<eq_label>: <eq_preset>' at the given font size."""
         font = _load_font(max(7, min(30, sz_eq)))
-        return self._measure_text_pixels(font, f"EQ: {eq_preset}")
+        return self._measure_text_pixels(font, f"{eq_label}: {eq_preset}")
 
     def measure_profile_text(self, active_profile: str, sz_profile: int) -> int:
         """Return pixel width of 'Profile: <active_profile>' at the given font size."""
@@ -284,6 +284,7 @@ class OledRenderer:
         show_battery: bool = True,
         show_profile: bool = True,
         show_eq: bool = True,
+        eq_label: str = "EQ",
         show_mic_status: bool = True,
         show_sonar_mode: bool = True,
         show_eq_chat: bool = False,
@@ -408,7 +409,7 @@ class OledRenderer:
                 y += sz_profile + 3
             elif element == 'eq' and show_eq and eq_preset:
                 # Negative x scrolls the text left; PIL clips at canvas edge automatically
-                draw.text((1 - eq_scroll_offset, y), f"EQ: {eq_preset}", font=font_eq, fill=1)
+                draw.text((1 - eq_scroll_offset, y), f"{eq_label}: {eq_preset}", font=font_eq, fill=1)
                 y += sz_eq + 3
             elif element == 'weather' and weather is not None:
                 y += 2

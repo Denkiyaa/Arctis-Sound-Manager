@@ -25,6 +25,7 @@ from arctis_sound_manager.power_status import (HeadsetPower,
 from arctis_sound_manager.weather_service import WeatherData, WeatherService
 from arctis_sound_manager.config import parsed_status
 from arctis_sound_manager import profile_manager
+from arctis_sound_manager.pw_utils import playing_channels
 
 # Pillow is an optional runtime dependency: only headsets whose YAML profile
 # declares an OLED screen ever need it. But core.py imports this module
@@ -54,6 +55,10 @@ _CFG = Path.home() / ".config" / "arctis_manager"
 def _active_eq_preset(channel: str) -> str:
     f = _CFG / f".sonar_preset_{channel}"
     return f.read_text().strip() if f.exists() else "Flat"
+
+
+# Which channel's EQ the "eq" line shows when several are playing at once.
+_EQ_CHANNEL_PRIORITY = ("game", "media", "aux", "output", "chat")
 
 _REFRESH_INTERVAL_S = 5.0
 _SPLASH_DURATION_S = 3.0
@@ -222,6 +227,8 @@ class OledManager:
         self._eq_scroll_offset: int = 0
         self._eq_reset_event = threading.Event()
         self._eq_scroll_thread: threading.Thread | None = None
+        # Channel whose EQ the "eq" line shows: the one being listened to.
+        self._eq_channel: str = "game"
         self._profile_scroll_offset: int = 0
         self._profile_reset_event = threading.Event()
         self._profile_scroll_thread: threading.Thread | None = None
@@ -498,7 +505,12 @@ class OledManager:
         )
 
         self._blink = not self._blink
-        eq_preset = _active_eq_preset("game")
+        eq_channel = self._listened_eq_channel()
+        if eq_channel != self._eq_channel:
+            self._eq_channel = eq_channel
+            self._eq_scroll_offset = 0
+            self._eq_reset_event.set()
+        eq_preset = _active_eq_preset(eq_channel)
 
         gs = self._core.general_settings
 
@@ -536,6 +548,7 @@ class OledManager:
             active_profile=active_profile,
             blink_state=self._blink,
             eq_preset=eq_preset,
+            eq_label=eq_channel.capitalize(),
             weather=weather_data,
             show_time=gs.oled_show_time,
             # Nothing to say beats saying the wrong thing: a device with no
@@ -867,6 +880,23 @@ class OledManager:
         finally:
             self._wake_pending.clear()
 
+    def _listened_eq_channel(self) -> str:
+        """The channel being listened to, i.e. the one an app plays into.
+
+        Sticky: the current channel stays while it still plays, and also when
+        nothing plays at all (the screen keeps showing the last one heard
+        rather than flipping back to Game on every pause).
+
+        Chat never wins over another channel: a Discord call stays open while
+        the game is what is actually being listened to.
+        """
+        playing = playing_channels()
+        if playing and playing != {"chat"}:
+            playing = playing - {"chat"}
+        if not playing or self._eq_channel in playing:
+            return self._eq_channel
+        return next(ch for ch in _EQ_CHANNEL_PRIORITY if ch in playing)
+
     def _update_scroll_frame(self) -> None:
         """Re-render _current_image with current eq/profile scroll offsets and send it."""
         params = self._last_render_params
@@ -911,8 +941,9 @@ class OledManager:
                         continue
                     continue
 
-                eq_preset = _active_eq_preset("game")
-                text_w = self._renderer.measure_eq_text(eq_preset, gs.oled_font_eq)
+                eq_preset = _active_eq_preset(self._eq_channel)
+                text_w = self._renderer.measure_eq_text(
+                    eq_preset, gs.oled_font_eq, self._eq_channel.capitalize())
                 # Draw origin is x=1; we want the last pixel at x=127 (WIDTH-1).
                 # text_w is the full advance → place advance end at x=127 → offset = text_w - 126.
                 max_offset = text_w - (self._renderer.WIDTH - 1)
