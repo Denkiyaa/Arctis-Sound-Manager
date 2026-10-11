@@ -66,10 +66,11 @@ def test_elite_family_brightness_never_goes_below_one(name):
     assert len(proto.build_brightness_packet(5)) == 64
 
 
-@pytest.mark.parametrize("name", [
-    "SteelSeries Arctis Nova Pro Wireless", "SteelSeries Arctis Nova Pro Wired",
-])
+@pytest.mark.parametrize("name", ["SteelSeries Arctis Nova Pro Wireless"])
 def test_nova_pro_keeps_the_frames_that_work_on_hardware(name):
+    # Wireless only: the 1024-byte frames were verified on its base. The Wired
+    # DAC follows its own spec (521-byte chunks, 128x52 at y=12, #321), see
+    # test_nova_pro_wired_321.py.
     proto = _protocol(_oled(name))
     assert [len(p) for p in proto.build_frame_packets(bytes(1024), 128, 64)] == [1024, 1024]
     assert proto.can_go_dark
