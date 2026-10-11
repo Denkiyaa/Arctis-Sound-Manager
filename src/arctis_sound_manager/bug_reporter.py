@@ -941,6 +941,19 @@ def collect_system_info() -> dict:
     except Exception:
         pass
 
+    # Streamer mode (the independent OBS mix): the toggle plus the per-channel
+    # volumes/mutes it mixes with, so "OBS hears nothing / the wrong level"
+    # reports show what ASM thought it had set.
+    info['streamer_mode'] = ''
+    try:
+        from arctis_sound_manager.settings import GeneralSettings as _GS
+        from arctis_sound_manager.stream_mix import STREAM_MIX_FILE as _SMF
+        if _GS.read_from_file().streamer_mode:
+            _sm = _SMF.read_text(errors='replace').strip() if _SMF.is_file() else '(no stream_mix.json: defaults)'
+            info['streamer_mode'] = 'ON\n' + _sm
+    except Exception:
+        pass
+
     # What the *pipewire daemon itself* was told to load, which until #205 no
     # report showed. filter-chain.conf.d/ is read by filter-chain.service;
     # pipewire.conf.d/ is read by the daemon. A filter declared in both — or a
@@ -1587,6 +1600,15 @@ def format_bug_report(traceback_str: Optional[str] = None) -> str:
             '     distros or when no coredump was recorded. -->',
             '```',
             coredump[-6000:],
+            '```',
+            '',
+        ]
+
+    if info.get('streamer_mode'):
+        lines += [
+            '## Streamer mode',
+            '```',
+            info['streamer_mode'],
             '```',
             '',
         ]

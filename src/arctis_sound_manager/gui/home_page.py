@@ -369,6 +369,33 @@ def _read_aux_enabled() -> bool:
         return False
 
 
+def _read_streamer_mode() -> bool:
+    """Whether Streamer mode (the second, OBS-facing mix) is switched on."""
+    try:
+        from arctis_sound_manager.settings import GeneralSettings
+        return bool(getattr(GeneralSettings.read_from_file(), "streamer_mode", False))
+    except Exception:  # noqa: BLE001 — a broken settings file is not worth the page
+        return False
+
+
+def _make_stream_slider_qss(accent_color: str) -> str:
+    """QSS for the compact horizontal Stream slider on a card."""
+    return f"""
+        QSlider::groove:horizontal {{
+            height: 6px;
+            background: {_theme.c("BG_BUTTON")};
+            border-radius: 3px;
+        }}
+        QSlider::sub-page:horizontal {{
+            background: {accent_color};
+            border-radius: 3px;
+        }}
+        QSlider::add-page:horizontal {{
+            background: transparent;
+        }}
+    """ + FADER_HANDLE_QSS_H
+
+
 def _read_hidden_channels() -> set[str]:
     try:
         from arctis_sound_manager.settings import GeneralSettings
@@ -556,6 +583,39 @@ class AudioCard(QWidget):
 
         outer.addWidget(top_widget, stretch=1)
 
+        # Optional Stream control (Streamer mode), hidden until the mixer
+        # calls enable_stream_control() and shows it. Compact: one label row
+        # and one slider+mute row, so the card does not grow tall.
+        self._stream_widget = QWidget()
+        self._stream_widget.setStyleSheet("background: transparent;")
+        stream_layout = QVBoxLayout(self._stream_widget)
+        stream_layout.setContentsMargins(16, 0, 16, 6)
+        stream_layout.setSpacing(2)
+        self._stream_lbl = QLabel()
+        self._stream_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        stream_layout.addWidget(self._stream_lbl)
+        stream_row = QHBoxLayout()
+        stream_row.setSpacing(8)
+        self._stream_slider = FaderSlider(Qt.Orientation.Horizontal)
+        self._stream_slider.setMinimum(0)
+        self._stream_slider.setMaximum(100)
+        self._stream_slider.setMinimumHeight(22)
+        self._stream_slider.valueChanged.connect(self._on_stream_slider_changed)
+        stream_row.addWidget(self._stream_slider, stretch=1)
+        self._stream_mute_btn = QPushButton()
+        self._stream_mute_btn.setCheckable(True)
+        self._stream_mute_btn.setFixedSize(28, 24)
+        self._stream_mute_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stream_mute_btn.toggled.connect(self._on_stream_mute_toggled)
+        stream_row.addWidget(self._stream_mute_btn)
+        stream_layout.addLayout(stream_row)
+        self._stream_widget.hide()
+        self._stream_enabled = False
+        self._stream_volume = 100
+        self._on_stream_callback = None
+        self._style_stream_control()
+        outer.addWidget(self._stream_widget)
+
         # Optional EQ preset picker (the channel's favorites from the Equalizer
         # page), hidden until set_presets() is called (#256). A small button
         # opening the Equalizer page's preset search, limited to the favorites.
@@ -651,6 +711,7 @@ class AudioCard(QWidget):
             self._icon.set_color(self._accent)
         self._style_card_buttons()
         self._style_output_label()
+        self._style_stream_control()
         # Slider groove color follows the theme; accent stays per-channel
         self._slider.setStyleSheet(_make_vertical_slider_qss(self._accent))
         self._hw_slider.setStyleSheet(_make_vertical_slider_qss(self._accent))
@@ -709,6 +770,62 @@ class AudioCard(QWidget):
 
     def set_on_change(self, callback):
         self._on_change_callback = callback
+
+    # ── Stream control (Streamer mode) ─────────────────────────────────────────
+
+    def enable_stream_control(self, callback) -> None:
+        """Give this card a Stream control; *callback(volume, muted)* fires on
+        every user change. Cards that never call this (Master, Output) have none."""
+        self._stream_enabled = True
+        self._on_stream_callback = callback
+
+    def set_stream_visible(self, visible: bool) -> None:
+        self._stream_widget.setVisible(bool(visible) and self._stream_enabled)
+
+    def set_stream_state(self, volume: int, muted: bool) -> None:
+        """Show a state without firing the callback."""
+        self._ignore_change = True
+        self._stream_slider.setValue(int(volume))
+        self._stream_mute_btn.setChecked(bool(muted))
+        self._ignore_change = False
+        self._stream_volume = int(volume)
+        self._refresh_stream_label()
+
+    def _stream_muted(self) -> bool:
+        return self._stream_mute_btn.isChecked()
+
+    def _refresh_stream_label(self) -> None:
+        pct = "—" if self._stream_muted() else f"{self._stream_slider.value()}%"
+        self._stream_lbl.setText(f"{I18n.translate('ui', 'stream_label')} {pct}")
+        self._stream_mute_btn.setText("M")
+        self._stream_mute_btn.setToolTip(I18n.translate("ui", "stream_mute"))
+
+    def _on_stream_slider_changed(self, value: int) -> None:
+        self._stream_volume = int(value)
+        self._refresh_stream_label()
+        if not self._ignore_change and self._on_stream_callback:
+            self._on_stream_callback(int(value), self._stream_muted())
+
+    def _on_stream_mute_toggled(self, muted: bool) -> None:
+        self._refresh_stream_label()
+        if not self._ignore_change and self._on_stream_callback:
+            self._on_stream_callback(self._stream_slider.value(), bool(muted))
+
+    def _style_stream_control(self) -> None:
+        self._stream_lbl.setStyleSheet(
+            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 9pt; background: transparent;"
+        )
+        self._stream_slider.setStyleSheet(_make_stream_slider_qss(self._accent))
+        self._stream_mute_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {_theme.c('BG_BUTTON')};
+                color: {_theme.c('TEXT_PRIMARY')};
+                border: 1px solid transparent; border-radius: 6px;
+                font-size: 9pt; font-weight: bold;
+            }}
+            QPushButton:hover {{ border-color: {self._accent}; }}
+            QPushButton:checked {{ background-color: {self._accent}; color: #fff; }}
+        """)
 
     def set_volume(self, pct: int):
         self._ignore_change = True
@@ -1578,6 +1695,7 @@ class HomePage(QWidget):
         self.profile_bar = ProfileBar()
         self.profile_bar.sig_toggle_aux.connect(self._set_aux_enabled)
         self.profile_bar.sig_toggle_output.connect(self._set_output_channel_visible)
+        self.profile_bar.sig_toggle_streamer.connect(self._set_streamer_mode)
         self.profile_bar.sig_toggle_channel.connect(self._set_channel_visible)
         toggle_layout.addWidget(self.profile_bar, stretch=1)
 
@@ -1664,6 +1782,7 @@ class HomePage(QWidget):
         self._ext_card.set_on_change(self._on_ext_volume_changed)
         self._ext_card.set_on_drop(self._on_stream_drop_ext)
         self._cards_layout.addWidget(self._ext_card, stretch=1)
+        self._init_stream_controls()
 
 
         # EQ preset picker on every card but Master, keyed by Sonar channel
@@ -1763,6 +1882,7 @@ class HomePage(QWidget):
 
         self._apply_aux_visibility(_read_aux_enabled())
         self._apply_output_visibility(_read_output_channel_visible())
+        self._apply_streamer_visibility(_read_streamer_mode())
         for channel in _read_hidden_channels():
             self._apply_channel_visibility(channel, False)
 
@@ -3113,6 +3233,95 @@ class HomePage(QWidget):
         self._refresh_app_tag_buttons()
         self._refresh_chatmix_toggles()
 
+    # ── Streamer mode: the second, OBS-facing mix ────────────────────────────
+
+    _STREAM_CARDS = (("game", "_game_card"), ("chat", "_chat_card"),
+                     ("media", "_media_card"), ("aux", "_aux_card"),
+                     ("mic", "_mic_card"))
+
+    def _init_stream_controls(self) -> None:
+        """Wire the Stream control of the five cards that feed the stream mix."""
+        self._stream_apply_timer = QTimer(self)
+        self._stream_apply_timer.setSingleShot(True)
+        self._stream_apply_timer.setInterval(100)
+        self._stream_apply_timer.timeout.connect(self._run_stream_apply)
+        self._stream_apply_running = False
+        self._stream_apply_pending = False
+        for channel, attr in self._STREAM_CARDS:
+            getattr(self, attr).enable_stream_control(
+                lambda vol, muted, ch=channel: self._on_stream_changed(ch, vol, muted))
+
+    def _set_streamer_mode(self, enabled: bool) -> None:
+        """Turn Streamer mode on or off, and tell the daemon.
+
+        Same shape as _set_aux_enabled: persist, follow visually, then the
+        daemon restarts the filter-chain once to add or drop the stream stage.
+        """
+        try:
+            from arctis_sound_manager.settings import GeneralSettings
+            gs = GeneralSettings.read_from_file()
+            gs.streamer_mode = bool(enabled)
+            gs.write_to_file()
+        except Exception:  # noqa: BLE001
+            logger.warning("could not persist streamer_mode", exc_info=True)
+        self._apply_streamer_visibility(enabled)
+        try:
+            from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
+            DbusWrapper.change_setting("streamer_mode", bool(enabled))
+        except Exception:  # noqa: BLE001
+            logger.debug("could not notify the daemon about streamer_mode", exc_info=True)
+
+    def _apply_streamer_visibility(self, enabled: bool) -> None:
+        """Show or hide the Stream controls, loading their state when shown."""
+        if enabled:
+            try:
+                from arctis_sound_manager import stream_mix
+                state = stream_mix.load_stream_mix()
+            except Exception:  # noqa: BLE001
+                logger.debug("could not load the stream mix", exc_info=True)
+                state = {}
+            for channel, attr in self._STREAM_CARDS:
+                st = state.get(channel, {})
+                getattr(self, attr).set_stream_state(
+                    int(st.get("volume", 100)), bool(st.get("muted", False)))
+        for _channel, attr in self._STREAM_CARDS:
+            getattr(self, attr).set_stream_visible(enabled)
+
+    def _on_stream_changed(self, channel: str, volume: int, muted: bool) -> None:
+        """Persist one channel's stream volume/mute, then apply it live.
+
+        The label already moved; saving is a small file write, applying spawns
+        pw-cli so it is debounced and run off the GUI thread.
+        """
+        try:
+            from arctis_sound_manager import stream_mix
+            stream_mix.save_stream_mix_channel(channel, volume=volume, muted=muted)
+        except Exception:  # noqa: BLE001
+            logger.warning("could not save the stream mix", exc_info=True)
+        self._stream_apply_timer.start()
+
+    def _run_stream_apply(self) -> None:
+        """Run apply_stream_mix in a thread; one at a time, the latest state wins."""
+        if self._stream_apply_running:
+            self._stream_apply_pending = True
+            return
+        self._stream_apply_running = True
+
+        def _work() -> None:
+            try:
+                from arctis_sound_manager import stream_mix
+                stream_mix.apply_stream_mix()
+            except Exception:  # noqa: BLE001
+                logger.debug("apply_stream_mix failed", exc_info=True)
+            finally:
+                self._stream_apply_running = False
+                if self._stream_apply_pending:
+                    self._stream_apply_pending = False
+                    QTimer.singleShot(0, self._stream_apply_timer.start)
+
+        import threading
+        threading.Thread(target=_work, name="asm-stream-apply", daemon=True).start()
+
     # ── the optional Output card (#262) ──────────────────────────────────────
 
     def _set_output_channel_visible(self, visible: bool) -> None:
@@ -3146,6 +3355,7 @@ class HomePage(QWidget):
             self._apply_channel_visibility(channel, channel not in hidden)
         self._apply_aux_visibility(_read_aux_enabled())
         self._apply_output_visibility(_read_output_channel_visible())
+        self._apply_streamer_visibility(_read_streamer_mode())
 
     def _channel_card(self, channel: str) -> "AudioCard | None":
         return {"mic": self._mic_card, "master": self._master_card,

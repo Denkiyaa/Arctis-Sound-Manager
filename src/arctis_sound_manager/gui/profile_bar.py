@@ -73,6 +73,8 @@ class ProfileBar(QWidget):
     # directly, since a checkable menu action already carries it.
     sig_toggle_aux = Signal(bool)
     sig_toggle_output = Signal(bool)
+    # Streamer mode: a second, independent mix for OBS (not a channel card)
+    sig_toggle_streamer = Signal(bool)
     # (channel, visible) for the cards with no setting of their own (#315)
     sig_toggle_channel = Signal(str, bool)
 
@@ -169,6 +171,14 @@ class ProfileBar(QWidget):
         except Exception:  # noqa: BLE001
             return False, True
 
+    @staticmethod
+    def _read_streamer() -> bool:
+        from arctis_sound_manager.settings import GeneralSettings
+        try:
+            return bool(getattr(GeneralSettings.read_from_file(), "streamer_mode", False))
+        except Exception:  # noqa: BLE001
+            return False
+
     def _on_channels_menu(self) -> None:
         menu = self._build_channels_menu()
         menu.exec(self._channels_btn.mapToGlobal(
@@ -211,6 +221,19 @@ class ProfileBar(QWidget):
             action = QWidgetAction(menu)
             action.setDefaultWidget(cb)
             menu.addAction(action)
+
+        # Streamer mode sits below the channels it mixes, behind a separator:
+        # it is not a card, it adds a Stream control to the cards above.
+        menu.addSeparator()
+        cb = QCheckBox(I18n.translate('ui', 'streamer_mode'))
+        cb.setStyleSheet(cb_style)
+        cb.setProperty("channel", "streamer")
+        cb.setToolTip(I18n.translate('ui', 'streamer_mode_tooltip'))
+        cb.setChecked(self._read_streamer())
+        cb.toggled.connect(self.sig_toggle_streamer.emit)
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(cb)
+        menu.addAction(action)
 
         return menu
 

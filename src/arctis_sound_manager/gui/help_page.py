@@ -139,6 +139,32 @@ HELP_CONTENT: dict[str, dict] = {
                 ),
             },
             {
+                "heading": "Streamer mode",
+                "body": (
+                    "Streamer mode adds a second, independent mix of Game, Chat, Media, Aux and "
+                    "your processed Mic, with its own volume and mute for each channel. It is "
+                    "delivered as a virtual stereo source named \"<device> Stream Mix\" that OBS "
+                    "or any recorder can capture — like the Stream mode of SteelSeries Sonar in "
+                    "GG.\n\n"
+                    "── Turning it on ──\n"
+                    "On the Channels page, open the Channels menu and tick \"Streamer mode\". "
+                    "Each of the Game, Chat, Media, Aux and Mic cards then shows a compact "
+                    "\"Stream\" slider (0-100) with a mute button under its fader. Moves are "
+                    "applied live, with no dropout. Turning the mode on or off restarts the audio "
+                    "chain once, so expect one short dropout, like switching a preset.\n\n"
+                    "── Using it in OBS ──\n"
+                    "Sources → + → Audio Input Capture → choose \"<device> Stream Mix\". Remove "
+                    "any separate desktop-audio and microphone captures, otherwise viewers hear "
+                    "everything twice.\n\n"
+                    "── What viewers hear ──\n"
+                    "The stream mix is taken before your personal volumes and before the "
+                    "per-channel EQ and spatial audio, so viewers hear the clean game, not your "
+                    "headphone EQ or HRTF. 7.1 game audio is folded to stereo with a proper "
+                    "downmix that keeps the centre channel (dialogue). Your headset volumes and "
+                    "the ChatMix dial do not affect the stream mix, and it does not affect them."
+                ),
+            },
+            {
                 "heading": "Profiles",
                 "body": (
                     "Profiles let you save and restore your complete audio configuration in one click.\n\n"
@@ -687,6 +713,34 @@ HELP_CONTENT: dict[str, dict] = {
                     "Le changement va directement à PipeWire : une touche associée fonctionne que "
                     "cette fenêtre soit ouverte ou non, et le nouveau niveau est mémorisé "
                     "exactement comme celui des curseurs."
+                ),
+            },
+            {
+                "heading": "Mode streamer",
+                "body": (
+                    "Le mode streamer ajoute un second mix indépendant de Game, Chat, Media, Aux "
+                    "et de votre micro traité, avec un volume et un muet propres à chaque canal. "
+                    "Il est fourni sous la forme d'une source stéréo virtuelle nommée "
+                    "\"<appareil> Stream Mix\" que OBS ou n'importe quel enregistreur peut "
+                    "capturer — comme le mode Stream de SteelSeries Sonar dans GG.\n\n"
+                    "── Activation ──\n"
+                    "Sur la page Canaux, ouvrez le menu Canaux et cochez \"Mode streamer\". "
+                    "Les cartes Game, Chat, Media, Aux et Mic affichent alors un petit curseur "
+                    "\"Stream\" (0-100) avec un bouton muet sous leur fader. Les changements "
+                    "sont appliqués en direct, sans coupure. Activer ou désactiver le mode "
+                    "redémarre une fois la chaîne audio : attendez-vous à une courte coupure, "
+                    "comme lors d'un changement de preset.\n\n"
+                    "── Utilisation dans OBS ──\n"
+                    "Sources → + → Capture d'entrée audio → choisissez \"<appareil> Stream "
+                    "Mix\". Supprimez les captures séparées de l'audio du bureau et du micro, "
+                    "sinon les spectateurs entendent tout en double.\n\n"
+                    "── Ce qu'entendent les spectateurs ──\n"
+                    "Le mix stream est pris avant vos volumes personnels et avant l'EQ et "
+                    "l'audio spatial de chaque canal : les spectateurs entendent le jeu propre, "
+                    "pas l'EQ ni le HRTF de votre casque. L'audio de jeu 7.1 est ramené en "
+                    "stéréo par un vrai downmix qui conserve le canal central (dialogues). Les "
+                    "volumes de votre casque et le cadran ChatMix n'affectent pas le mix stream, "
+                    "et inversement."
                 ),
             },
             {
@@ -1255,6 +1309,34 @@ HELP_CONTENT: dict[str, dict] = {
                     "El cambio va directamente a PipeWire: una tecla asignada funciona esté o no "
                     "abierta esta ventana, y el nuevo nivel se recuerda igual que el de los "
                     "deslizadores."
+                ),
+            },
+            {
+                "heading": "Modo streamer",
+                "body": (
+                    "El modo streamer añade una segunda mezcla independiente de Game, Chat, "
+                    "Media, Aux y tu micrófono procesado, con volumen y silencio propios para "
+                    "cada canal. Se entrega como una fuente estéreo virtual llamada "
+                    "\"<dispositivo> Stream Mix\" que OBS o cualquier grabador puede capturar, "
+                    "como el modo Stream de SteelSeries Sonar en GG.\n\n"
+                    "── Activación ──\n"
+                    "En la página Canales, abre el menú Canales y marca \"Modo streamer\". "
+                    "Las tarjetas Game, Chat, Media, Aux y Mic muestran entonces un pequeño "
+                    "control \"Stream\" (0-100) con un botón de silencio bajo su fader. Los "
+                    "cambios se aplican en directo, sin cortes. Activar o desactivar el modo "
+                    "reinicia una vez la cadena de audio, así que habrá un breve corte, como al "
+                    "cambiar de preset.\n\n"
+                    "── Uso en OBS ──\n"
+                    "Fuentes → + → Captura de entrada de audio → elige \"<dispositivo> Stream "
+                    "Mix\". Elimina las capturas separadas del audio del escritorio y del "
+                    "micrófono; de lo contrario los espectadores oyen todo por duplicado.\n\n"
+                    "── Lo que oyen los espectadores ──\n"
+                    "La mezcla de stream se toma antes de tus volúmenes personales y antes del "
+                    "EQ y del audio espacial de cada canal, así que los espectadores oyen el "
+                    "juego limpio, no el EQ ni el HRTF de tus auriculares. El audio de juego 7.1 "
+                    "se pasa a estéreo con un downmix correcto que conserva el canal central "
+                    "(diálogos). Los volúmenes de tu casco y el dial ChatMix no afectan a la "
+                    "mezcla de stream, ni al revés."
                 ),
             },
             {

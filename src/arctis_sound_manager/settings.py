@@ -356,6 +356,13 @@ class GeneralSettings(JsonSerializable):
     # output list, and one more filter stage running for nothing.
     aux_enabled: bool = False
 
+    # Streamer mode: a second, independent mix of Game/Chat/Media/Aux and the
+    # processed Mic, published as a virtual Audio/Source for OBS (see
+    # stream_mix.py). Off by default: it adds a 27-input filter-chain that
+    # would run for nothing for anyone not streaming. Toggled through
+    # SetSetting, which writes the conf and restarts the filter-chain once.
+    streamer_mode: bool = False
+
     # Purely a display preference (#262): unlike aux_enabled above, this
     # never reaches the daemon — Output isn't a channel it creates or tears
     # down, just the physical/external routing card the Home page always

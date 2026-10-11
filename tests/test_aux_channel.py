@@ -152,7 +152,9 @@ def test_the_menu_reflects_which_channels_are_currently_on(monkeypatch):
     monkeypatch.setattr(bar, "_read_visibility", lambda: (True, False))
     monkeypatch.setattr(bar, "_read_hidden", lambda: {"master"})
     menu = bar._build_channels_menu()
-    checkboxes = [a.defaultWidget() for a in menu.actions()]
+    # Streamer mode's row sits below a separator and is tested on its own
+    checkboxes = [a.defaultWidget() for a in menu.actions()
+                  if not a.isSeparator() and a.defaultWidget().property("channel") != "streamer"]
 
     assert all(isinstance(cb, QCheckBox) for cb in checkboxes)
     # every card, in the order the page shows them (#315)
@@ -171,7 +173,7 @@ def test_checking_a_box_emits_the_matching_signal(monkeypatch):
     monkeypatch.setattr(bar, "_read_visibility", lambda: (False, True))
     monkeypatch.setattr(bar, "_read_hidden", lambda: set())
     menu = bar._build_channels_menu()
-    boxes = {a.defaultWidget().property("channel"): a.defaultWidget() for a in menu.actions()}
+    boxes = {a.defaultWidget().property("channel"): a.defaultWidget() for a in menu.actions() if not a.isSeparator()}
     aux_cb, output_cb = boxes["aux"], boxes["output"]
 
     channel_calls = []

@@ -105,6 +105,7 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
 - **Bring audio to headset** — one click in the tray menu moves any app that got stuck on the wrong output (HDMI, S/PDIF, another sound card) back to your headset
 - **True multichannel output** — 5.1 / 7.1 goes to a receiver or TV as is, and is folded cleanly into stereo for a stereo device
 - **On-screen overlays** — turning the ChatMix dial or a base station's volume wheel shows a bar over fullscreen games (KDE, wlroots, X11, GNOME)
+- **Streamer mode** — a second, independent mix of Game, Chat, Media, Aux and your processed Mic, each with its own *Stream* volume and mute on its card, delivered as a "Stream Mix" source for OBS (like Sonar's Stream mode in GG). It is taken before your headphone volumes and EQ, so viewers hear the clean game; your headset mix and ChatMix are untouched
 - **Keyboard control** — `asm-cli volume game +5`, `chat mute`, `media 40`, or several at once (`game +5 chat -5`); bind it to any key in your desktop's own shortcut settings, including the unused function keys a macropad dial sends ([details](#controlling-channels-from-a-key))
 - **Native PipeWire support** — detects apps that bypass PulseAudio (mpv, Haruna…)
 
@@ -647,6 +648,8 @@ ASM creates virtual sinks on top of your Arctis device plus one external output:
 | **External Output** | HDMI, USB speakers, sound card… (5.1 / 7.1 native) | O |
 
 Each channel can also be sent to another device than the headset, from its card on the Home page or next to its EQ.
+
+**Streamer mode** (off by default, *Channels* menu) adds a second mix for OBS or any recorder. Each `Arctis_<Ch>` monitor (Game, Chat, Media, Aux) and the processed Mic feed a small stream-mix filter-chain, which publishes one stereo source, `<device> Stream Mix` (`effect_output.sonar-stream-mix`). It is tapped before the personal volumes and before the per-channel EQ and spatial audio, so the headphone EQ/HRTF and the ChatMix dial never reach it; 7.1 game audio is downmixed to stereo with the centre kept. Each channel has its own volume and mute (the *Stream* slider on its card), applied live. Turning the mode on or off restarts the filter-chain once, a short dropout like switching a preset. In OBS, add the source as an *Audio Input Capture* and remove separate desktop and mic captures.
 
 The **media router** (`asm-router`) automatically moves browsers and video players to `Arctis_Media`. Moving an app yourself — by dragging its icon onto a card, or from its menu — is saved as a persistent override.
 

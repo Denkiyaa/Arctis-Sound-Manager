@@ -472,6 +472,19 @@ def _aux_enabled() -> bool:
         return False
 
 
+def _streamer_mode_enabled() -> bool:
+    """Whether Streamer mode (the independent OBS mix) is switched on.
+
+    Read per call, like :func:`_aux_enabled`: the toggle flips while the
+    daemon runs and the stale-config pass must follow it, not a cached value.
+    """
+    try:
+        from arctis_sound_manager.settings import GeneralSettings
+        return bool(GeneralSettings.read_from_file().streamer_mode)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def spatial_channels() -> tuple[str, ...]:
     """The channels that own an 8-channel HeSuVi chain right now."""
     return _SPATIAL_BASE + (("aux",) if _aux_enabled() else ())
@@ -1017,6 +1030,10 @@ _ASM_CONF_NAMES = frozenset({
     # Media's own HeSuVi chain (issue #169) — must be moved aside in safe mode
     # too, or a crash in the media convolver would survive the #88 quiesce.
     "sink-virtual-surround-7.1-hesuvi-media.conf",
+    # Streamer mode's mix. Present only while streamer_mode is on; listed so a
+    # crash-loop quiesce moves it aside with the rest instead of leaving a
+    # module of ours loaded while "safe mode" claims the graph is flat.
+    "sonar-stream-mix.conf",
 })
 
 # Backup dir for safe mode: a sibling of _CONF_DIR. PipeWire's filter-chain
@@ -3442,6 +3459,13 @@ def check_and_fix_stale_configs() -> tuple[bool, bool]:
     if sonar and ensure_sonar_eq_configs():
         fixed = True
 
+    # Streamer mode's conf follows the streamer_mode setting, not the EQ mode:
+    # created if it is on and the file is missing, removed if it is off and the
+    # file lingers (a toggle made while the daemon was down). Folded into
+    # `fixed` so the one filter-chain restart the caller already does covers it.
+    if sync_stream_mix_conf():
+        fixed = True
+
     # Correctif 10 (issue #180: output chains missing node.passive) removed —
     # node.passive is no longer written anywhere (see loopback_manager.py and
     # the playback.props templates above): it made every channel depend on
@@ -3474,6 +3498,39 @@ def check_and_fix_stale_configs() -> tuple[bool, bool]:
             fixed = True
 
     return fixed, needs_pw_restart
+
+
+def sync_stream_mix_conf(enabled: bool | None = None) -> bool:
+    """Make ``sonar-stream-mix.conf``'s presence match ``streamer_mode``.
+
+    Unlike the EQ/HeSuVi confs this file belongs to a user toggle, not to the
+    Sonar/simple mode: it is created when the setting is on and missing, and
+    removed when the setting is off and present, whichever EQ mode is active
+    (the graph is the same 27-in/2-out in both). An existing conf is left
+    alone — rewriting it for nothing would turn every start-up into a
+    filter-chain restart.
+
+    Returns True only when the file was created or removed, i.e. when the
+    caller owes the filter-chain exactly one restart. Safe mode wins: while the
+    ASM confs are deliberately moved aside, nothing is written back.
+    """
+    if enabled is None:
+        enabled = _streamer_mode_enabled()
+    if _filter_chain_safe_mode or _SAFE_MODE_MARKER.exists():
+        return False
+    path = _CONF_DIR / _STREAM_MIX_CONF_NAME
+    try:
+        if enabled and not path.exists():
+            generate_stream_mix_conf()
+            _log.info("streamer mode on: wrote %s", path.name)
+            return True
+        if not enabled and path.exists():
+            path.unlink()
+            _log.info("streamer mode off: removed %s", path.name)
+            return True
+    except OSError as exc:
+        _log.warning("sync_stream_mix_conf: %s", exc)
+    return False
 
 
 def regenerate_hesuvi_if_changed() -> bool:
@@ -4208,6 +4265,8 @@ def release_physical_output_links(data: list | None = None) -> int:
 
 
 _MICRO_CAPTURE_NAME = "effect_input.sonar-micro-eq"
+# The processed mic: what the Streamer mode mix taps (the capture node above is its input).
+_MICRO_OUTPUT_NAME = "effect_output.sonar-micro-eq"
 
 
 def _get_micro_input_source_setting() -> str:
@@ -4296,6 +4355,114 @@ def ensure_micro_capture_link(data: list | None = None) -> bool:
     if not source:
         return False
     return ensure_capture_link(source, _MICRO_CAPTURE_NAME, data=data)
+
+
+def ensure_stream_mix_links(data: list | None = None) -> bool:
+    """Link the five sources into the Streamer mode mix, by explicit port pairs.
+
+    ``effect_input.sonar-stream-mix`` runs ``node.autoconnect = false`` like
+    every other ASM node, so nothing feeds it unless ASM does. Each channel's
+    *monitor* ports (``Arctis_<Ch>`` ``monitor_FL`` …) go to the matching
+    ``playback_AUX<n>`` slot, and the processed mic
+    (``effect_output.sonar-micro-eq``) to ``playback_AUX26``. The monitor sits
+    before the sink's volume/mute and before ChatMix, which is what makes this
+    mix independent of the personal one.
+
+    Only channels the source really has are linked (a 2ch simple-mode Game
+    feeds FL/FR; the rest of its slots stay silent; Aux absent: skipped).
+    Idempotent: correct links are untouched. Teardown is scoped like
+    :func:`~arctis_sound_manager.pw_utils.ensure_capture_link`: only links
+    arriving INTO the stream-mix input that are not wanted are removed; the
+    source side is never touched, since OBS or the clip capture may be reading
+    the very same monitors.
+
+    Returns False when the mix node is absent or a ``pw-link`` failed (so the
+    watchdog retries); a source that is merely not in the graph yet is skipped,
+    not a failure.
+    """
+    from arctis_sound_manager.pw_utils import (
+        _LINK_DENIED, _index_nodes_by_name, _node_ports, _pw_dump, _pw_run,
+        _resolve_unique_node_id, grant_link_permissions,
+    )
+    from arctis_sound_manager.loopback_manager import DEFAULT_SINKS
+    from arctis_sound_manager.stream_mix import STREAM_MIX_INPUT_NODE
+
+    try:
+        if data is None:
+            data = _pw_dump()
+        nodes = _index_nodes_by_name(data)
+        mix_id = _resolve_unique_node_id(nodes, STREAM_MIX_INPUT_NODE, "ensure_stream_mix_links")
+        if mix_id is None:
+            return False
+        in_ports = _node_ports(data, mix_id, "in")
+        if not in_ports:
+            return False
+
+        sinks = {s["channel"]: s["capture_name"] for s in DEFAULT_SINKS}
+        wanted: set[tuple[int, int]] = set()
+        for channel, base, positions in _STREAM_MIX_LAYOUT:
+            if channel == "mic":
+                src_name = _MICRO_OUTPUT_NAME
+            else:
+                src_name = sinks.get(channel, "")
+            src_id = _resolve_unique_node_id(nodes, src_name, "ensure_stream_mix_links") if src_name else None
+            if src_id is None:
+                continue  # absent (Aux off, chain restarting): nothing to link
+            out_ports = _node_ports(data, src_id, "out")
+            if channel == "mic":
+                # The mic is mono, but take whatever single port it exposes
+                # rather than depend on its channel name.
+                if not out_ports:
+                    continue
+                pairs = [(next(iter(out_ports.values())), "AUX26")]
+            else:
+                pairs = [(out_ports[pos], f"AUX{base + i}")
+                         for i, pos in enumerate(positions) if pos in out_ports]
+            for out_port, aux in pairs:
+                if aux in in_ports:
+                    wanted.add((out_port, in_ports[aux]))
+
+        existing: set[tuple[int, int]] = set()
+        stray: list[tuple[int, int]] = []
+        for obj in data:
+            if not obj.get("type", "").endswith("Link"):
+                continue
+            props = obj.get("info", {}).get("props", {})
+            if props.get("link.input.node") != mix_id:
+                continue
+            pair = (props.get("link.output.port"), props.get("link.input.port"))
+            if pair in wanted:
+                existing.add(pair)
+            else:
+                stray.append(pair)
+
+        for out_port, in_port in stray:
+            _pw_run(["pw-link", "-d", str(out_port), str(in_port)],
+                    check=False, timeout=3, capture_output=True)
+
+        ok = True
+        created = 0
+        for out_port, in_port in sorted(wanted - existing):
+            r = _pw_run(["pw-link", str(out_port), str(in_port)],
+                        check=False, timeout=3, capture_output=True)
+            err = (r.stderr or b"").decode(errors="replace").strip()
+            if r.returncode != 0 and _LINK_DENIED in err.lower():
+                if grant_link_permissions(out_port, in_port):
+                    r = _pw_run(["pw-link", str(out_port), str(in_port)],
+                                check=False, timeout=3, capture_output=True)
+                    err = (r.stderr or b"").decode(errors="replace").strip()
+            if r.returncode == 0:
+                created += 1
+            else:
+                ok = False
+                _log.warning("ensure_stream_mix_links: pw-link %s->%s failed: %s",
+                             out_port, in_port, err)
+        if created:
+            _log.info("ensure_stream_mix_links: %d link(s) created", created)
+        return ok
+    except Exception as exc:
+        _log.warning("ensure_stream_mix_links failed: %s", exc)
+        return False
 
 
 # ── Config generator — HeSuVi 7.1 virtual surround ──────────────────────────
@@ -4399,6 +4566,154 @@ def _downmix_module(channel: str, destination: str) -> str:
     }}
   }}
 """
+
+
+# ── Config generator — Streamer mode mix ─────────────────────────────────────
+
+_STREAM_MIX_CONF_NAME = "sonar-stream-mix.conf"
+
+# Which AUX slot of the stream-mix input each source feeds, in the order of the
+# source's own channels: Game/Media/Aux are 7.1 (FL FR FC LFE RL RR SL SR),
+# Chat is stereo, the processed Mic is mono. 27 inputs in all, whatever the
+# mode: a 2ch simple-mode channel simply leaves its FC..SR slots unlinked and
+# silent, so the graph never has to be regenerated when the Sonar toggle flips.
+_STREAM_MIX_LAYOUT = (
+    ("game",  0, _HESUVI_CHANNELS),
+    ("chat",  8, ("FL", "FR")),
+    ("media", 10, _HESUVI_CHANNELS),
+    ("aux",   18, _HESUVI_CHANNELS),
+    ("mic",   26, ("MONO",)),
+)
+_STREAM_MIX_INPUTS = 27
+
+
+def generate_stream_mix_conf(output_path: Path | None = None) -> str:
+    """Generate the Streamer mode filter-chain: five sources in, one stereo out.
+
+    A ``pw-loopback`` with 8 capture channels and 2 playback channels does not
+    downmix, it copies channel by channel, so the dialogue (FC) of a 7.1 game
+    would be lost. Hence a filter-chain with builtin mixers: Game, Media and
+    Aux each fold to stereo through the same ITU-R BS.775 submixers as
+    :func:`_downmix_module` (LFE dropped), Chat goes straight in and the mono
+    Mic is fanned out to both sides. ``mixL`` / ``mixR`` then sum the five
+    with ``Gain 1..5`` = game, chat, media, aux, mic — the volume and mute of
+    each, pushed live by :func:`~arctis_sound_manager.stream_mix.apply_stream_mix`.
+
+    The capture side is ``Audio/Sink/Internal`` for the same reason the EQ
+    nodes are: it is plumbing, not somewhere an application should pick. The
+    playback side is an ``Audio/Source`` with ``node.autoconnect = false`` so
+    WirePlumber never wires it to a sink; recorders link to a source
+    themselves. ASM owns the inbound links (:func:`ensure_stream_mix_links`).
+    """
+    from arctis_sound_manager.stream_mix import (
+        STREAM_CHANNELS, STREAM_MIX_INPUT_NODE, STREAM_MIX_OUTPUT_NODE,
+        load_stream_mix, stream_gain,
+    )
+
+    if output_path is None:
+        output_path = _CONF_DIR / _STREAM_MIX_CONF_NAME
+
+    state = load_stream_mix()
+    initial = {ch: stream_gain(state[ch]["volume"], state[ch]["muted"])
+               for ch in STREAM_CHANNELS}
+
+    I = "          "  # noqa: E741 — indentation constant
+    nodes: list[str] = []
+    links: list[str] = []
+
+    def _copy(name: str) -> None:
+        nodes.append(f"{I}{{ type = builtin  label = copy  name = {name} }}")
+
+    # Game / Media / Aux: 8 copies -> fixed ITU submixers per side.
+    for ch, prefix in (("game", "g"), ("media", "m"), ("aux", "a")):
+        for pos in _HESUVI_CHANNELS:
+            _copy(f"{prefix}{pos}")
+        for side, sources in _DOWNMIX_GAINS.items():
+            gains = "  ".join(f'"Gain {i}" = {g}' for i, (_, g) in enumerate(sources, start=1))
+            nodes.append(f"{I}{{ type = builtin  label = mixer  name = {prefix}mix{side}  control = {{ {gains} }} }}")
+            links += [f'{I}{{ output = "{prefix}{pos}:Out"  input = "{prefix}mix{side}:In {i}" }}'
+                      for i, (pos, _) in enumerate(sources, start=1)]
+
+    # Chat: stereo, straight to its side.
+    for side in ("L", "R"):
+        _copy(f"chat{side}")
+    # Mic: one mono copy fanned out to both sides.
+    _copy("mic")
+
+    # Final mixers: slot order is the public contract (stream_mix.STREAM_CHANNELS).
+    for side in ("L", "R"):
+        gains = "  ".join(f'"Gain {slot}" = {initial[ch]:.6f}'
+                          for slot, ch in enumerate(STREAM_CHANNELS, start=1))
+        nodes.append(f"{I}{{ type = builtin  label = mixer  name = mix{side}  control = {{ {gains} }} }}")
+        feeds = {"game": f"gmix{side}", "chat": f"chat{side}", "media": f"mmix{side}",
+                 "aux": f"amix{side}", "mic": "mic"}
+        links += [f'{I}{{ output = "{feeds[ch]}:Out"  input = "mix{side}:In {slot}" }}'
+                  for slot, ch in enumerate(STREAM_CHANNELS, start=1)]
+
+    # AUX0..AUX26 order: the n-th input of the graph is the n-th capture port.
+    by_source = {
+        "game":  [f'"g{p}:In"' for p in _HESUVI_CHANNELS],
+        "chat":  ['"chatL:In"', '"chatR:In"'],
+        "media": [f'"m{p}:In"' for p in _HESUVI_CHANNELS],
+        "aux":   [f'"a{p}:In"' for p in _HESUVI_CHANNELS],
+        "mic":   ['"mic:In"'],
+    }
+    inputs = [i for ch, _, _ in _STREAM_MIX_LAYOUT for i in by_source[ch]]
+    assert len(inputs) == _STREAM_MIX_INPUTS
+
+    device = device_state.get_channel_label() if _device_attached() else ""
+    description = f"{device} Stream Mix" if device else "Arctis Stream Mix"
+    positions = " ".join(f"AUX{n}" for n in range(_STREAM_MIX_INPUTS))
+
+    nodes_text = "\n".join(nodes)
+    links_text = "\n".join(links)
+    inputs_text = " ".join(inputs)
+
+    text = f"""\
+# Auto-generated by Arctis Sound Manager — DO NOT EDIT
+{_conf_version_header()}
+# Streamer mode mix: Game, Chat, Media, Aux, Mic -> stereo Audio/Source
+context.modules = [
+  {{ name = libpipewire-module-filter-chain
+    flags = [ nofail ]
+    args = {{
+      node.description = "{description}"
+      media.name       = "{description}"
+      filter.graph = {{
+        nodes = [
+{nodes_text}
+        ]
+        links = [
+{links_text}
+        ]
+        inputs  = [ {inputs_text} ]
+        outputs = [ "mixL:Out" "mixR:Out" ]
+      }}
+      capture.props = {{
+        node.name          = "{STREAM_MIX_INPUT_NODE}"
+        media.class        = Audio/Sink/Internal
+        node.autoconnect   = false
+        node.pause-on-idle = false
+        node.linger        = true
+        audio.channels     = {_STREAM_MIX_INPUTS}
+        audio.position     = [ {positions} ]
+      }}
+      playback.props = {{
+        node.name          = "{STREAM_MIX_OUTPUT_NODE}"
+        node.description   = "{description}"
+        media.class        = Audio/Source
+        node.autoconnect   = false
+        node.pause-on-idle = false
+        node.linger        = true
+        audio.channels     = 2
+        audio.position     = [ FL FR ]
+      }}
+    }}
+  }}
+]
+"""
+    _write_conf(output_path, text)
+    return text
 
 
 def generate_hesuvi_conf(

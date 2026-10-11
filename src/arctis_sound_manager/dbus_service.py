@@ -563,6 +563,25 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
             ).start()
             return True
 
+        # Special case: Streamer mode (no ConfigSetting entry, same reasoning
+        # as aux_enabled above). The toggle has to create or remove the
+        # stream-mix conf and restart the filter-chain, which blocks, so it
+        # runs off the D-Bus loop.
+        if setting == 'streamer_mode':
+            gs = self.core_engine.general_settings
+            if not isinstance(value, bool):
+                self.logger.error('SetSetting streamer_mode: expected bool, got %r', value)
+                return False
+            gs.streamer_mode = value
+            gs.write_to_file()
+            self.logger.info("streamer_mode set to %r — applying", value)
+            threading.Thread(
+                target=self.core_engine.apply_streamer_mode,
+                name='asm-streamer-mode-toggle',
+                daemon=True,
+            ).start()
+            return True
+
         # Special case: ChatMix channels (#249/#269, no ConfigSetting entry —
         # the GUI toggles this from a per-card checkbox, not the generic
         # settings_config widget system). Only affects the next

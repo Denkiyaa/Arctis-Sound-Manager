@@ -371,6 +371,9 @@ class CoreEngine:
         # dropped rather than overlapped — the conf already reflects the latest
         # JSON, so the in-flight restart loads it.
         self._spatial_apply_lock = threading.Lock()
+        # Serialises apply_streamer_mode(): a quick on/off/on must not run two
+        # filter-chain restarts over each other.
+        self._streamer_apply_lock = threading.Lock()
 
         # Channels whose persisted virtual-sink volume still needs to be
         # re-asserted after a (re)creation, mapped to remaining retry ticks
@@ -1002,6 +1005,74 @@ class CoreEngine:
         finally:
             self._spatial_apply_lock.release()
 
+    @staticmethod
+    def _streamer_mode_on() -> bool:
+        """Current ``streamer_mode``, read from disk (the GUI/CLI may have flipped it)."""
+        try:
+            return bool(GeneralSettings.read_from_file().streamer_mode)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def apply_streamer_mode(self) -> None:
+        """Make the live graph match the ``streamer_mode`` setting.
+
+        ON: write ``sonar-stream-mix.conf`` and restart the filter-chain once
+        so PipeWire loads it, then link the five sources in and push the saved
+        volumes/mutes. OFF: remove the conf and restart once so the node goes
+        away. When the conf already matches the setting (a repeated call, or
+        the start-up pass beat us to it) nothing is restarted. Runs off the
+        D-Bus loop (blocking restart); never restarts pipewire itself.
+        """
+        if not self._streamer_apply_lock.acquire(blocking=False):
+            self.logger.debug("apply_streamer_mode: already in flight — skipping")
+            return
+        try:
+            from arctis_sound_manager.sonar_to_pipewire import (
+                _restart_filter_chain, sync_stream_mix_conf)
+            enabled = bool(GeneralSettings.read_from_file().streamer_mode)
+            changed = sync_stream_mix_conf(enabled)
+            if changed:
+                self.logger.info(
+                    "Streamer mode %s — restarting filter-chain to %s the stream mix",
+                    "on" if enabled else "off", "load" if enabled else "unload")
+                _restart_filter_chain()
+            if enabled:
+                self._link_stream_mix_when_up()
+        except Exception as exc:
+            self.logger.warning("apply_streamer_mode failed: %r", exc)
+        finally:
+            self._streamer_apply_lock.release()
+
+    def _link_stream_mix_when_up(self, timeout_s: float = 15.0) -> bool:
+        """Wait for the stream-mix node, then link its sources and set its gains.
+
+        The node comes back from a filter-chain restart with the conf's initial
+        gains and nothing linked into it; the watchdog would heal both on its
+        next tick, this just makes the toggle responsive.
+        """
+        from arctis_sound_manager.pw_utils import pw_node_exists
+        from arctis_sound_manager.sonar_to_pipewire import (
+            ensure_micro_capture_link, ensure_physical_output_links, ensure_spatial_eq_links,
+            ensure_stream_mix_links, spatial_channels)
+        from arctis_sound_manager.stream_mix import (
+            STREAM_MIX_INPUT_NODE, apply_stream_mix)
+
+        deadline = time.monotonic() + timeout_s
+        while not pw_node_exists(STREAM_MIX_INPUT_NODE):
+            if time.monotonic() >= deadline:
+                self.logger.warning(
+                    "apply_streamer_mode: %s did not appear within %.0fs",
+                    STREAM_MIX_INPUT_NODE, timeout_s)
+                return False
+            time.sleep(0.5)
+        # The restart also recreated every other chain: re-own their links too,
+        # as apply_spatial_audio_change does (the watchdog covers stragglers).
+        ensure_spatial_eq_links(spatial_channels())
+        ensure_physical_output_links()
+        ensure_micro_capture_link()
+        ensure_stream_mix_links()
+        return apply_stream_mix()
+
     def regenerate_hesuvi(self) -> bool:
         """Rewrite the HeSuVi conf(s) from their saved state, without restarting.
 
@@ -1172,6 +1243,8 @@ class CoreEngine:
         # escalate once, then reset so escalation cannot loop.
         _hop_fail_ticks: dict[str, int] = {}
         _HOP_FAIL_TICKS: int = 6  # ~30 s at the 5 s watchdog cadence
+        # Node id of the Streamer mode mix last seen with its gains applied.
+        _stream_mix_node_id: int | None = None
 
         # ── #180 idle detection (observation only — B1) ──────────────────────
         # Logs what a whole-graph idle/active detector would decide, without
@@ -1677,6 +1750,40 @@ class CoreEngine:
 
                 from arctis_sound_manager.sonar_to_pipewire import ensure_micro_capture_link
                 await _enforce_hop("micro capture", ensure_micro_capture_link)
+
+                # ── Streamer mode mix (state drift) ──────────────────────────
+                # effect_input.sonar-stream-mix is autoconnect=false too, and
+                # its five inputs come from nodes that get recreated all the
+                # time (a recreated loopback, a restarted micro chain), so the
+                # links are re-owned every tick while the mode is on. A node
+                # that is new since the last tick came back from a filter-chain
+                # restart (preset switch, Sonar toggle, …) with the conf's
+                # initial gains, not the user's: push them again.
+                try:
+                    if await asyncio.get_running_loop().run_in_executor(
+                            None, CoreEngine._streamer_mode_on):
+                        from arctis_sound_manager.pw_utils import _index_nodes_by_name
+                        from arctis_sound_manager.sonar_to_pipewire import ensure_stream_mix_links
+                        from arctis_sound_manager.stream_mix import (
+                            STREAM_MIX_INPUT_NODE, apply_stream_mix)
+                        _mix_ids = _index_nodes_by_name(link_data or []).get(
+                            STREAM_MIX_INPUT_NODE, [])
+                        _mix_id = _mix_ids[0] if len(_mix_ids) == 1 else None
+                        if _mix_id is not None:
+                            await _enforce_hop("stream mix", ensure_stream_mix_links)
+                            if _mix_id != _stream_mix_node_id:
+                                if await asyncio.get_running_loop().run_in_executor(
+                                        None, apply_stream_mix):
+                                    _stream_mix_node_id = _mix_id
+                                    self.logger.info(
+                                        "_loopback_watchdog: stream mix node (re)created "
+                                        "— gains re-applied")
+                        else:
+                            _stream_mix_node_id = None
+                    else:
+                        _stream_mix_node_id = None
+                except Exception as exc:
+                    self.logger.error("_loopback_watchdog: stream mix pass failed: %r", exc)
 
                 # ── Routing-override replay ──────────────────────────────────
                 # Any loopback rebuilt above came back as a *new* sink, so every
