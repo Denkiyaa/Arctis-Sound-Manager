@@ -33,7 +33,7 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
   <em>▶ Click to watch the full demo</em>
 </p>
 
-**Supported Arctis headsets on Linux:** Arctis Nova Pro Wireless, Arctis Nova Pro Wired, Arctis Nova Pro Omni, Arctis Nova Elite, Arctis Nova 7 (Gen 1 & Gen 2), Arctis Nova 7P, Arctis Nova 5 / 5X, Arctis Nova 3 / 3P / 3X, Arctis 7, Arctis 7+, Arctis 9 Wireless, Arctis Pro Wireless, Arctis 1 / 7X / 7P Wireless, and Arctis GameBuds / GameBuds X — full list with Product IDs in [Supported devices](#supported-devices).
+**Supported Arctis headsets on Linux:** Arctis Nova Pro Wireless, Arctis Nova Pro Wired, Arctis Nova Pro Omni, Arctis Nova Elite, Arctis Nova 7 (Gen 1 & Gen 2), Arctis Nova 7P, Arctis Nova 5 / 5X, Arctis Nova 3 / 3P / 3X, Arctis 7, Arctis 7+, Arctis 5 (2018), Arctis 9 Wireless, Arctis Pro Wireless, Arctis 1 / 7X / 7P Wireless, and Arctis GameBuds / GameBuds X — full list with Product IDs in [Supported devices](#supported-devices).
 
 > 🎚️ **[ASM Presets](https://loteran.github.io/asm-presets/)** — browse and share community EQ presets!
 > 🎨 **[ASM Themes](https://loteran.github.io/asm-presets/)** — browse and share color themes, previewed on a miniature of the app!
@@ -93,13 +93,18 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
 
 ### 🎚️ Audio mixer
 
-- **4-channel mixer** — separate Game, Chat, Media and Output virtual sinks
+- **Channel mixer** — Game, Chat and Media virtual sinks, an optional Aux channel, and an Output channel for an external device (HDMI, speakers, another sound card)
+- **Mic card** — the volume of what your apps record, which microphone feeds it, and which apps are recording
+- **Master card** — the headset's own output; on a base station or GameDAC, a gauge shows where its volume wheel sits
+- **Software ChatMix bar** — balances Chat against the channels you include, follows the headset's ChatMix dial, and fades like Sonar
+- **Apps as icons** — every card shows the apps playing through it; drag an icon onto another card, or click it, to move the app. Choices persist across restarts
+- **Per-card output and EQ preset** — each card shows the device it plays on and lets you change it, plus a picker for that channel's favourite EQ presets
+- **Show only the cards you use** — hide any card from the *Channels* menu; the channel keeps working. Profiles remember which cards are shown
 - **Automatic media routing** — browsers and video players (Firefox, VLC, mpv…) are automatically routed to the Media sink
 - **Smart stream adoption** — apps running when ASM starts are pulled into `Arctis_Media` instead of staying on a non-Arctis sink
-- **Manual stream control** — move any audio stream between channels via G / C / M / O buttons; choices persist across restarts
-- **Bring audio to headset** — one click moves any app that got stuck on the wrong output (HDMI, S/PDIF, another sound card) back to your headset; available on the Home page and in the system tray
-- **True multichannel output** — route apps directly to HDMI or external output (5.1 / 7.1 native passthrough)
-- **Volume sliders** per channel with live percentage display
+- **Bring audio to headset** — one click in the tray menu moves any app that got stuck on the wrong output (HDMI, S/PDIF, another sound card) back to your headset
+- **True multichannel output** — 5.1 / 7.1 goes to a receiver or TV as is, and is folded cleanly into stereo for a stereo device
+- **On-screen overlays** — turning the ChatMix dial or a base station's volume wheel shows a bar over fullscreen games (KDE, wlroots, X11, GNOME)
 - **Keyboard control** — `asm-cli volume game +5`, `chat mute`, `media 40`, or several at once (`game +5 chat -5`); bind it to any key in your desktop's own shortcut settings, including the unused function keys a macropad dial sends ([details](#controlling-channels-from-a-key))
 - **Native PipeWire support** — detects apps that bypass PulseAudio (mpv, Haruna…)
 
@@ -107,16 +112,17 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
 
 - **Sonar EQ** — full SteelSeries Sonar-style parametric EQ (Game / Chat / Micro channels):
   - Interactive EQ curve, up to 10 bands per channel
-  - 312 Game presets, 8 Chat, 14 Mic — searchable, 9 favorite slots
+  - 353 Game presets, 9 Chat, 14 Mic — searchable, 9 favorite slots; a Mic preset also sets the mic processing
+  - **Automatic preset per game** — applies the matching Game preset when a game starts (Steam, Lutris, Heroic or by executable name), like GG's QuickSet; a preset picked by hand is remembered for that game
   - Macro sliders: Bass / Voice / Treble (±12 dB)
-  - **Spatial Audio** — HeSuVi virtual 7.1 surround with Immersion (0–12 dB) and Distance (reverb) sliders
+  - **Spatial Audio** on Game, Media and Aux — HeSuVi virtual 7.1 fed with the game's real surround channels, Immersion (0–12 dB) and Distance (reverb) sliders, and an "Only for surround sources" option that leaves stereo audio alone
   - **Volume Boost** — up to +12 dB gain at the end of the filter chain
-  - **Smart Volume** — dynamic compressor (Quiet / Balanced / Loud)
+  - **Smart Volume** — Sonar's loudness targets (Quiet / Balanced / Loud)
   - All changes applied live via PipeWire biquad nodes
 - **Custom 10-band EQ** — per-band gain (31 Hz – 16 kHz), save/load presets
 - **Hardware equaliser** — on nine models ASM drives the headset's own EQ instead of a software chain, so the curve survives on the device
 - **Microphone processing** — ClearCast (rnnoise) or **DeepFilterNet**, noise gate, compressor, and a mic the chain can switch between your headset and a desk microphone on its own
-- **Audio Profiles** — save and restore your complete configuration in one click (EQ mode, presets, macro values, Spatial Audio, volumes); instant switching from the Home page or system tray
+- **Audio Profiles** — save and restore your complete configuration in one click (EQ mode, presets, macro values, Spatial Audio, volumes, visible cards); instant switching from the Home page or system tray
 
 ### 🎬 Clips
 
@@ -135,11 +141,14 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
 ### 🎧 Device control
 
 - **ANC / Transparent mode** — reflects the physical button state in real time
-- **Device status** — battery, mic mute, sidetone, and more
-- **DAC OLED display** _(Arctis Nova Pro Wireless / X)_:
+- **Device status** — battery (and the base station's spare battery), mic mute, sidetone, and more
+- **Several headsets** — choose which Arctis ASM drives from the Headset page
+- **DAC OLED display** _(Nova Pro Wireless / X, Nova Elite, Nova Pro Omni, Arctis Pro GameDAC, Arctis Pro Wireless base)_:
   - Toggle original vs custom display mode
   - Brightness, screen timeout, scroll speed
-  - Choose and reorder elements: Time, Battery, Profile, EQ Preset, Weather
+  - Choose and reorder elements: Time, Battery, Profile, EQ Preset, Now playing, Weather
+  - The EQ line follows the channel you are listening to ("Media: Bass Boost")
+  - Screen off while the session is locked or idle, back on when you return or turn a wheel
   - Per-element font size (7–30 pt) · Built-in weather with °C / °F selector
 
 ### ⚙️ App & system
@@ -147,10 +156,11 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
 - **Runs without a SteelSeries headset** — the channels, the Sonar EQ, spatial audio, the router and Clips work on any output device; only battery, ANC, sidetone, ChatMix and the OLED need an Arctis. Off by default, and a connected Arctis always wins
 - **Self-healing deps** — at startup ASM checks every system component (LADSPA plugins, HRIR, PipeWire, wpctl, udev rules…); a one-click dialog installs anything missing with a single `pkexec` prompt
 - **Check for updates** — in-app button forces an immediate GitHub check; installs via terminal (pacman / dnf / apt) or in-app wheel (pipx)
-- **One-click bug reports** — auto-uploads a full diagnostic as a GitHub gist and opens a pre-filled issue
+- **One-click bug reports** — auto-uploads a full diagnostic (including the kernel's USB and sound messages from this boot and the previous one) as a GitHub gist and opens a pre-filled issue
 - **Built-in diagnostics** — `asm-daemon --verify-setup` and `asm-cli diagnose -o file.txt`
 - **Status for scripts and bars** — `asm-cli status --json` gives battery, power, mic and channel levels to Waybar, Polybar or any script ([details](#headset-status-in-scripts-and-status-bars))
-- **Themes** — 5 built-in color themes plus a custom theme editor with live preview; share your own on the [community site](https://loteran.github.io/asm-presets/) or import one in a click ([details](#themes))
+- **Plasma 6 widget** — headset power and battery, spare battery, noise cancelling and mic state, one click to open ASM
+- **Themes** — 6 built-in color themes plus a custom theme editor with live preview; share your own on the [community site](https://loteran.github.io/asm-presets/) or import one in a click ([details](#themes))
 - **Community translations** — new languages from [Crowdin](https://crowdin.com/project/arctis-sound-manager) download automatically on startup, no release needed
 - **Help page** — built-in manual in English, French and Spanish
 - **`ARCTIS_LOG_LEVEL` env var** — `debug` / `info` / `warning`, honored by daemon, GUI and router
@@ -179,6 +189,7 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
 | Device | Working | Users | Product ID(s) |
 |---|---|---|---|
 | Arctis 1 / 7X / 7P Wireless | ✅ | 7 | $\color{royalblue}{\textbf{12b3}}$, 12b6, $\color{royalblue}{\textbf{12d5}}$, $\color{royalblue}{\textbf{12d7}}$ |
+| Arctis 5 (2018) |  |  | 12aa |
 | Arctis 7 / 7 2019 / Pro 2019 / Pro GameDAC | ✅ | 26 | $\color{royalblue}{\textbf{1260}}$, $\color{royalblue}{\textbf{12ad}}$, $\color{royalblue}{\textbf{1252}}$, $\color{royalblue}{\textbf{1280}}$ |
 | Arctis 7+ / PS5 / Xbox / Destiny | ✅ | 40 | $\color{royalblue}{\textbf{220e}}$, $\color{royalblue}{\textbf{2212}}$, $\color{royalblue}{\textbf{2216}}$, 2236 |
 | Arctis 9 Wireless | ✅ | 20 | $\color{royalblue}{\textbf{12c2}}$ |
@@ -625,20 +636,23 @@ systemctl --user daemon-reload && systemctl --user restart arctis-manager.servic
 
 ## How the mixer works
 
-ASM creates 3 virtual sinks on top of your Arctis device plus one external output:
+ASM creates virtual sinks on top of your Arctis device plus one external output:
 
-| Sink | Default use | Button |
+| Sink | Default use | Key |
 |---|---|---|
 | **Arctis_Game** | Games, general audio | G |
 | **Arctis_Chat** | Voice apps (Discord, TeamSpeak…) | C |
 | **Arctis_Media** | Browsers, video players | M |
+| **Arctis_Aux** | Anything you want kept apart — off unless you turn it on | A |
 | **External Output** | HDMI, USB speakers, sound card… (5.1 / 7.1 native) | O |
 
-The **media router** (`asm-router`) automatically moves browsers and video players to `Arctis_Media`. Manual placements via G / C / M / O buttons are saved as persistent overrides.
+Each channel can also be sent to another device than the headset, from its card on the Home page or next to its EQ.
 
-The **stream guard** (`asm-stream-guard`) decides which of these channels a screen share is allowed to carry. Discord's Linux client offers no source picker: it creates its own capture node and links every playback stream into it, continuously, so the whole system's audio goes out to the call. Pick the allowed channels in the bar at the top of the Sonar page — Game only, by default — and the guard cuts everything else as PipeWire announces it. Sources are matched by the channel they play on, so moving an app with the G / C / M buttons is all it takes to include or exclude it.
+The **media router** (`asm-router`) automatically moves browsers and video players to `Arctis_Media`. Moving an app yourself — by dragging its icon onto a card, or from its menu — is saved as a persistent override.
 
-The External Output card routes audio **directly** to the physical sink, bypassing virtual stereo sinks — this preserves true 5.1 / 7.1 passthrough. Configure it in **Settings → Audio → External Output Device**.
+The **stream guard** (`asm-stream-guard`) decides which of these channels a screen share is allowed to carry. Discord's Linux client offers no source picker: it creates its own capture node and links every playback stream into it, continuously, so the whole system's audio goes out to the call. Pick the allowed channels in the bar at the top of the Sonar page — Game only, by default — and the guard cuts everything else as PipeWire announces it. Sources are matched by the channel they play on, so moving an app to another channel is all it takes to include or exclude it.
+
+The External Output card routes audio **directly** to the physical sink, bypassing virtual stereo sinks — this preserves true 5.1 / 7.1 passthrough. Pick its device from the Output card.
 
 ---
 
@@ -754,6 +768,8 @@ Example Waybar module showing the battery, hidden when the headset is off:
 
 Virtual 7.1 surround is included automatically with the install — it deploys a PipeWire HeSuVi filter-chain and downloads the HRIR file. **57 HRIR profiles** from [HeSuVi](https://sourceforge.net/projects/hesuvi/) are bundled and selectable from the **Settings** tab with instant apply.
 
+The Game, Media and Aux channels accept 5.1 / 7.1, so a game set to surround sends its real centre and rear channels to Spatial Audio instead of a stereo mix. With **Only for surround sources** ticked, the virtual surround turns itself on only while something plays 5.1 / 7.1. A channel sent to a surround receiver or TV gets its channels untouched; on a stereo device with Spatial Audio off, surround is folded into stereo (centre and surrounds at -3 dB).
+
 ```
                   ┌──────────────────────────┐
  7.1 audio source │  Virtual Surround Sink   │
@@ -779,7 +795,7 @@ Advanced: replace `~/.local/share/pipewire/hrir_hesuvi/hrir.wav` with any 14-cha
 
 ## Themes
 
-ASM ships **5 built-in color themes**: SteelSeries (default), Aurora Glass, Neon Pulse, Slate Premium and Arctic. Switch themes from the dropdown in **Settings → Interface Theme** — the change applies live to every page, dialog and the tray menu, no restart needed.
+ASM ships **6 built-in color themes**: SteelSeries (default), Aurora Glass, Neon Pulse, Slate Premium, Arctic and Matcha SV. Switch themes from the dropdown in **Settings → Interface Theme** — the change applies live to every page, dialog and the tray menu, no restart needed.
 
 ### Custom themes
 
@@ -1005,14 +1021,12 @@ an S/PDIF port, or another sound card — instead of your headset, so you hear
 nothing. This happens when PipeWire/WirePlumber remembers an old output for that
 app.
 
-Click **Bring audio to headset** to fix it in one click. It finds every app
-currently playing on a non-Arctis device and moves it back to your default
-Arctis sink; apps already on a Game / Chat / Media channel are left untouched.
-It is available in two places:
-
-- The button on the **Home page**, next to the volume-sliders toggle.
-- The **system tray** menu → *Bring audio to headset* (a notification reports
-  how many apps were moved).
+Open the **system tray** menu → *Bring audio to headset* to fix it in one
+click. It finds every app currently playing on a non-Arctis device and moves it
+back to your default Arctis sink (a notification reports how many apps were
+moved); apps already on a channel are left untouched. It does not change a
+channel's own output: if you sent a channel to another device, pick the headset
+on that channel's card to bring it back.
 
 It is safe to click at any time — if nothing is misrouted, it does nothing.
 
