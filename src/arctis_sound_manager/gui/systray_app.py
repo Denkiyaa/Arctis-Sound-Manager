@@ -585,6 +585,15 @@ class QSystrayApp(QBaseDesktopApp):
             self._menu_action_refs.append(_a_regen)
             _a_regen.triggered.connect(self._on_regenerate_audio_configs)
 
+            # Only offered when a channel actually plays on Bluetooth: it is
+            # the one-click version of switching Bluetooth off and on, which
+            # nobody thinks to try for audio that is merely choppy.
+            _bt_macs = self._bluetooth_output_macs()
+            if _bt_macs:
+                _a_bt = _maint_menu.addAction(I18n.translate('ui', 'reconnect_bluetooth'))
+                self._menu_action_refs.append(_a_bt)
+                _a_bt.triggered.connect(lambda *_: self._on_reconnect_bluetooth(_bt_macs))
+
             if not sc.manager_available():
                 # No systemctl/dinitctl at all — grey the entries out instead of
                 # letting them fail silently when clicked.
@@ -702,7 +711,8 @@ class QSystrayApp(QBaseDesktopApp):
         except Exception as e:
             self.logger.error('_on_reclaim_audio failed: %s', e, exc_info=True)
 
-    def _run_maintenance_action(self, func, progress_key: str, done_key: str, failed_key: str) -> None:
+    def _run_maintenance_action(self, func, progress_key: str, done_key: str, failed_key: str,
+                                needs_service_manager: bool = True) -> None:
         """Run *func* (a zero-arg callable returning bool) in the background
         and report the outcome via tray notifications — success and failure
         both surfaced, never a silent no-op. *func* must go through
@@ -713,9 +723,11 @@ class QSystrayApp(QBaseDesktopApp):
         already disables the triggering QAction when no service manager is
         present, but the menu is only rebuilt when it opens, so re-check here
         too rather than relying solely on that stale-by-construction state.
+        An action that never touches a service (*needs_service_manager* False,
+        the Bluetooth reconnect) is exempt from both.
         """
         title = "Arctis Sound Manager"
-        if not sc.manager_available():
+        if needs_service_manager and not sc.manager_available():
             self.tray_icon.showMessage(
                 title, I18n.translate('ui', 'service_manager_unavailable'),
                 QSystemTrayIcon.MessageIcon.Warning, 5000,
@@ -787,6 +799,29 @@ class QSystrayApp(QBaseDesktopApp):
         self._run_maintenance_action(
             _do,
             'restart_audio_engine_progress', 'restart_audio_engine_done', 'restart_audio_engine_failed',
+        )
+
+    @staticmethod
+    def _bluetooth_output_macs() -> list[str]:
+        """Addresses of the Bluetooth devices the channels are routed to."""
+        try:
+            from arctis_sound_manager.bt_reconnect import mac_of
+            from arctis_sound_manager.gui.channel_outputs import load_channel_outputs
+            macs = {mac_of(node) for node in load_channel_outputs().values()}
+        except Exception:  # noqa: BLE001 — a menu entry is never worth a broken menu
+            return []
+        return sorted(m for m in macs if m)
+
+    def _on_reconnect_bluetooth(self, macs: list[str]) -> None:
+        # A link that resumed after a dropout can carry on broken — choppy,
+        # "riding over bumps" — until it is rebuilt; see bt_reconnect.
+        def _do() -> bool:
+            from arctis_sound_manager.bt_reconnect import refresh_connection
+            return all([refresh_connection(mac) for mac in macs])
+
+        self._run_maintenance_action(
+            _do, 'reconnect_bluetooth_progress', 'reconnect_bluetooth_done',
+            'reconnect_bluetooth_failed', needs_service_manager=False,
         )
 
     def _on_restart_asm(self) -> None:

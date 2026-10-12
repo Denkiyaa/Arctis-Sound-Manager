@@ -348,3 +348,33 @@ def test_worker_reference_is_released_on_finished_not_on_done(monkeypatch):
     worker.finished.emit()
     assert fake_self._maintenance_workers == []
     assert worker.deleted, "a finished worker must be handed to deleteLater()"
+
+
+# ── Reconnect Bluetooth output ──────────────────────────────────────────────
+
+def test_bluetooth_entry_lists_only_bluetooth_channel_outputs(monkeypatch):
+    from arctis_sound_manager.gui import channel_outputs
+    monkeypatch.setattr(channel_outputs, "load_channel_outputs", lambda: {
+        "game": "bluez_output.30_96_10_49_54_E2.1",
+        "chat": "bluez_output.30_96_10_49_54_E2.1",
+        "media": "alsa_output.pci-0000_01_00.1.hdmi-stereo",
+    })
+    assert sysapp.QSystrayApp._bluetooth_output_macs() == ["30:96:10:49:54:E2"]
+    monkeypatch.setattr(channel_outputs, "load_channel_outputs", lambda: {})
+    assert sysapp.QSystrayApp._bluetooth_output_macs() == []
+
+
+def test_bluetooth_reconnect_needs_no_service_manager(monkeypatch):
+    """It talks to BlueZ, not to a service — a dinit-less, systemd-less box
+    can still use it."""
+    from arctis_sound_manager import bt_reconnect
+    fake_self = _fake_self(monkeypatch)
+    monkeypatch.setattr(sysapp.sc, "manager_available", lambda: False)
+    rebuilt = []
+    monkeypatch.setattr(bt_reconnect, "refresh_connection",
+                        lambda mac: rebuilt.append(mac) or True)
+
+    sysapp.QSystrayApp._on_reconnect_bluetooth(fake_self, ["30:96:10:49:54:E2"])
+
+    assert rebuilt == ["30:96:10:49:54:E2"]
+    assert I18n.translate('ui', 'reconnect_bluetooth_done') in _message_bodies(fake_self)

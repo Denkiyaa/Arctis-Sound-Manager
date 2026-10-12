@@ -48,6 +48,27 @@ CONNECT_TIMEOUT_S = 20.0
 # again an hour later still gets reconnected.
 DELIBERATE_WINDOW_S = 600.0
 
+# A link that keeps dropping and coming back is not healthy when it comes back.
+# Seen here: the transport failed four times in six minutes, BlueZ re-acquired
+# it each time, and the stream that resumed was broken — the controller's send
+# queue full (182 EAGAIN from media-sink in 15 s), the encoder cutting its
+# bitpool 27 times, the earbuds back at 44.1 kHz instead of 48. It sounded
+# like the audio was riding over bumps, and it stayed that way. A disconnect
+# and a fresh connect cleared all of it: 0 and 0, back at 48 kHz.
+#
+# So after FLAKY_DROPS drop-outs inside FLAKY_WINDOW_S, once the node has been
+# back for STABLE_BEFORE_REFRESH_S, the connection is rebuilt from scratch —
+# at most once per REFRESH_COOLDOWN_S, because a link that is failing for a
+# reason this cannot fix must not be cut every few minutes on top of it.
+FLAKY_DROPS = 3
+FLAKY_WINDOW_S = 600.0
+STABLE_BEFORE_REFRESH_S = 10.0
+REFRESH_COOLDOWN_S = 1800.0
+# The first connect straight after a disconnect can be refused
+# (br-connection-unknown) and succeed a few seconds later.
+REFRESH_CONNECT_TRIES = 4
+REFRESH_RETRY_GAP_S = 3.0
+
 
 def mac_of(node_name: str) -> str | None:
     """The device address a bluez_output node name is built from, or None."""
@@ -68,6 +89,29 @@ def device_state(mac: str) -> tuple[bool, bool]:
     return paired, connected
 
 
+def refresh_connection(mac: str) -> bool:
+    """Disconnect *mac* and connect it again from scratch. True when it is back.
+
+    The same thing as switching Bluetooth off and on for one device, which is
+    what clears a link that resumed broken (see FLAKY_DROPS) — and what nobody
+    would think to try without knowing that is what happened.
+    """
+    try:
+        subprocess.run(["bluetoothctl", "disconnect", mac], capture_output=True,
+                       text=True, timeout=10, check=False)
+        for attempt in range(REFRESH_CONNECT_TRIES):
+            time.sleep(REFRESH_RETRY_GAP_S)
+            res = subprocess.run(["bluetoothctl", "connect", mac], capture_output=True,
+                                 text=True, timeout=CONNECT_TIMEOUT_S, check=False)
+            if "Connection successful" in res.stdout:
+                return True
+            _log.debug("bluetooth: reconnect of %s, try %d: %s", mac, attempt + 1,
+                       (res.stdout + res.stderr).strip()[-120:])
+    except (OSError, subprocess.SubprocessError) as exc:
+        _log.debug("bluetooth: refresh of %s failed: %s", mac, exc)
+    return False
+
+
 class BluetoothReconnector:
     """Call :meth:`tick` from the watchdog with the saved outputs and a
     ``node_exists`` predicate; it reconnects what is missing, with backoff."""
@@ -83,6 +127,14 @@ class BluetoothReconnector:
         self._returned_at: dict[str, float] = {}
         # Devices the user sent away after a reconnect; nothing until they return.
         self._dismissed: set[str] = set()
+        # For FLAKY_DROPS: whether the node was on the graph last tick, since
+        # when, when it dropped out lately, and when it was last rebuilt.
+        self._present: dict[str, bool] = {}
+        self._present_since: dict[str, float] = {}
+        self._drops: dict[str, list[float]] = {}
+        self._refreshed_at: dict[str, float] = {}
+        # Being rebuilt right now: its absence is ours, not a drop-out.
+        self._refreshing: set[str] = set()
 
     def tick(self, saved_outputs: dict[str, str], node_exists, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
@@ -90,7 +142,17 @@ class BluetoothReconnector:
             mac = mac_of(node)
             if mac is None:
                 continue
-            if node_exists(node):
+            with self._lock:
+                if mac in self._refreshing:
+                    continue
+            present = node_exists(node)
+            was_present = self._present.get(mac)
+            self._present[mac] = present
+            if present and was_present is not True:
+                self._present_since[mac] = now
+            if not present and was_present:
+                self._drops.setdefault(mac, []).append(now)
+            if present:
                 if mac in self._delay or mac in self._dismissed:
                     _log.info("bluetooth: %s is back on the graph", node)
                 self._delay.pop(mac, None)
@@ -100,6 +162,7 @@ class BluetoothReconnector:
                     when = self._reconnected_at.pop(mac, None)
                 if when is not None:
                     self._returned_at[mac] = when
+                self._maybe_refresh(mac, node, now)
                 continue
             if mac in self._dismissed:
                 continue
@@ -121,6 +184,43 @@ class BluetoothReconnector:
             self._next_try[mac] = now + delay
             threading.Thread(target=self._connect, args=(mac, node, delay, now),
                              name=f"bt-reconnect-{mac}", daemon=True).start()
+
+    def _maybe_refresh(self, mac: str, node: str, now: float) -> None:
+        """Rebuild a connection that keeps dropping, once it is back and settled."""
+        drops = [t for t in self._drops.get(mac, []) if now - t <= FLAKY_WINDOW_S]
+        self._drops[mac] = drops
+        if len(drops) < FLAKY_DROPS:
+            return
+        if now - self._present_since.get(mac, now) < STABLE_BEFORE_REFRESH_S:
+            return
+        last = self._refreshed_at.get(mac)
+        if last is not None and now - last < REFRESH_COOLDOWN_S:
+            return
+        with self._lock:
+            if mac in self._busy or mac in self._refreshing:
+                return
+            self._refreshing.add(mac)
+        self._refreshed_at[mac] = now
+        self._drops[mac] = []
+        _log.info("bluetooth: %s dropped out %d times in %.0f min — reconnecting it "
+                  "from scratch, since a link that keeps coming back tends to come "
+                  "back broken", node, len(drops), FLAKY_WINDOW_S / 60)
+        threading.Thread(target=self._refresh, args=(mac, node),
+                         name=f"bt-refresh-{mac}", daemon=True).start()
+
+    def _refresh(self, mac: str, node: str) -> None:
+        try:
+            ok = refresh_connection(mac)
+            _log.info("bluetooth: %s %s", node,
+                      "reconnected from scratch" if ok else
+                      "did not come back after the rebuild — the usual reconnect takes over")
+        finally:
+            with self._lock:
+                self._refreshing.discard(mac)
+            # Its absence during the rebuild was ours: not a drop-out, and not
+            # the user sending it away after a reconnect of ours either.
+            self._present.pop(mac, None)
+            self._returned_at.pop(mac, None)
 
     def _connect(self, mac: str, node: str, delay: float, now: float) -> None:
         try:
