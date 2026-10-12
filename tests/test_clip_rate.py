@@ -362,3 +362,24 @@ def test_the_gl_path_keeps_a_system_memory_fallback():
     assert len(chain) == 2
     assert "glupload" in chain[0]
     assert "glupload" not in chain[1]
+
+
+def test_the_combo_shows_the_rate_the_capture_chose(monkeypatch):
+    """No rate picked by hand: the combo follows the capture (30 on a CPU
+    encoder) instead of showing the GPU default, and saves nothing."""
+    from types import SimpleNamespace
+    from arctis_sound_manager.gui import clips_page
+
+    monkeypatch.setattr(clips_page, "_chosen_fps", lambda: None)
+    picked: list[int] = []
+    combo = SimpleNamespace(blockSignals=lambda _on: None,
+                            setCurrentIndex=picked.append)
+    page = SimpleNamespace(_fps=combo)
+
+    clips_page.ClipsPage._show_capture_fps(page, SimpleNamespace(max_fps=30))
+    assert picked == [clips_page._FPS_CHOICES.index(30)]
+
+    # A hand-picked rate is left alone.
+    monkeypatch.setattr(clips_page, "_chosen_fps", lambda: 60)
+    clips_page.ClipsPage._show_capture_fps(page, SimpleNamespace(max_fps=30))
+    assert picked == [clips_page._FPS_CHOICES.index(30)]

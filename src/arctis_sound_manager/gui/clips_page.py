@@ -802,6 +802,7 @@ class ClipsPage(QWidget):
                                   window=bool(self._source_kind.currentData()),
                                   game=self._last_detected_game)
             capture.start()
+            self._show_capture_fps(capture)
         except ClipCaptureUnavailable as exc:
             self._error = str(exc)
             logger.warning("clip capture unavailable: %s", exc)
@@ -984,6 +985,24 @@ class ClipsPage(QWidget):
         self._update_status()
 
     # ── following the game ────────────────────────────────────────────────────
+
+    def _show_capture_fps(self, capture) -> None:
+        """Show the ceiling the capture chose when none was picked by hand.
+
+        Until then the combo can only guess _DEFAULT_FPS (60, the GPU-encoder
+        default), while a machine encoding on the CPU records at 30. Synced
+        without the change signal, so it is not saved as a hand-picked rate.
+        """
+        if _chosen_fps() is not None:
+            return
+        value = getattr(capture, "max_fps", None)
+        if value not in _FPS_CHOICES:
+            return
+        self._fps.blockSignals(True)
+        try:
+            self._fps.setCurrentIndex(_FPS_CHOICES.index(value))
+        finally:
+            self._fps.blockSignals(False)
 
     def _on_fps_changed(self, _index: int) -> None:
         """Remember the ceiling, and rebuild a running capture on it."""
