@@ -73,7 +73,7 @@ def test_grants_only_the_two_clients_at_the_ends():
     targets = sorted({c[3] for c in calls if c[:3] == ['pw-cli', '--', 'permissions']})
     assert targets == ['184', '232']
     # The linking flag is the point: "rwxm" alone would not help (#181).
-    assert all(c[-1] == 'rwxml' for c in calls)
+    assert all(c[-1] == '0730' for c in calls if c[2] == 'permissions')
 
 
 def test_third_party_clients_are_never_granted_anything():
@@ -353,7 +353,7 @@ def test_grant_props_permissions_grants_the_owning_client():
 
     targets = sorted({c[3] for c in calls if c[:3] == ['pw-cli', '--', 'permissions']})
     assert targets == ['184']
-    assert all(c[-1] == 'rwxml' for c in calls)
+    assert all(c[-1] == '0730' for c in calls if c[2] == 'permissions')
 
 
 def test_grant_props_permissions_leaves_non_asm_nodes_alone():
@@ -485,13 +485,13 @@ def test_link_grant_adds_per_object_grants_for_ports_and_nodes():
         mine = [c[4] for c in perms if c[3] == client]
         assert mine[0] == '-1'
         assert sorted(mine[1:]) == ['10', '100', '20', '200']
-    assert ['pw-cli', '--', 'permissions', '232', '100', 'rwxml'] in perms
-    assert all(c[-1] == 'rwxml' for c in perms)
+    assert ['pw-cli', '--', 'permissions', '232', '100', '0730'] in perms
+    assert all(c[-1] == '0730' for c in perms)
 
 
 def test_per_object_grant_alone_counts_when_default_grant_fails():
     def run(argv, **_k):
-        if argv[4] == '-1':
+        if argv[2] == 'permissions' and argv[4] == '-1':
             return SimpleNamespace(returncode=1, stdout=b'', stderr=b'denied')
         return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
 
@@ -524,4 +524,54 @@ def test_props_grant_adds_the_node_explicitly():
         assert pw_utils.grant_props_permissions('effect_input.sonar-game-eq', _dump()) is True
 
     assert [c[3:] for c in _perm_calls(calls)] == [
-        ['184', '-1', 'rwxml'], ['184', '200', 'rwxml']]
+        ['184', '-1', '0730'], ['184', '200', '0730']]
+
+
+# ---------------------------------------------------------------------------
+# #325: pw-cli reads the permission with strtol(arg, NULL, 0), so the letters
+# "rwxml" were 0 — the repair stripped every permission instead of granting
+# them, and every test above passed because it only looked at the argv.
+# ---------------------------------------------------------------------------
+
+def test_permission_is_the_number_pw_cli_actually_parses():
+    """What pw-cli does with the argument: strtol(arg, NULL, 0)."""
+    r, w, x, m, l = 0o400, 0o200, 0o100, 0o010, 0o020
+    assert int(pw_utils._PW_PERM_RWXML, 8) == r | w | x | m | l
+    # strtol base 0: a leading 0 means octal; letters are not a number at all.
+    assert pw_utils._PW_PERM_RWXML.startswith('0')
+    assert not pw_utils._PW_PERM_RWXML.isalpha()
+
+
+def _perms_out(text: str):
+    def run(argv, **_k):
+        if argv[2] == 'get-permissions':
+            return SimpleNamespace(returncode=0, stdout=text.encode(), stderr=b'')
+        return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+    return run
+
+
+def test_grant_the_server_did_not_apply_is_not_a_success():
+    """Exit 0 and a clean stderr, but the owner still cannot see the node:
+    exactly what the letter-form grant produced (`456: -----`)."""
+    out = "  default: rwxml\n  100: -----\n  200: rwxml\n  10: rwxml\n  20: rwxml\n"
+    with patch.object(pw_utils, '_pw_dump', _dump), \
+         patch.object(pw_utils, '_pw_run', _perms_out(out)), \
+         patch.object(pw_utils.shutil, 'which', lambda _: '/usr/bin/pw-cli'):
+        # Both owners read back the same table, so neither counts.
+        assert pw_utils.grant_link_permissions(10, 20) is False
+
+
+def test_grant_read_back_as_visible_is_a_success():
+    out = "  default: rwxml\n  100: rwxml\n  200: rwxml\n"
+    with patch.object(pw_utils, '_pw_dump', _dump), \
+         patch.object(pw_utils, '_pw_run', _perms_out(out)), \
+         patch.object(pw_utils.shutil, 'which', lambda _: '/usr/bin/pw-cli'):
+        assert pw_utils.grant_link_permissions(10, 20) is True
+
+
+def test_read_back_parses_real_pw_cli_output():
+    """Captured from pw-cli 1.6.9 after the old letter-form grant."""
+    out = b"remote 0 node 39 index 0\n  default: rwxml\n  456: -----\n"
+    with patch.object(pw_utils, '_pw_run',
+                      lambda *_a, **_k: SimpleNamespace(returncode=0, stdout=out, stderr=b'')):
+        assert pw_utils._read_permissions('457') == {'default': 'rwxml', '456': '-----'}

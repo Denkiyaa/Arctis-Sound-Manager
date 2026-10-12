@@ -213,7 +213,8 @@ def grant_link_permissions(out_port: int, in_port: int) -> bool:
     ``pw-cli`` connects to the manager socket, which is unrestricted, so it can
     raise permissions for the clients we own. The ``l`` in ``rwxml`` is the
     flag that specifically allows linking and is *not* part of ``rwxm``:
-    omitting it is why such a fix appears to do nothing.
+    omitting it is why such a fix appears to do nothing. The permission is
+    passed as a number (see :data:`_PW_PERM_RWXML`), never as letters.
 
     The ``--`` matters as much as the flags. ``-1`` means "every object", but
     pw-cli runs its arguments through getopt first, which reads it as an option
@@ -287,6 +288,53 @@ def grant_link_permissions(out_port: int, in_port: int) -> bool:
 # retried, exactly on the busy graphs that need it most (#181).
 _PW_CLI_REGISTRY_RACE = re.compile(r"\bno global \d+|\bunknown resource \d+ op:")
 
+# PW_PERM_RWXML (r 0400 | w 0200 | x 0100 | l 0020 | m 0010), in octal.
+# pw-cli reads the permission with strtol(arg, NULL, 0) — every version from
+# 0.3 to 1.6.9 — so the letters "rwxml" parse as 0. Sent that way, the "grant"
+# stripped the client of every permission instead: a default of 0 on ``-1``,
+# ``-----`` on each object. From v1.2.33 to v1.6.0 the repair made every
+# refused link worse, and tests that only checked the argv could not tell
+# (#325, reproduced on PipeWire 1.6.9).
+_PW_PERM_RWXML = "0730"
+
+# One "  <id|default>: rwxml" line per entry of ``pw-cli get-permissions``.
+_PW_CLI_PERM_LINE = re.compile(r"^\s*(default|\d+):\s*([rwxml-]{5})\s*$")
+
+
+def _read_permissions(owner: str) -> dict[str, str]:
+    """``{object id or "default": "rwxml"-style flags}`` for client *owner*.
+
+    Empty when pw-cli prints nothing usable, which tells nothing either way.
+    """
+    try:
+        r = _pw_run(["pw-cli", "--", "get-permissions", owner],
+                    check=False, timeout=5, capture_output=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("could not read permissions of client %s: %r", owner, exc)
+        return {}
+    perms = {}
+    for line in (r.stdout or b"").decode(errors="replace").splitlines():
+        m = _PW_CLI_PERM_LINE.match(line)
+        if m:
+            perms[m.group(1)] = m.group(2)
+    return perms
+
+
+def _grant_took_effect(owner: str, objects: list[int]) -> bool:
+    """Read the permissions back: a grant counts when the owner can now see
+    every object. pw-cli exits 0 on a grant the server ignored or that set
+    something else than asked, so its exit status proves nothing (#325)."""
+    perms = _read_permissions(owner)
+    if not perms:
+        return True
+    missing = [str(o) for o in (objects or ["default"])
+               if "r" not in perms.get(str(o), perms.get("default", ""))]
+    if missing:
+        logger.warning("Permission grant to client %s did not take effect on %s "
+                       "(#181)", owner, ", ".join(missing))
+        return False
+    return True
+
 
 def _grant_owners_rwxml(owners: set[str], context: str,
                         objects: list[int] | None = None) -> bool:
@@ -303,12 +351,14 @@ def _grant_owners_rwxml(owners: set[str], context: str,
     Returns True if at least one owner was actually granted — pw-cli reports
     a failed grant on stderr while still exiting 0, so the exit status alone
     is not trusted (that previously made a refused grant look like a success
-    and the caller would retry the link/set-param for nothing).
+    and the caller would retry the link/set-param for nothing). The result is
+    then read back with ``get-permissions``.
     """
     granted = False
     for owner in sorted(owners):
+        owner_granted = False
         try:
-            r = _pw_run(["pw-cli", "--", "permissions", owner, "-1", "rwxml"],
+            r = _pw_run(["pw-cli", "--", "permissions", owner, "-1", _PW_PERM_RWXML],
                         check=False, timeout=5, capture_output=True)
         except Exception as exc:
             logger.warning("could not grant %s permissions to client %s: %r",
@@ -318,13 +368,14 @@ def _grant_owners_rwxml(owners: set[str], context: str,
             line for line in (r.stderr or b"").decode(errors="replace").splitlines()
             if line.strip() and not _PW_CLI_REGISTRY_RACE.search(line))
         if r.returncode == 0 and not err:
-            granted = True
+            owner_granted = True
         else:
             logger.warning("pw-cli permissions %s failed: %s", owner,
                            err or f"exit status {r.returncode}")
         for obj_id in dict.fromkeys(objects or ()):
             try:
-                r = _pw_run(["pw-cli", "--", "permissions", owner, str(obj_id), "rwxml"],
+                r = _pw_run(["pw-cli", "--", "permissions", owner, str(obj_id),
+                             _PW_PERM_RWXML],
                             check=False, timeout=5, capture_output=True)
             except Exception as exc:
                 logger.debug("could not grant %s permission on %s to client %s: %r",
@@ -334,10 +385,12 @@ def _grant_owners_rwxml(owners: set[str], context: str,
                 line for line in (r.stderr or b"").decode(errors="replace").splitlines()
                 if line.strip() and not _PW_CLI_REGISTRY_RACE.search(line))
             if r.returncode == 0 and not err:
-                granted = True
+                owner_granted = True
             else:
                 logger.debug("pw-cli permissions %s %s failed: %s", owner, obj_id,
                              err or f"exit status {r.returncode}")
+        if owner_granted and _grant_took_effect(owner, list(dict.fromkeys(objects or ()))):
+            granted = True
     return granted
 
 
@@ -349,11 +402,10 @@ def grant_props_permissions(node_name: str, dump: list | None = None) -> bool:
     hit from a different call site: ``pw-cli set-param`` on a filter-chain
     node (the Sonar EQ live-apply path in ``set_filter_controls``) rather than
     ``pw-link``. Both are refused with the same "Operation not permitted",
-    and the fix that unblocked linking — raising the *owning* client to
-    ``rwxml`` on ``-1`` and retrying — is the one already confirmed against
-    real hardware for the link case; nothing here has been confirmed for
-    Props yet, so treat a persistent failure after this repair as new
-    information, not as proof the repair itself is wrong.
+    and the repair is the same — raise the *owning* client to ``rwxml`` and
+    retry. Until #325 it sent the permission as letters, which pw-cli reads
+    as 0, so neither path had ever worked; the numeric grant is confirmed on
+    PipeWire 1.6.9 for links, not yet on a restricted system for Props.
 
     Only ever raises permissions for a client behind a node ASM created
     (same guard as the link case) and no more than once a minute per node
