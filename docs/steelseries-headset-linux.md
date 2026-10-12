@@ -32,16 +32,31 @@ something provides it.
 ## What Arctis Sound Manager adds
 
 - **Headset settings** — sidetone, active noise cancelling and transparency,
-  inactivity timeout, microphone volume, battery, and the base station's OLED
-  screen, spoken over the headset's own USB protocol.
-- **Game / Chat / Media / Output channels** as real PipeWire devices, with a
-  mixer to balance them and automatic routing of applications.
-- **A working ChatMix dial** — see [Arctis ChatMix on Linux](arctis-chatmix-linux.md).
+  inactivity timeout, microphone volume, battery (and the spare battery in the
+  base, or the GameBuds charging case), spoken over the headset's own USB
+  protocol.
+- **The base station's OLED screen** — the EQ of what is playing, the
+  now-playing track, and screen-off while you are away.
+- **Game / Chat / Media / Aux / Output channels** as real PipeWire devices, with
+  a mixer to balance them, a Mic card for what your apps record, and automatic
+  routing of applications — or drag an app onto a channel.
+- **A working ChatMix dial**, with an on-screen bar like GG's — see
+  [Arctis ChatMix on Linux](arctis-chatmix-linux.md).
 - **A Sonar-style equalizer** per channel, with the Sonar game presets
-  included — see [SteelSeries Sonar on Linux](steelseries-sonar-linux.md).
-- **Spatial audio** through HRIR convolution, the counterpart of Sonar's
-  virtual surround.
-- **Microphone effects** — noise suppression, noise gate, compressor.
+  included and applied automatically when a game starts — see
+  [SteelSeries Sonar on Linux](steelseries-sonar-linux.md).
+- **Real 7.1** on the Game, Media and Aux channels: spatial audio through HRIR
+  convolution on the headset, the counterpart of Sonar's virtual surround, or
+  surround passed straight through to a 5.1/7.1 receiver.
+- **Streamer mode** — a second, independent mix for OBS, like Sonar's Stream
+  mode.
+- **Microphone effects** — noise suppression, noise gate, compressor, and the
+  Sonar mic presets.
+- **Clips** — save the last 30 seconds of a game with a shortcut, one audio
+  track per channel; see [Clips](clips.md).
+- **Stream Guard** — a Discord screen share carries only the audio you allow,
+  not the whole system.
+- **Desktop integration** — tray icon, Plasma 6 widget, and `asm-cli status`.
 
 ## Supported SteelSeries headsets
 
@@ -68,8 +83,9 @@ curl -fsSL https://loteran.github.io/Arctis-Sound-Manager/install.sh | bash
 ```
 
 The script detects your distribution and installs the native package: Arch and
-its derivatives (AUR), Fedora and Nobara (COPR), Debian and Ubuntu (PPA / .deb),
-and Bazzite, SteamOS and Silverblue through Distrobox. The
+its derivatives (signed pacman repository, with the AUR as fallback), Fedora
+and Nobara (COPR), Debian and Ubuntu (PPA / .deb), and Bazzite, SteamOS and
+Silverblue through Distrobox. NixOS has its own module. The
 [project page](https://github.com/loteran/Arctis-Sound-Manager#installation) has
 the per-distribution commands if you would rather run them yourself.
 
