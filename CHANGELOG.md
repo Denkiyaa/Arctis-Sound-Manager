@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 13 October 2026
+
+### Added
+
+- **Custom EQ on the Arctis Nova Elite.** The Elite's own equaliser, inside the headset, can now be driven from the Equalizer page (*Switch to Custom EQ*), like the other models with an on-device EQ; the curve stays on the headset. Written from SteelSeries' specification and not yet confirmed on a real Elite — Elite owners, please try it and report on #327.
+
+### Fixed
+
+- **No Sonar audio on SteamOS: the permission repair removed permissions instead of granting them (#325, #181).** ASM passed the permission to `pw-cli` as letters (`rwxml`), which `pw-cli` reads as the number 0, so every attempt to unblock a refused link took the remaining access away and made the refusal worse. It now sends the numeric value and reads the permissions back to check they took effect. Thanks @rasmus91 and @baccatuesday for the logs.
+
+- **GameBuds charging case not shown, "Access denied" in the log (#217).** The 1.6.0 package from the pacman repository shipped empty udev rules, and ASM's own check did not notice: it ignored the charging case's product ids and accepted any complete copy of the rules, even one hidden by an older copy in `/etc`. The package build now fails instead of shipping empty rules, and the check looks at the file udev actually reads, so ASM rewrites outdated rules by itself. Thanks @Sev501.
+
+- **Pacman repository: signed with a dedicated key (#322).** The binary repository is signed with its own pinned key, and the installer's key check and AUR fallback now work when run through `curl | bash`.
+
+- **Clips record at the game's real frame rate.** A 60 fps game came out at 17–34 fps: the capture dropped frames that arrived early, ran on the wrong clock, and waited on Python for every frame. Clips now keep 54–58 fps, record at 60 fps by default with a GPU encoder (30 on the CPU), and exports re-encode on the graphics card (NVENC) when it has one. The editor plays sound from the first playback, shows the clip's real rate as "original", and lays out size and frame-rate choices as buttons. Contributed by @Denkiyaa (#323).
+
+- **Scrolling a page no longer changes a dropdown.** Moving the mouse wheel over a picker while scrolling (for example a channel's output device) used to select the next entry. Contributed by @Denkiyaa (#323).
+
 ## [1.6.0] - 11 October 2026
 
 ### Added
