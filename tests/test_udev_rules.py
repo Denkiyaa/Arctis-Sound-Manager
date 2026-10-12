@@ -211,3 +211,52 @@ def test_unelevated_run_has_no_invoking_user_folder(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(constants)
+
+
+def _rule(pid: str, tag_only: bool = False) -> str:
+    extra = '' if tag_only else 'MODE="0666", '
+    return (f'SUBSYSTEM=="usb", ATTRS{{idVendor}}=="1038", '
+            f'ATTRS{{idProduct}}=="{pid}", {extra}TAG+="uaccess"')
+
+
+def test_stale_etc_copy_shadows_a_current_packaged_file(monkeypatch):
+    """#217: /etc replaces the same-named packaged file in /usr/lib. A stale
+    /etc copy must read as outdated even when /usr/lib is complete, or
+    asm-setup never rewrites it and the new PID stays without access."""
+    from arctis_sound_manager import udev_checker
+
+    etc, usr = UDEV_RULES_PATHS[0], UDEV_RULES_PATHS[1]
+    etc_ua, usr_ua = UDEV_UACCESS_RULES_PATHS[0], UDEV_UACCESS_RULES_PATHS[1]
+    files = {
+        etc: _rule('2317'), usr: _rule('2317') + '\n' + _rule('231a'),
+        etc_ua: _rule('2317', True), usr_ua: _rule('2317', True) + '\n' + _rule('231a', True),
+    }
+    monkeypatch.setattr(udev_checker, '_expected_pids',
+                        lambda: [(0x1038, 0x2317), (0x1038, 0x231a)])
+    monkeypatch.setattr(udev_checker, '_host_rules_contents', lambda _paths: [])
+    monkeypatch.setattr(udev_checker, '_local_rules_contents',
+                        lambda paths: [(p, files[p]) for p in paths if p in files])
+    assert udev_checker.get_udev_rules_status() == 'outdated'
+
+    # Without the /etc copies the packaged files are the ones udev reads.
+    for p in (etc, etc_ua):
+        del files[p]
+    assert udev_checker.get_udev_rules_status() == 'ok'
+
+
+def test_run_overlay_outranks_the_packaged_file():
+    """udev's order is /etc, then /run, then /usr/lib — not the list order."""
+    from arctis_sound_manager import udev_checker
+
+    found = [('/usr/lib/udev/rules.d/x.rules', 'a'), ('/run/udev/rules.d/x.rules', 'b')]
+    assert udev_checker._effective(found) == [('/run/udev/rules.d/x.rules', 'b')]
+    assert udev_checker._effective([]) == []
+
+
+def test_expected_pids_include_the_charging_case():
+    """#217: the case PIDs are written to the rules (udev_rules.py), so a file
+    without them must not pass the check."""
+    from arctis_sound_manager import udev_checker
+
+    pids = {pid for _, pid in udev_checker._expected_pids()}
+    assert {0x2317, 0x230c, 0x231a} <= pids

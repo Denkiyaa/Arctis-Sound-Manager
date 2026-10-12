@@ -24,11 +24,19 @@ _RULE_PID_RE = re.compile(
 
 
 def _expected_pids() -> list[tuple[int, int]]:
-    """Return (vendor_id, product_id) pairs from all device YAML configs."""
+    """Return (vendor_id, product_id) pairs from all device YAML configs.
+
+    Charging-case PIDs count too: udev_rules.py writes them next to the
+    device's own, and a rules file written before they existed must read as
+    outdated — otherwise nothing ever rewrites it and the case stays
+    unreadable (EACCES) on an otherwise current install (#217).
+    """
     try:
         from arctis_sound_manager.config import load_device_configurations
         configs = load_device_configurations()
-        return [(c.vendor_id, pid) for c in configs for pid in c.product_ids]
+        return [(c.vendor_id, pid) for c in configs
+                for pid in [*c.product_ids,
+                            *(c.charging_case.product_ids if c.charging_case else [])]]
     except Exception as e:
         _logger.warning(f"udev_checker: failed to load device configurations: {e!r}")
         return []
@@ -115,6 +123,20 @@ def _host_rules_contents(paths: list[str]) -> list[tuple[str, str]]:
     return found
 
 
+def _effective(found: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The one file udev actually reads among same-named copies, as a list.
+
+    A file in /etc replaces a same-named one in /run, which replaces the
+    packaged one in /usr/lib (or /lib) outright. Checking every copy let a
+    stale /etc file left by an older asm-setup hide the package's current
+    rules while this check, finding /usr/lib complete, answered 'ok' — so
+    the stale copy was never rewritten (#217).
+    """
+    rank = lambda item: (0 if item[0].startswith('/etc/') else
+                         1 if item[0].startswith('/run/') else 2)
+    return sorted(found, key=rank)[:1]
+
+
 def get_udev_rules_status() -> str:
     """Return the status of the installed udev rules.
 
@@ -132,8 +154,8 @@ def get_udev_rules_status() -> str:
     # already answered 'ok', so the subprocess cost lands on the path that was
     # about to open a dialog anyway.
     for source in (_local_rules_contents, _host_rules_contents):
-        main_rules = source(UDEV_RULES_PATHS)
-        uaccess_rules = source(UDEV_UACCESS_RULES_PATHS)
+        main_rules = _effective(source(UDEV_RULES_PATHS))
+        uaccess_rules = _effective(source(UDEV_UACCESS_RULES_PATHS))
         if main_rules:
             any_main_file_found = True
         for label, content in main_rules:

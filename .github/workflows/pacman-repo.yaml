@@ -44,7 +44,10 @@ jobs:
     steps:
       - name: Install build tooling
         run: |
-          pacman -Syu --noconfirm --needed git python-installer uv github-cli openssh
+          # python-ruamel-yaml: package() runs scripts/generate_udev_rules.py,
+          # and makepkg -d below does not install makedepends. Without it the
+          # 1.6.0 package shipped empty udev rules (#217).
+          pacman -Syu --noconfirm --needed git python-installer uv github-cli openssh python-ruamel-yaml
 
       - name: Resolve tag and version
         id: ver

@@ -8,6 +8,7 @@ pkgbase = arctis-sound-manager
 	license = GPL-3.0-or-later
 	makedepends = python-installer
 	makedepends = uv
+	makedepends = python-ruamel-yaml
 	depends = python>=3.10
 	depends = pyside6
 	depends = qt6-svg
