@@ -141,9 +141,61 @@ def encode_parametric_eq(bands: list[EqBand], name: str = "Custom",
     return frames
 
 
+# Builtin presets the Elite's parametric_eq picks its onboard slot from by
+# name when preset_type is 0 (base_arctis_nova_elite_tx.device, api
+# parametric_eq): [0] Flat [1] Bass Boost [2] Focus [3] Smiley [4] Custom.
+_ELITE_BUILTIN_SLOTS = {"Flat": 0, "Bass Boost": 1, "Focus": 2, "Smiley": 3}
+_ELITE_CUSTOM_SLOT = 4
+_ELITE_ALIAS_LENGTH = 6
+_ELITE_NAME_LENGTH = 61
+
+
+def _fixed_ascii(text: str, length: int) -> list[int]:
+    raw = list(text.encode("ascii", errors="ignore")[:length])
+    return raw + [0] * (length - len(raw))
+
+
+def encode_elite_parametric_eq(bands: list[EqBand], name: str = "Custom",
+                               preset_type: int = PRESET_CUSTOM,
+                               report_id: int = 0x01,
+                               eq_command: int = 0x1B) -> list[list[int]]:
+    """The one frame the Nova Elite takes for its 2.4 GHz curve.
+
+    Transcribed from `parametric_eq` in base_arctis_nova_elite_tx.device (GG
+    121). Unlike the 64-byte families above, the whole description fits in a
+    single HIDFEATURE chunk of 1036 bytes:
+
+      report_id, 0x1B, onboard slot, alias (6), name (61), 10 × eqBand (60)
+
+    The slot is not the preset_type GG's engine carries but what the spec
+    derives from it: 4 (Custom) for a custom curve, otherwise the builtin
+    matching the name. Writing it is also what selects it — the spec has no
+    separate select opcode for the Elite, unlike the Nova Pro's 0x2E.
+
+    The report id stays in the frame: a numbered feature report carries it as
+    its first data byte, and CoreEngine.send_feature_report() reads it from
+    there for the SET_REPORT wValue.
+
+    Each band is encode_band(): `create_filter_payload` in the same spec
+    produces frequency, type, gain in decidecibels and Q in thousandths, the
+    layout a real Nova 7P Gen 2 reads back (#146).
+    """
+    if len(bands) != 10:
+        raise ValueError(f"expected 10 bands, got {len(bands)}")
+    slot = (_ELITE_CUSTOM_SLOT if preset_type == PRESET_CUSTOM
+            else _ELITE_BUILTIN_SLOTS.get(name, _ELITE_CUSTOM_SLOT))
+    frame = [report_id, eq_command, slot]
+    frame += _fixed_ascii(name, _ELITE_ALIAS_LENGTH)
+    frame += _fixed_ascii(name, _ELITE_NAME_LENGTH)
+    for band in bands:
+        frame += list(encode_band(band))
+    return [frame]
+
+
 #: Encoders a device profile can name in `hardware_eq.format`.
 ENCODERS = {
     "parametric": encode_parametric_eq,
+    "elite_parametric": encode_elite_parametric_eq,
 }
 
 
@@ -255,3 +307,39 @@ def decode_eq_preset_name(response: list[int]) -> tuple[str, int]:
     name_bytes = bytes(b & 0xFF for b in response[_NAME_START:_NAME_START + _NAME_LENGTH])
     name = name_bytes.split(b"\x00", 1)[0].decode("utf-8", errors="replace")
     return name, preset_type
+
+
+# read_radio_eq_settings (0x1A) on the Nova Elite: incoming is the 0x1A echo,
+# the selected onboard slot, a 6-byte alias, the 61-byte name, then ten
+# eqBands (base_arctis_nova_elite_tx.device). It comes back as a feature
+# report, whose first byte is the report id when the report is numbered —
+# the spec's struct starts at the echo, so the decoder finds it rather than
+# trusting one offset. Not yet seen from real hardware: the raw hex is kept
+# by the caller for exactly that reason.
+_ELITE_SETTINGS_OPCODE = 0x1A
+
+
+def decode_elite_eq_settings(response: list[int]) -> dict:
+    """Decode a read_radio_eq_settings (0x1A) reply.
+
+    Returns {'slot', 'name', 'bands'}; raises ValueError when the echo is
+    missing or the reply is too short to hold ten bands.
+    """
+    data = bytes(b & 0xFF for b in response)
+    for start in (0, 1):
+        if len(data) > start and data[start] == _ELITE_SETTINGS_OPCODE:
+            break
+    else:
+        raise ValueError("no 0x1A echo at offset 0 or 1")
+    name_at = start + 2 + _ELITE_ALIAS_LENGTH
+    bands_at = name_at + _ELITE_NAME_LENGTH
+    if len(data) < bands_at + _EQ_BAND_SIZE * _EQ_BAND_COUNT:
+        raise ValueError(f"0x1A reply too short: {len(data)} bytes")
+    name = data[name_at:bands_at].split(b"\x00", 1)[0].decode("utf-8", errors="replace")
+    return {
+        "slot": data[start + 1],
+        "name": name,
+        "bands": [decode_band(data[bands_at + i * _EQ_BAND_SIZE:
+                                   bands_at + (i + 1) * _EQ_BAND_SIZE])
+                  for i in range(_EQ_BAND_COUNT)],
+    }

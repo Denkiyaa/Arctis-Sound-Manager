@@ -182,3 +182,52 @@ def test_band_frame_omits_the_connection_when_the_family_does():
     assert with_conn[1][:2] == [0x33, CONNECTION_WIRELESS]
     # The bands themselves are identical, only their offset differs.
     assert without[1][1:] == with_conn[1][2:]
+
+
+# ── Nova Elite (parametric_eq 0x1B, base_arctis_nova_elite_tx.device) ───────
+
+def test_elite_frame_layout_follows_the_spec():
+    """report_id, 0x1B, slot, alias (6), name (61), ten 6-byte bands."""
+    from arctis_sound_manager.hardware_eq import (bands_from_gains,
+                                                   encode_elite_parametric_eq)
+    (frame,) = encode_elite_parametric_eq(bands_from_gains([6] + [0] * 8 + [-6]))
+    assert len(frame) == 3 + 6 + 61 + 60
+    assert frame[:3] == [0x01, 0x1B, 0x04]
+    assert bytes(frame[3:9]) == b"Custom"
+    assert bytes(frame[9:70]).rstrip(b"\x00") == b"Custom"
+    # 31 Hz, peak, +6.0 dB (0x3C), Q 1.41 (1410 = 0x0582), little-endian.
+    assert frame[70:76] == [0x1F, 0x00, 0x01, 0x3C, 0x82, 0x05]
+    # 16 kHz, -6.0 dB as a signed byte (0xC4).
+    assert frame[124:130] == [0x80, 0x3E, 0x01, 0xC4, 0x82, 0x05]
+
+
+def test_elite_builtin_slot_comes_from_the_name():
+    """preset_type 0 picks the onboard slot by name, as the spec's cond does."""
+    from arctis_sound_manager.hardware_eq import (PRESET_BUILTIN, bands_from_gains,
+                                                   encode_elite_parametric_eq)
+    (frame,) = encode_elite_parametric_eq(bands_from_gains([0] * 10), name="Flat",
+                                          preset_type=PRESET_BUILTIN)
+    assert frame[2] == 0x00
+
+
+def test_elite_readback_finds_the_echo_after_the_report_id():
+    """A numbered feature report starts with its report id; the spec's struct
+    starts at the 0x1A echo. Both layouts decode the same."""
+    from arctis_sound_manager.hardware_eq import (bands_from_gains,
+                                                   decode_elite_eq_settings,
+                                                   encode_elite_parametric_eq)
+    (frame,) = encode_elite_parametric_eq(bands_from_gains([6] + [0] * 8 + [-6]))
+    body = [0x1A, 0x04] + frame[3:]
+    for reply in (body + [0] * 900, [0x01] + body + [0] * 900):
+        decoded = decode_elite_eq_settings(reply)
+        assert decoded["slot"] == 4
+        assert decoded["name"] == "Custom"
+        assert decoded["bands"][0].gain_db == 6.0
+        assert decoded["bands"][9].frequency == 16000
+
+
+def test_elite_readback_without_echo_is_refused():
+    import pytest
+    from arctis_sound_manager.hardware_eq import decode_elite_eq_settings
+    with pytest.raises(ValueError):
+        decode_elite_eq_settings([0x01, 0x20] + [0] * 200)

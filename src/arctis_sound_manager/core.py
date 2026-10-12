@@ -3442,10 +3442,14 @@ class CoreEngine:
             frame_delay = options.pop('frame_delay_ms', 0) / 1000
             frames = encoder(bands_from_gains([(b - 20) / 2 for b in bands]),
                              **options)
+            feature_size = self.device_config.hardware_eq_feature_report_size
             for index, frame in enumerate(frames):
                 if index and frame_delay:
                     time.sleep(frame_delay)
-                self.send_command(frame, endpoint)
+                if feature_size:
+                    self.send_feature_report(frame, feature_size)
+                else:
+                    self.send_command(frame, endpoint)
             self._select_custom_eq_preset(endpoint)
             return True
 
@@ -4225,6 +4229,56 @@ class CoreEngine:
             return False
         return True
 
+    def send_feature_report(self, frame: list[int], size: int) -> bool:
+        """SET_REPORT a whole HIDFEATURE chunk on the command interface.
+
+        For what GG sends as `(chunk HIDFEATURE <size> ...)` rather than as
+        command frames — the Nova Elite's EQ goes out as one 1036-byte chunk.
+        frame[0] is the report id: a numbered feature report carries it as
+        its first data byte and in the wValue low byte. Paced and locked like
+        send_command(). Returns False when the write failed.
+        """
+        if self.usb_device is None or self.device_config is None:
+            return False
+        data = (list(frame) + [0] * size)[:size]
+        bmRequestType = usb.util.build_request_type(
+            direction=usb.util.CTRL_OUT,
+            type=usb.util.CTRL_TYPE_CLASS,
+            recipient=usb.util.CTRL_RECIPIENT_INTERFACE)
+        pace = (self.device_config.time_between_commands_ms or 0) / 1000
+        try:
+            with self._usb_write_lock:
+                if pace:
+                    wait = self._last_usb_write_monotonic + pace - time.monotonic()
+                    if wait > 0:
+                        time.sleep(wait)
+                self._last_usb_write_monotonic = time.monotonic()
+                self.usb_device.ctrl_transfer(
+                    bmRequestType, 0x09, (0x03 << 8) | (data[0] & 0xFF),
+                    self._command_interface_number(), data)
+        except usb.core.USBError as e:
+            self.logger.warning("Error sending feature report 0x%02x: %s",
+                                data[1] if len(data) > 1 else 0, e)
+            return False
+        return True
+
+    def get_feature_report(self, report_id: int, size: int) -> list[int] | None:
+        """GET_REPORT a feature report from the command interface, or None."""
+        if self.usb_device is None:
+            return None
+        bmRequestType = usb.util.build_request_type(
+            direction=usb.util.CTRL_IN,
+            type=usb.util.CTRL_TYPE_CLASS,
+            recipient=usb.util.CTRL_RECIPIENT_INTERFACE)
+        try:
+            with self._usb_write_lock:
+                return list(self.usb_device.ctrl_transfer(
+                    bmRequestType, 0x01, (0x03 << 8) | (report_id & 0xFF),
+                    self._command_interface_number(), size, timeout=1000))
+        except usb.core.USBError as e:
+            self.logger.warning("Error reading feature report 0x%02x: %s", report_id, e)
+            return None
+
     def _find_hid_device(self, vendor_id: int, product_ids: list[int]) -> 'TypedDevice | None':
         """Find the first USB device matching vendor_id/product_ids that exposes an HID interface."""
         USB_CLASS_HID = 3
@@ -4559,6 +4613,8 @@ class CoreEngine:
         """
         if self.device_config is None:
             return {'ok': False, 'error': 'no_device'}
+        if self.device_config.hardware_eq_feature_readback is not None:
+            return await self._read_hardware_eq_feature()
         if not self.has_hardware_eq_readback():
             return {'ok': False, 'error': 'unsupported'}
 
@@ -4619,6 +4675,40 @@ class CoreEngine:
                 result['name'] = None
                 result['name_error'] = f'decode_error: {e}'
 
+        return result
+
+    async def _read_hardware_eq_feature(self) -> dict:
+        """read_hardware_eq() for the Nova Elite: GG's HIDOUTPUTFEATUREIN.
+
+        The query (report id, 0x1A) goes out as an output report on the
+        command endpoint, the answer is read as a feature report. Same result
+        shape as the 0x32/0xA6 families, raw hex included: this reply has not
+        been seen from real hardware yet.
+        """
+        from arctis_sound_manager.hardware_eq import decode_elite_eq_settings
+
+        config = self.device_config
+        report_id = config.hardware_eq_options.get('report_id', 0x01)
+        if not self.send_command([report_id, config.hardware_eq_feature_readback],
+                                 self.get_command_endpoint_address()):
+            return {'ok': False, 'error': 'usb_write_error'}
+        await asyncio.sleep(0.2)
+        reply = self.get_feature_report(report_id, config.hardware_eq_feature_report_size)
+        if reply is None:
+            return {'ok': True, 'bands': None, 'bands_error': 'no_reply'}
+        result: dict = {'ok': True,
+                        'bands_raw': ' '.join(f'{b & 0xFF:02x}' for b in reply[:200])}
+        try:
+            decoded = decode_elite_eq_settings(reply)
+        except ValueError as e:
+            result['bands'] = None
+            result['bands_error'] = f'decode_error: {e}'
+            return result
+        result['name'] = decoded['name']
+        result['preset_type'] = decoded['slot']
+        result['bands'] = [{'frequency': b.frequency, 'gain_db': b.gain_db,
+                            'q': b.q, 'filter_type': b.filter_type}
+                           for b in decoded['bands']]
         return result
 
     def _schedule_usb_permission_retry(self) -> None:

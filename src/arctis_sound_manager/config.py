@@ -325,6 +325,10 @@ class DeviceConfiguration:
     # profile declares `hardware_eq.readback`, which only happens for
     # families whose spec was checked directly for these opcodes.
     hardware_eq_readback: HardwareEqReadback | None
+    # Size of the HIDFEATURE chunk the curve goes out in (0 = command frames)
+    # and the opcode reading it back as a feature report (Nova Elite).
+    hardware_eq_feature_report_size: int
+    hardware_eq_feature_readback: int | None
     # Opt-in escalation for issue #238: force a USB reset on system resume
     # instead of relying on the generic post-resume status probe. Only the
     # Nova Pro Omni declares this — see resume_from_sleep() in core.py.
@@ -460,9 +464,19 @@ class DeviceConfiguration:
         self.hardware_eq_format = hardware_eq.get('format', None)
         self.hardware_eq_options = {
             key: int(value) for key, value in hardware_eq.items()
-            if (key.endswith('_command') or key == 'frame_delay_ms')
+            if (key.endswith('_command') or key in ('frame_delay_ms', 'report_id'))
             and value is not None
         }
+        # Families whose curve goes out as one HIDFEATURE chunk instead of
+        # 64-byte command frames (the Nova Elite: 1036 bytes). 0 = the usual
+        # send_command() path.
+        self.hardware_eq_feature_report_size = int(
+            hardware_eq.get('feature_report_size', 0) or 0)
+        # Nova Elite read_radio_eq_settings (0x1A): asked with an output
+        # report, answered as a feature report (GG's HIDOUTPUTFEATUREIN).
+        feature_readback = hardware_eq.get('feature_readback', None)
+        self.hardware_eq_feature_readback = (
+            int(feature_readback) if feature_readback is not None else None)
         if 'bands_carry_connection' in hardware_eq:
             self.hardware_eq_options['bands_carry_connection'] = bool(
                 hardware_eq['bands_carry_connection'])

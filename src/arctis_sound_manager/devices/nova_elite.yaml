@@ -285,6 +285,19 @@ device:
   # inference, not something macrooli tested. 0x2249 (ASM's own secondary-HID
   # addition, not in the ggoled report at all) is unconfirmed either way.
   # See docs/HARDWARE-QUESTIONS.md.
+  # On-device parametric EQ, 2.4 GHz curve (parametric_eq, opcode 0x1B, in
+  # base_arctis_nova_elite_tx.device). One HIDFEATURE chunk of 1036 bytes —
+  # report id, 0x1B, onboard slot, alias, name, ten bands — that both stores
+  # and selects the curve; the spec has no separate select opcode, so no
+  # preset_select here. Read back with read_radio_eq_settings (0x1A), asked
+  # as an output report and answered as a feature report. Transcribed from
+  # the spec, not yet confirmed on a real Elite.
+  hardware_eq:
+    format: elite_parametric
+    eq_command: 0x1b
+    report_id: 0x01
+    feature_report_size: 1036
+    feature_readback: 0x1a
   oled:
     interface: 3
     report_id: 0x01

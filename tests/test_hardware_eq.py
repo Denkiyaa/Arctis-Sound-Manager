@@ -64,6 +64,13 @@ PARAMETRIC_PROFILES = {
 }
 
 
+# Profiles whose curve goes out as one HIDFEATURE chunk instead of command
+# frames. profile → (opcode at frame[1], chunk size)
+FEATURE_REPORT_PROFILES = {
+    "nova_elite.yaml": (0x1B, 1036),
+}
+
+
 def _config(name: str) -> DeviceConfiguration:
     return DeviceConfiguration(YAML(typ="safe").load(DEVICES / name))
 
@@ -147,6 +154,7 @@ def test_parametric_families_do_not_grow_a_preset_frame(profile):
 @pytest.mark.parametrize("profile", [
     p.name for p in sorted(DEVICES.glob("*.yaml"))
     if p.name not in EXPECTED_EQ_COMMANDS and p.name not in PARAMETRIC_PROFILES
+    and p.name not in FEATURE_REPORT_PROFILES
 ])
 def test_other_profiles_send_nothing(profile):
     """No command at all beats a command the headset cannot understand."""
@@ -305,3 +313,20 @@ def test_dbus_reports_parametric_families_as_having_an_eq():
         service.core_engine = engine
         assert ArctisManagerDbusSettingsService.get_list_options is not None
         assert engine.has_hardware_eq() is True, f"{profile} would hide its EQ"
+
+
+@pytest.mark.parametrize("profile,expected", sorted(FEATURE_REPORT_PROFILES.items()))
+def test_feature_report_profiles_send_one_chunk(profile, expected):
+    """The Nova Elite: one 1036-byte feature report, no command frame, and no
+    0x2E-style select — the 0x1B write is what selects the slot."""
+    opcode, size = expected
+    config = _config(profile)
+    engine = _engine(config)
+
+    assert engine.send_eq_command([20] * 10) is True
+    assert engine.has_hardware_eq() is True
+    engine.send_command.assert_not_called()
+    (frame, sent_size), _ = engine.send_feature_report.call_args
+    assert frame[:3] == [0x01, opcode, 0x04]   # report id, opcode, Custom slot
+    assert sent_size == size
+    assert config.hardware_eq_preset_select is None
