@@ -72,6 +72,7 @@ class _NoWheelSlider(QSlider):
     """QSlider that ignores wheel events so the parent QScrollArea can scroll."""
     def wheelEvent(self, event):
         event.ignore()
+from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
 from arctis_sound_manager.gui.qt_widgets.q_toggle import QToggle
 from arctis_sound_manager.system_deps_checker import _find_ladspa_plugin
 import arctis_sound_manager.gui.theme as _theme
@@ -2731,7 +2732,7 @@ class _NoiseCancelingCard(QWidget):
         eng_lbl = QLabel(_t("nc_engine"))
         eng_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 9pt;")
         engine_row.addWidget(eng_lbl)
-        self._engine_combo = QComboBox()
+        self._engine_combo = NoWheelComboBox()
         for key, label in self._ENGINES:
             self._engine_combo.addItem(label, key)
         _idx = self._engine_combo.findData(self._engine)

@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 import arctis_sound_manager.gui.theme as _theme
+from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
 from arctis_sound_manager.gui.qt_widgets.q_toggle import QToggle
 from arctis_sound_manager.i18n import I18n
 
@@ -72,7 +73,7 @@ _THUMB_THREADS = 2
 # so this page still builds its controls on a machine with no GStreamer — the
 # rule the module docstring sets out. test_clip_rate keeps the two in step.
 _FPS_CHOICES = (15, 30, 60)
-_DEFAULT_FPS = 30
+_DEFAULT_FPS = 60
 
 
 # How often the page asks whether a game is playing, and how long a game has to
@@ -88,16 +89,22 @@ _GAME_GONE_GRACE_S = 45.0
 _VIDEO_STALL_S = 10.0
 
 
-def _saved_fps() -> int:
-    """The remembered frame-rate ceiling, or the default when none is saved
-    or the saved one is not on offer any more."""
+def _chosen_fps() -> int | None:
+    """The frame-rate ceiling picked by hand, or None when none was — or the
+    one saved is not on offer any more. None lets the capture choose by
+    encoder (clip_capture.DEFAULT_FPS)."""
     try:
         from arctis_sound_manager.settings import GeneralSettings
         value = int(GeneralSettings.read_from_file().clips_fps or 0)
     except Exception:  # noqa: BLE001 — a broken settings file is not worth the page
         logger.debug("could not read clips_fps, using the default", exc_info=True)
-        return _DEFAULT_FPS
-    return value if value in _FPS_CHOICES else _DEFAULT_FPS
+        return None
+    return value if value in _FPS_CHOICES else None
+
+
+def _saved_fps() -> int:
+    """The ceiling to show selected: the chosen one, else the default."""
+    return _chosen_fps() or _DEFAULT_FPS
 
 
 def _autostart_enabled() -> bool:
@@ -477,7 +484,7 @@ class ClipsPage(QWidget):
         # capture rebuilds the capture (and empties the buffer) — the same
         # trade the source picker makes, and better than a control that is
         # greyed out for as long as autostart keeps the capture running.
-        self._fps = QComboBox()
+        self._fps = NoWheelComboBox()
         for value in _FPS_CHOICES:
             self._fps.addItem(f"{value} fps", value)
         self._fps.setCurrentIndex(max(0, _FPS_CHOICES.index(_saved_fps())))
@@ -498,7 +505,7 @@ class ClipsPage(QWidget):
         # window narrows the portal to windows only, which is the only way to
         # keep a panel or an overlay out of a clip when the game is not
         # covering the screen — the app cannot crop what it was handed.
-        self._source_kind = QComboBox()
+        self._source_kind = NoWheelComboBox()
         self._source_kind.addItem(_tr("clips_source_screen", "Whole screen"), False)
         self._source_kind.addItem(_tr("clips_source_window", "A single window"), True)
         self._source_kind.setCurrentIndex(1 if _capture_window_enabled() else 0)
@@ -788,7 +795,10 @@ class ClipsPage(QWidget):
         self._status.setText(_tr("clips_starting", "Starting capture…"))
         try:
             capture = ClipCapture(history_s=max(90.0, self._seconds.value() * 2.0),
-                                  fps=int(self._fps.currentData() or _DEFAULT_FPS),
+                                  # Not the combo's value: until a rate is
+                                  # picked by hand (which saves it) the
+                                  # capture chooses by encoder.
+                                  fps=_chosen_fps(),
                                   window=bool(self._source_kind.currentData()),
                                   game=self._last_detected_game)
             capture.start()
@@ -1083,9 +1093,7 @@ class ClipsPage(QWidget):
             logger.info("screencast ended with no game running — stopping the capture")
             self._stop_capture()
             return
-        logger.warning("no video for %.0fs (portal last sent a frame %.0fs ago) — "
-                       "rebuilding the capture", stalled,
-                       getattr(capture, "source_stalled_s", 0.0))
+        logger.warning("no video for %.0fs — rebuilding the capture", stalled)
         try:
             capture.restart()
         except Exception as exc:  # noqa: BLE001
@@ -1609,14 +1617,7 @@ class ClipsPage(QWidget):
         fps = getattr(self._capture, "fps", 0.0)
         if fps:
             where = getattr(self._capture, "video_path_label", "")
-            source = getattr(self._capture, "source_fps", 0.0)
             text = f"{fps:.0f} fps" + (f" ({where})" if where else "")
-            # Both numbers, because a recorded 15 fps means opposite things
-            # depending on whether the compositor sent 15 or 60: the first is
-            # the screencast being slow, the second is this pipeline dropping.
-            if source and abs(source - fps) > max(2.0, fps * 0.15):
-                text += "  " + _tr("clips_source_fps", "screen: {n} fps").replace(
-                    "{n}", f"{source:.0f}")
             # The live rate is a few seconds wide; a clip averages over its whole
             # length, idle stretches included. Reported alone, the live number
             # promises a smoothness the saved file does not have — which is

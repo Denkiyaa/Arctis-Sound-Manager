@@ -42,7 +42,6 @@ import re
 import shutil
 import subprocess
 import time
-from collections import deque
 from pathlib import Path
 
 from arctis_sound_manager.clip_buffer import NANOSECONDS, ClipBuffer, Frame
@@ -135,21 +134,23 @@ def _is_not_a_game(name: str) -> bool:
 # sink when the Sonar EQ is off, its filter-chain input when it is on.
 _GAME_SINK_NAMES = ("Arctis_Game", "effect_input.sonar-game-eq")
 
-# How much recent history the live rate read-outs average over. Long enough to
-# be steady, short enough that a stall shows up while it is still happening.
-_RATE_WINDOW_S = 4.0
-
 # Capture rates offered, and the one used unless asked otherwise.
 #
-# 30 rather than 60: the portal stream only produces a frame when the screen
-# changes, so the ceiling is a ceiling and nothing more — asking for 60 does not
-# make a compositor send 60. What it does do is set the keyframe interval (gop
-# == fps) and the encoder's workload against a rate that is rarely reached,
-# which costs bitrate and CPU for frames that never arrive. 60 is kept for the
-# machines that genuinely sustain it, and 15 for the ones that would rather
-# spend nothing on the clip than record a smooth one.
+# 60 when the frames are encoded on the graphics card. The default was 30,
+# reasoned as "a ceiling the compositor rarely reaches" — but it was reached,
+# and under it a game running between 30 and 60 came out at 17-22 fps with
+# frames held for 100 ms at a time, while the editor can always bring a clip
+# down at export and can never bring one up. On a GPU encoder the higher
+# ceiling costs next to nothing; the bitrate is fixed, so neither do the
+# buffer or the file grow.
+#
+# 30 on the CPU encoders (x264, openh264), where every frame is real work at
+# 1440p and a game is already competing for the same cores. Either default
+# applies only until a rate is chosen by hand.
 FPS_CHOICES = (15, 30, 60)
-DEFAULT_FPS = 30
+DEFAULT_FPS = 60
+CPU_DEFAULT_FPS = 30
+_GPU_ENCODERS = frozenset({"nvh264enc", "vah264enc", "vah264lpenc"})
 
 SONAR_MONITORS = [
     ("game", "Arctis_Game.monitor"),
@@ -1038,6 +1039,33 @@ def convert_chain(needs_gl: bool, max_fps: int) -> list[str]:
     ]
 
 
+def video_branch(source: str, convert: str, encoder: str) -> list[str]:
+    """The video half of the capture pipeline, source to appsink.
+
+    No videorate. The ceiling already rides on `convert` as max-framerate, and
+    the compositor honours it at the source (measured: 58.7, 29.9 and 15.8 fps
+    for ceilings of 60, 30 and 15). videorate on top of that only did harm:
+    KWin stamps frames on its own vblank grid — 4.17 ms steps on a 240 Hz
+    screen — so a 60 fps game arrives as a mix of 12.5 and 16.7 ms gaps, and
+    `max-rate=60 drop-only=true` threw away every frame that came in early.
+    Against a game running at 60 the capture kept 36 fps with videorate and
+    58.9 without, and in the GUI, where the encoder thread also waits on
+    Python, that came out as 22–28 fps clips.
+    """
+    return [
+        source,
+        f"! {convert} ! {encoder}",
+        "! h264parse config-interval=-1",
+        # Pin the byte format here. appsink accepts anything, so h264parse
+        # would settle on byte-stream — and matroskamux only takes avc, so the
+        # saved clip's appsrc then fails to negotiate and the file comes out
+        # empty. Deciding it at capture time means the caps we cache are
+        # already the ones the muxer will accept.
+        "! video/x-h264,stream-format=avc,alignment=au",
+        "! appsink name=video emit-signals=true sync=false max-buffers=0 drop=false",
+    ]
+
+
 def pick_encoder(Gst, gop: int, kbps: int) -> tuple[str, bool]:
     """Return (encoder description, needs_gl) for the best available encoder."""
     for element, props, needs_gl in ENCODERS:
@@ -1047,19 +1075,28 @@ def pick_encoder(Gst, gop: int, kbps: int) -> tuple[str, bool]:
         "No usable H.264 encoder (looked for nvh264enc, vah264enc, x264enc).")
 
 
+def default_fps(Gst) -> int:
+    """The ceiling to record at when none was chosen — see DEFAULT_FPS."""
+    for element, _props, _needs_gl in ENCODERS:
+        if Gst.ElementFactory.find(element):
+            return DEFAULT_FPS if element in _GPU_ENCODERS else CPU_DEFAULT_FPS
+    return CPU_DEFAULT_FPS
+
+
 class ClipCapture:
     """Runs the capture and answers save_clip() from the rolling buffer."""
 
-    def __init__(self, history_s: float = 90.0, fps: int = DEFAULT_FPS,
+    def __init__(self, history_s: float = 90.0, fps: int | None = None,
                  bitrate_kbps: int = 20000, window: bool = False,
                  game: str | None = None):
         self._Gio, self._GLib, self._Gst = _require_gst()
         self._Gst.init(None)
 
-        # The ceiling handed to videorate — not the rate being achieved. What
+        # The ceiling asked of the screencast — not the rate being achieved. What
         # capture is actually managing is measured from the buffer and read off
-        # the `fps` property below.
-        self.max_fps = fps
+        # the `fps` property below. None means nobody chose one, and the
+        # encoder decides (see DEFAULT_FPS).
+        self.max_fps = fps or default_fps(self._Gst)
         # What the last saved clip actually measured, so a save can report the
         # number that ended up in the file rather than leaving it to be
         # discovered in a player. See `fps` for why the two differ.
@@ -1078,10 +1115,6 @@ class ClipCapture:
         self._convert_chain: list[str] = []
         self._convert_index = 0
         self._started_at = 0.0
-        # Arrival times of the last few seconds of portal frames — see
-        # _watch_source_rate(). A deque with a maxlen cannot be used: the window
-        # is a duration, not a count, and the count is what is being measured.
-        self._source_stamps: deque[float] = deque()
         # When the last encoded video frame reached the buffer — see
         # video_stalled_s. None until the first one arrives.
         self._last_video_at: float | None = None
@@ -1093,8 +1126,6 @@ class ClipCapture:
 
     def start(self) -> None:
         Gst = self._Gst
-        # Stamps from a previous pipeline would read as an instant stall.
-        self._source_stamps = deque()
         self._last_video_at = None
         self.stream_lost = False
 
@@ -1169,21 +1200,11 @@ class ClipCapture:
         # The rate is capped, not fixed, so a busy scene cannot run the encoder
         # past what it can sustain. Clip lengths stay correct regardless: the
         # buffer measures time from buffer timestamps, never from a frame count.
-        parts = [
+        parts = video_branch(
             self._x11_source or (
                 f"pipewiresrc name=screen fd={fd} path={node_id} "
                 f"do-timestamp=true keepalive-time=1000"),
-            f"! videorate max-rate={self.max_fps} drop-only=true",
-            f"! {convert} ! {encoder}",
-            "! h264parse config-interval=-1",
-            # Pin the byte format here. appsink accepts anything, so h264parse
-            # would settle on byte-stream — and matroskamux only takes avc, so
-            # the saved clip's appsrc then fails to negotiate and the file
-            # comes out empty. Deciding it at capture time means the caps we
-            # cache are already the ones the muxer will accept.
-            "! video/x-h264,stream-format=avc,alignment=au",
-            "! appsink name=video emit-signals=true sync=false max-buffers=0 drop=false",
-        ]
+            convert, encoder)
         for name, source in self.audio_tracks:
             parts.append(
                 f"pulsesrc device={source} provide-clock=false "
@@ -1198,8 +1219,24 @@ class ClipCapture:
         log.info("video path: %s | encoder: %s", convert.split(" !")[0], encoder.split()[0])
         log.debug("capture pipeline: %s", desc)
         self.pipeline = Gst.parse_launch(desc)
-
-        self._watch_source_rate()
+        # The system clock, not the one pipewiresrc offers. Left to choose,
+        # the pipeline takes the PipeWire clock, and with the pulsesrc branches
+        # slaved to it the screencast lost frames in bursts: three runs of the
+        # same capture against a game at 60 kept 34, 53 and 58 fps, with gaps
+        # of exactly four frames. On the system clock it held 58+ every time.
+        # Nothing here needs the graph's clock — every branch is timestamped on
+        # arrival and the sinks do not sync.
+        self.pipeline.use_clock(Gst.SystemClock.obtain())
+        # No Python on the raw frame path. There used to be a pad probe on
+        # pipewiresrc counting frames as they left the portal; it ran in the
+        # source's own streaming thread and so needed the GIL once per frame.
+        # Inside the GUI the GIL is often held for tens of milliseconds at a
+        # time, and while the source thread waited for it KWin found no free
+        # buffer and skipped frames: a game at 60 recorded at 34 fps in the
+        # GUI and 58 from a bare process. With a 47 ms GIL hog standing in for
+        # the GUI the same capture kept 40 fps with the probe and 58.5
+        # without. The appsink callbacks, downstream of the encoder, made no
+        # measurable difference.
 
         self.buffer.add_video("video")
         self._wire_sink("video", "video")
@@ -1476,47 +1513,6 @@ class ClipCapture:
             return 0.0
         return (len(video.frames) - 1) * NANOSECONDS / span_ns
 
-    def _watch_source_rate(self) -> None:
-        """Count frames as they leave the portal, before anything of ours.
-
-        A clip recorded at 15 fps has two completely different explanations —
-        the compositor is only producing 15 (fullscreen games on some
-        compositors starve the screencast), or our own branch is dropping them
-        — and they need opposite fixes. Measuring at the source settles it
-        instead of leaving the number to be argued about.
-        """
-        Gst = self._Gst
-        source = self.pipeline.get_by_name("screen") if self.pipeline else None
-        pad = source.get_static_pad("src") if source is not None else None
-        if pad is None:                              # pragma: no cover - env dependent
-            log.debug("no pipewiresrc pad to measure the source rate on")
-            return
-
-        def on_buffer(_pad, _info):
-            now = time.monotonic()
-            stamps = self._source_stamps
-            stamps.append(now)
-            # A rolling window: an average over the whole session would hide a
-            # stall, which is the thing worth seeing while it happens.
-            while stamps and now - stamps[0] > _RATE_WINDOW_S:
-                stamps.popleft()
-            return Gst.PadProbeReturn.OK
-
-        pad.add_probe(Gst.PadProbeType.BUFFER, on_buffer)
-
-    @property
-    def source_fps(self) -> float:
-        """Frames per second the compositor is handing out, before our pipeline.
-
-        Compare with :attr:`fps`: equal means the screencast itself is slow;
-        higher means the frames are being lost on our side.
-        """
-        stamps = self._source_stamps
-        if len(stamps) < 2:
-            return 0.0
-        span = stamps[-1] - stamps[0]
-        return (len(stamps) - 1) / span if span > 0 else 0.0
-
     @property
     def video_stalled_s(self) -> float:
         """Seconds since the last encoded video frame, or 0.0 before the first.
@@ -1531,17 +1527,6 @@ class ClipCapture:
         if self._last_video_at is None or self.pipeline is None:
             return 0.0
         return time.monotonic() - self._last_video_at
-
-    @property
-    def source_stalled_s(self) -> float:
-        """Seconds since the portal last handed out a frame, or 0.0 if unknown.
-
-        Read next to :attr:`video_stalled_s` when a stall is logged: the portal
-        still sending means our encoder branch wedged; both silent means the
-        compositor stopped the stream.
-        """
-        stamps = self._source_stamps
-        return time.monotonic() - stamps[-1] if stamps else 0.0
 
     @property
     def video_path_label(self) -> str:

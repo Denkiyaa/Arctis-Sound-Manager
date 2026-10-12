@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 
 from arctis_sound_manager.eq_types import EqBand, PW_LABEL  # noqa: F401 — re-exported for back-compat
 import arctis_sound_manager.gui.theme as theme
+from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
 # NOTE: ACCENT/BG_CARD/etc. frozen constants are NOT imported here for painting —
 # use theme.c() so colors update when the active theme changes.
 
@@ -544,7 +545,7 @@ class _BandInspector(QWidget):
         self._status.setStyleSheet(f"font-size: 10pt; color: {theme.c('TEXT_PRIMARY')};")
         header.addWidget(self._status)
 
-        self._type_combo = QComboBox()
+        self._type_combo = NoWheelComboBox()
         for t in FILTER_TYPES:
             self._type_combo.addItem(FILTER_LABELS[t], t)
         self._type_combo.setFixedWidth(112)

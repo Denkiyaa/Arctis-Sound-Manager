@@ -27,7 +27,6 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QGridLayout,
     QHBoxLayout,
@@ -42,7 +41,7 @@ import arctis_sound_manager.gui.theme as _theme
 from arctis_sound_manager.clip_export import (FPS_CHOICES, SHARE_SUFFIX,
                                              ExportPlan, TrackMix, duration_s,
                                              export, probe_tracks,
-                                             silent_tracks, split_tracks,
+                                             recorded_fps, silent_tracks, split_tracks,
                                              video_bitrate_kbps)
 from arctis_sound_manager.clip_library import (export_destination, read_mix,
                                                read_trim, share_dir, write_mix,
@@ -64,14 +63,71 @@ SIZE_CHOICES: list[tuple[str, float | None]] = [
     ("100 MB", 100.0),
 ]
 
-# Frame rates offered at export. "As recorded" is the default because it is the
-# only choice that costs nothing: the screencast is variable-rate, so picking a
-# number here re-encodes the clip to hold that rate exactly. Worth it when a
-# clip plays back unevenly somewhere it is being shared; not worth it by
-# default.
-FPS_LABELS: list[tuple[str, int | None]] = [
-    ("As recorded", None), *((f"{n} fps", n) for n in FPS_CHOICES),
-]
+def fps_options(recorded: float | None) -> list[tuple[str, int | None]]:
+    """Frame rates offered at export, as (label, value), in rising order.
+
+    The clip's own rate is the default and carries None: it is the only
+    choice that costs nothing, since the screencast is variable-rate and
+    picking a number re-encodes the clip to hold that rate exactly. It is
+    shown as its number — "As recorded" said nothing about whether 30 was a
+    step up or down — and marked as the original, since a bare "17 fps"
+    among 15, 30 and 60 read as a typo for 15. A fixed rate that rounds to
+    the same number is the same choice made expensive and is left out.
+    """
+    if recorded is None:
+        return [(_tr("clip_fps_source", "As recorded"), None),
+                *((f"{n} fps", n) for n in FPS_CHOICES)]
+    original = _tr("clip_fps_original", "{n} fps (original)").replace(
+        "{n}", f"{recorded:.0f}")
+    options: list[tuple[float, str, int | None]] = [(recorded, original, None)]
+    options += [(n, f"{n} fps", n) for n in FPS_CHOICES if round(recorded) != n]
+    return [(label, value) for _, label, value in sorted(options, key=lambda o: o[0])]
+
+
+class _Choices(QWidget):
+    """A row of mutually exclusive buttons, all visible at once.
+
+    The size and frame-rate pickers were combo boxes, which hide every option
+    but the one chosen — easy to miss that there was a choice at all. The
+    option whose value is None (Original, the recorded rate) starts checked.
+    """
+
+    changed = Signal()
+
+    def __init__(self, options: list[tuple[str, object]], parent=None):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QButtonGroup
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._values: list[object] = []
+        for index, (label, value) in enumerate(options):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFixedHeight(26)
+            button.setStyleSheet(
+                f"QPushButton {{ background: {_theme.c('BG_BUTTON')}; border: none; "
+                f"border-radius: 4px; padding: 2px 10px; font-size: 9pt; "
+                f"color: {_theme.c('TEXT_SECONDARY')}; }}"
+                f"QPushButton:hover {{ background: {_theme.c('BG_BUTTON_HOVER')}; "
+                f"color: {_theme.c('TEXT_PRIMARY')}; }}"
+                f"QPushButton:checked {{ background: {_theme.c('ACCENT')}; "
+                f"color: {_theme.c('TEXT_PRIMARY')}; font-weight: 600; }}")
+            self._group.addButton(button, index)
+            self._values.append(value)
+            row.addWidget(button)
+        default = self._values.index(None) if None in self._values else 0
+        if self._values:
+            self._group.button(default).setChecked(True)
+        self._group.idToggled.connect(lambda _id, on: on and self.changed.emit())
+
+    def currentData(self):
+        index = self._group.checkedId()
+        return self._values[index] if 0 <= index < len(self._values) else None
 
 # How far a channel may drift from the video before it is pulled back into
 # line. Each channel is its own decoder with its own clock, so they wander
@@ -148,9 +204,14 @@ class _TrackPrepWorker(QThread):
     one thread and one pass. Neither is allowed to hold the dialog closed: the
     split is a demux and takes milliseconds, but the level scan decodes each
     channel, and the editor is perfectly usable while the answer is on its way.
+
+    The two answers go out separately. They used to arrive together, so the
+    channels only came online once the scan had decoded every one of them —
+    seconds on a long clip — and a play pressed before then was silent.
     """
 
-    done = Signal(list, list)       # ([per-channel file], [is_silent])
+    split = Signal(list)            # [per-channel file]
+    scanned = Signal(list)          # [is_silent]
 
     def __init__(self, path: Path, count: int, workdir: Path, parent=None):
         super().__init__(parent)
@@ -165,11 +226,12 @@ class _TrackPrepWorker(QThread):
             files = split_tracks(self._path, self._count, self._workdir)
         except Exception:
             logger.debug("could not split the clip's channels", exc_info=True)
+        self.split.emit(files)
         try:
             flags = silent_tracks(self._path, self._count)
         except Exception:
             logger.debug("could not measure channel levels", exc_info=True)
-        self.done.emit(files, flags)
+        self.scanned.emit(flags)
 
 
 def preview_output_device():
@@ -215,6 +277,7 @@ class _ChannelMixer:
         self._players: list = []
         self._outputs: list = []
         self._positions: list[int] = []
+        self._playing = False
 
     @property
     def ready(self) -> bool:
@@ -256,14 +319,17 @@ class _ChannelMixer:
         for player in self._players:
             player.setPosition(ms)
             player.play()
+        self._playing = True
 
     def pause(self) -> None:
         for player in self._players:
             player.pause()
+        self._playing = False
 
     def stop(self) -> None:
         for player in self._players:
             player.stop()
+        self._playing = False
 
     def resync(self, ms: int) -> None:
         """Pull back any channel that has wandered away from the video.
@@ -275,7 +341,13 @@ class _ChannelMixer:
         underneath (a Bluetooth sink in error, a channel sink being rebuilt)
         that thread never answers and the whole GUI hangs on it. Reading the
         cached value costs nothing and only seeks when a channel has drifted.
+
+        Paused channels are left alone: they are not following the video, so
+        every one of them looks drifted, and seeking them on every tick only
+        loads the decoders the picture is competing with.
         """
+        if not self._playing:
+            return
         for index, player in enumerate(self._players):
             if abs(self._positions[index] - ms) > _SYNC_TOLERANCE_MS:
                 player.setPosition(ms)
@@ -296,6 +368,7 @@ class _ChannelMixer:
         self._players.clear()
         self._outputs.clear()
         self._positions.clear()
+        self._playing = False
 
 
 # ── channel strips ────────────────────────────────────────────────────────────
@@ -753,14 +826,21 @@ class ClipEditor(QDialog):
     def _start_track_prep(self, count: int) -> None:
         """Split the channels out and scan their levels, off the UI thread."""
         self._prep_worker = _TrackPrepWorker(self._path, count, self._workdir, self)
-        self._prep_worker.done.connect(self._on_tracks_prepared)
+        self._prep_worker.split.connect(self._on_tracks_split)
+        self._prep_worker.scanned.connect(self._on_tracks_scanned)
         self._prep_worker.start()
 
-    def _on_tracks_prepared(self, files: list, flags: list) -> None:
-        """Bring the channels online and say which of them are empty."""
+    def _on_tracks_split(self, files: list) -> None:
+        """Bring the channels online."""
         if files and self._mixer.load([Path(f) for f in files]):
             self._on_levels_changed()
-            if (band := getattr(self, "_band", None)) is not None:
+            if self._is_playing():
+                # Play was pressed before the channels existed. Left paused,
+                # they stayed silent until the next play — and resync kept
+                # seeking them after a video they were not following, which
+                # is what made that first playback stutter.
+                self._mixer.play(self._position)
+            elif (band := getattr(self, "_band", None)) is not None:
                 self._mixer.seek(int(band.start_s * 1000))
         else:
             # The channels could not be split, so there is no mixer — and the
@@ -782,6 +862,8 @@ class ClipEditor(QDialog):
                               "only affect the export.")
             self._status.setText("⚠ " + message)
 
+    def _on_tracks_scanned(self, flags: list) -> None:
+        """Say which channels are empty."""
         audible = False
         for index, is_silent in enumerate(flags):
             if index < len(self._silent_labels):
@@ -797,29 +879,37 @@ class ClipEditor(QDialog):
 
     # ── export ────────────────────────────────────────────────────────────────
 
-    def _build_export_row(self) -> QHBoxLayout:
+    def _build_export_row(self) -> QVBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(8)
 
-        row.addWidget(QLabel(_tr("clip_size", "Share size:")))
-        self._size = QComboBox()
-        for label, mb in SIZE_CHOICES:
-            self._size.addItem(label, mb)
-        self._size.currentIndexChanged.connect(self._update_estimate)
-        row.addWidget(self._size)
+        # The choices are their own row, the actions the row under it: side by
+        # side with the buttons, nine segments and two actions did not fit the
+        # dialog's minimum width.
+        choices = QHBoxLayout()
+        choices.setSpacing(8)
 
-        row.addWidget(QLabel(_tr("clip_fps", "Frame rate:")))
-        self._fps = QComboBox()
-        for label, value in FPS_LABELS:
-            self._fps.addItem(_tr(f"clip_fps_{value or 'source'}", label), value)
+        choices.addWidget(QLabel(_tr("clip_size", "Share size:")))
+        self._size = _Choices(SIZE_CHOICES)
+        self._size.changed.connect(self._update_estimate)
+        choices.addWidget(self._size)
+        choices.addSpacing(16)
+
+        choices.addWidget(QLabel(_tr("clip_fps", "Frame rate:")))
+        self._fps = _Choices(fps_options(recorded_fps(self._path, self._duration)))
         self._fps.setToolTip(_tr(
             "clip_fps_hint",
             "The screen is captured whenever it changes, so a recording holds "
             "whatever rate it managed. Choosing one here re-encodes the clip to "
             "hold it exactly — use it if a clip plays back unevenly."))
-        self._fps.currentIndexChanged.connect(self._update_estimate)
-        row.addWidget(self._fps)
+        self._fps.changed.connect(self._update_estimate)
+        choices.addWidget(self._fps)
+        choices.addStretch(1)
 
+        outer = QVBoxLayout()
+        outer.setSpacing(8)
+        outer.addLayout(choices)
+        outer.addLayout(row)
         row.addStretch(1)
 
         self._open_btn = QPushButton(_tr("clip_open_player", "Open in player"))
@@ -833,7 +923,7 @@ class ClipEditor(QDialog):
         self._export_btn.setDefault(True)
         self._export_btn.clicked.connect(self._on_export)
         row.addWidget(self._export_btn)
-        return row
+        return outer
 
     def _update_estimate(self) -> None:
         """Say up front whether the chosen size can hold the chosen trim.

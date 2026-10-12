@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtGui import QColor
 
+from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
 from arctis_sound_manager.gui.theme import (
     get_theme, get_theme_label, all_theme_labels, save_user_theme,
     set_preview_colors, THEME_GROUPS, COLOR_LABEL_KEYS, THEME_KEYS,
@@ -165,7 +166,7 @@ class ThemeEditorPage(QWidget):
         self._dup_label.setFixedWidth(160)
         dup_row.addWidget(self._dup_label)
 
-        self._dup_combo = QComboBox()
+        self._dup_combo = NoWheelComboBox()
         self._dup_combo.setStyleSheet(
             f"""
             QComboBox {{

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from arctis_sound_manager.gui.anc_widget import QAncWidget
+from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
 from arctis_sound_manager.gui.qt_widgets.q_dual_state import QDualState
 from arctis_sound_manager.i18n import I18n
 from arctis_sound_manager.gui.components import (
@@ -238,7 +239,7 @@ class DevicePage(QWidget):
         )
         lang_row.addWidget(lang_label)
 
-        self._lang_combo = QComboBox()
+        self._lang_combo = NoWheelComboBox()
         self._lang_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self._lang_combo.setFixedHeight(30)
         self._lang_combo.setStyleSheet(f"""
@@ -355,7 +356,7 @@ class DevicePage(QWidget):
 
         # Ligne 1 : combo thème
         theme_combo_row = QHBoxLayout()
-        self._theme_combo = QComboBox()
+        self._theme_combo = NoWheelComboBox()
         self._theme_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         theme_combo_row.addWidget(self._theme_combo)
         theme_combo_row.addStretch(1)

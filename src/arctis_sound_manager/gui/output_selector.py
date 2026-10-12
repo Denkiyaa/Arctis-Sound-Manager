@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 import arctis_sound_manager.gui.theme as _theme
+from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
 from arctis_sound_manager.i18n import I18n
 from arctis_sound_manager.output_memory import OutputMemory
 
@@ -88,7 +89,7 @@ class OutputSelector(QWidget):
             f"color: {_theme.c('TEXT_SECONDARY')}; background: transparent;")
         row.addWidget(self._label)
 
-        self._combo = QComboBox()
+        self._combo = NoWheelComboBox()
         self._combo.setMinimumWidth(240)
         self._combo.setCursor(Qt.CursorShape.PointingHandCursor)
         self._combo.activated.connect(self._on_picked)
