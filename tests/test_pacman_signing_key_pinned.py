@@ -55,10 +55,21 @@ def test_workflow_signs_with_its_own_secret_and_checks_the_key():
 def test_every_trust_path_lsigns_the_pinned_fingerprint(rel):
     text = (REPO / rel).read_text()
     fpr = _pinned_fingerprint()
-    lsigns = re.findall(r"--lsign-key\s+(\S+)", text)
+    lsigns = []
+    for line in text.splitlines():
+        m = re.search(r"--lsign-key\s+(\S+)", line)
+        if not m:
+            continue
+        target = m.group(1)
+        # A hint printed for the user (`printf '... --lsign-key %s\n' "$FPR"`)
+        # names the key through its printf argument, not in the format.
+        if target.startswith("%s"):
+            arg = re.search(r"'\s+(\S+)", line[m.start(1):])
+            target = arg.group(1) if arg else target
+        lsigns.append(target)
     assert lsigns, f"{rel} no longer lsigns the repository key"
     for target in lsigns:
-        target = target.strip("\"';")
+        target = target.strip("\"';>&2 ")
         assert target in (fpr, "$PACMAN_KEY_FINGERPRINT"), (
             f"{rel} lsigns {target!r}, not the pinned key {fpr}"
         )
