@@ -107,10 +107,15 @@ pacman_repo_install() {
     local key="/tmp/asm-repo.key"
 
     run curl -fsSL "$PACMAN_REPO/arctis-sound-manager.key" -o "$key"
-    if [ "$DRY_RUN" -eq 0 ] \
-       && ! gpg --show-keys --with-colons "$key" 2>/dev/null | grep -q "^fpr:*$PACMAN_KEY_FINGERPRINT:"; then
-        warn "The published repository key is not $PACMAN_KEY_FINGERPRINT — not trusting it. Please report this at $REPO_URL/issues."
-        return 1
+    if [ "$DRY_RUN" -eq 0 ]; then
+        # Captured first, not piped into grep -q: under pipefail, grep quitting
+        # at the first match can SIGPIPE gpg and fail a key that is fine.
+        local fprs
+        fprs=$(gpg --show-keys --with-colons "$key" 2>/dev/null | awk -F: '$1 == "fpr" { print $10 }') || true
+        if ! grep -qx "$PACMAN_KEY_FINGERPRINT" <<< "$fprs"; then
+            warn "The published repository key is not $PACMAN_KEY_FINGERPRINT (got: ${fprs:-unreadable}) — not trusting it. Please report this at $REPO_URL/issues."
+            return 1
+        fi
     fi
     run sudo pacman-key --add "$key"
     run sudo pacman-key --lsign-key "$PACMAN_KEY_FINGERPRINT"
@@ -139,7 +144,13 @@ aur_install() {
         printf '      cd paru-bin && makepkg -si\n'
         die "Then re-run this installer."
     fi
-    run "$helper" -S --needed "$PKG"
+    # Under `curl | bash` stdin is the script itself: the helper's review pager
+    # and prompts would read EOF and abort, so hand them the terminal.
+    if [ -r /dev/tty ]; then
+        run "$helper" -S --needed "$PKG" < /dev/tty
+    else
+        run "$helper" -S --needed "$PKG"
+    fi
 }
 
 copr_install() {
