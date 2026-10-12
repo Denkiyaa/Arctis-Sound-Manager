@@ -162,12 +162,24 @@ jobs:
 
       - name: Import signing key
         env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          PACMAN_GPG_PRIVATE_KEY: ${{ secrets.PACMAN_GPG_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
-          KEY_ID=$(gpg --list-secret-keys --keyid-format long \
-                   | awk '/^sec/ {print $2}' | cut -d/ -f2 | head -1)
+          # A secret of its own, and a pinned fingerprint, not `head -1` on a
+          # shared GPG_PRIVATE_KEY: the PPA needs the Launchpad key in that
+          # secret, and narrowing it to that one key (#270) silently put the
+          # repository back on the key retired in #239 — v1.6.0 shipped signed
+          # with it and nothing failed (#322). The same fingerprint is pinned
+          # in docs/install.sh, the distrobox scripts, update_checker.py and
+          # the README; tests/test_pacman_signing_key_pinned.py keeps them in
+          # step.
+          PACMAN_KEY_FINGERPRINT="76AA4ED4A738B4FF07E170A249F4994D14531BD4"
+          echo "$PACMAN_GPG_PRIVATE_KEY" | gpg --batch --import
+          if ! gpg --list-secret-keys "$PACMAN_KEY_FINGERPRINT" >/dev/null 2>&1; then
+            echo "::error::PACMAN_GPG_PRIVATE_KEY does not hold the repository signing key ($PACMAN_KEY_FINGERPRINT). Users trust that key only; signing with any other would break every pacman -Syu."
+            exit 1
+          fi
+          KEY_ID="$PACMAN_KEY_FINGERPRINT"
           echo "GPG_KEY_ID=$KEY_ID" >> "$GITHUB_ENV"
           # Published alongside the repository so users can verify it without
           # depending on a keyserver being reachable.
@@ -219,7 +231,7 @@ jobs:
 
               curl -fsSL https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo/arctis-sound-manager.key -o /tmp/asm.key
               sudo pacman-key --add /tmp/asm.key
-              sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/asm.key | awk -F: '/^fpr/ {print $10; exit}')"
+              sudo pacman-key --lsign-key 76AA4ED4A738B4FF07E170A249F4994D14531BD4
               sudo tee -a /etc/pacman.conf <<'EOF'
 
               [arctis-sound-manager]

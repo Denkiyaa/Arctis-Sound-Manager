@@ -28,6 +28,10 @@ COPR="loteran/arctis-sound-manager"
 PPA="ppa:loteran/arctis-sound-manager"
 PACMAN_REPO="https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo"
 PKG="arctis-sound-manager"
+# The key that signs the pacman repository. Pinned rather than read out of the
+# downloaded .key: v1.6.0 was published with the retired key, and the installer
+# trusted whatever it was served (#322).
+PACMAN_KEY_FINGERPRINT="76AA4ED4A738B4FF07E170A249F4994D14531BD4"
 
 DRY_RUN=0
 ASSUME_YES=0
@@ -100,15 +104,16 @@ detect() {
 # ASM in Discover and GNOME Software.
 pacman_repo_install() {
     command -v pacman >/dev/null 2>&1 || die "pacman not found — is this really an Arch-family system?"
-    local key="/tmp/asm-repo.key" fpr=""
+    local key="/tmp/asm-repo.key"
 
     run curl -fsSL "$PACMAN_REPO/arctis-sound-manager.key" -o "$key"
-    if [ "$DRY_RUN" -eq 0 ]; then
-        fpr="$(gpg --show-keys --with-colons "$key" 2>/dev/null | awk -F: '/^fpr/ {print $10; exit}')"
-        [ -n "$fpr" ] || return 1
+    if [ "$DRY_RUN" -eq 0 ] \
+       && ! gpg --show-keys --with-colons "$key" 2>/dev/null | grep -q "^fpr:*$PACMAN_KEY_FINGERPRINT:"; then
+        warn "The published repository key is not $PACMAN_KEY_FINGERPRINT — not trusting it. Please report this at $REPO_URL/issues."
+        return 1
     fi
     run sudo pacman-key --add "$key"
-    run sudo pacman-key --lsign-key "${fpr:-<fingerprint>}"
+    run sudo pacman-key --lsign-key "$PACMAN_KEY_FINGERPRINT"
 
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '    \033[2m$ append [%s] to /etc/pacman.conf\033[0m\n' "$PKG"

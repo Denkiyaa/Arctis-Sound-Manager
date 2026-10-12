@@ -280,7 +280,7 @@ asm_install_arch_in_container() {
             echo "[arch-install] Adding the signed ASM repository..."
             if curl -fsSL https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo/arctis-sound-manager.key -o /tmp/asm.key \
                && sudo pacman-key --add /tmp/asm.key \
-               && sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/asm.key | awk -F: "/^fpr/ {print \$10; exit}")"; then
+               && sudo pacman-key --lsign-key 76AA4ED4A738B4FF07E170A249F4994D14531BD4; then
                 printf "\n[arctis-sound-manager]\nServer = https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo\n" \
                     | sudo tee -a /etc/pacman.conf >/dev/null
             else

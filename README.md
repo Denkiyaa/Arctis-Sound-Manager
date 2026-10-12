@@ -285,10 +285,16 @@ Needs no AUR helper, compiles nothing, and — unlike the AUR — is visible to
 Discover and GNOME Software, so ASM can be installed and updated from your
 software centre like any other application.
 
+The repository is signed with this key — check that it is the one you trust:
+
+```
+76AA 4ED4 A738 B4FF 07E1  70A2 49F4 994D 1453 1BD4
+```
+
 ```bash
 curl -fsSL https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo/arctis-sound-manager.key -o /tmp/asm.key
 sudo pacman-key --add /tmp/asm.key
-sudo pacman-key --lsign-key "$(gpg --show-keys --with-colons /tmp/asm.key | awk -F: '/^fpr/ {print $10; exit}')"
+sudo pacman-key --lsign-key 76AA4ED4A738B4FF07E170A249F4994D14531BD4
 
 sudo tee -a /etc/pacman.conf <<'EOF'
 

@@ -256,8 +256,9 @@ _REPO_SETUP_COMMANDS: dict[InstallMethod, str] = {
         "curl -fsSL https://github.com/loteran/Arctis-Sound-Manager/releases/"
         "download/pacman-repo/arctis-sound-manager.key -o /tmp/asm.key && "
         "sudo pacman-key --add /tmp/asm.key && "
-        "sudo pacman-key --lsign-key \"$(gpg --show-keys --with-colons "
-        "/tmp/asm.key | awk -F: '/^fpr/ {print $10; exit}')\" && "
+        # Pinned, not read out of the downloaded key: a release once published
+        # the retired key and this would have trusted it (#322).
+        "sudo pacman-key --lsign-key 76AA4ED4A738B4FF07E170A249F4994D14531BD4 && "
         # Raw strings: the backslashes belong to grep and printf, not Python.
         r"(grep -q '^\[arctis-sound-manager\]' /etc/pacman.conf || "
         r"printf '\n[arctis-sound-manager]\nServer = https://github.com/"
