@@ -108,12 +108,18 @@ pacman_repo_install() {
 
     run curl -fsSL "$PACMAN_REPO/arctis-sound-manager.key" -o "$key"
     if [ "$DRY_RUN" -eq 0 ]; then
+        # A throwaway home: the user's own GnuPG setup (keyboxd, agent, a
+        # broken gpg.conf) must not decide whether we can read a key file.
         # Captured first, not piped into grep -q: under pipefail, grep quitting
         # at the first match can SIGPIPE gpg and fail a key that is fine.
-        local fprs
-        fprs=$(gpg --show-keys --with-colons "$key" 2>/dev/null | awk -F: '$1 == "fpr" { print $10 }') || true
+        local gpg_home gpg_out fprs
+        gpg_home=$(mktemp -d)
+        gpg_out=$(gpg --homedir "$gpg_home" --batch --no-autostart --show-keys --with-colons "$key" 2>&1) || true
+        rm -rf "$gpg_home"
+        fprs=$(awk -F: '$1 == "fpr" { print $10 }' <<< "$gpg_out")
         if ! grep -qx "$PACMAN_KEY_FINGERPRINT" <<< "$fprs"; then
             warn "The published repository key is not $PACMAN_KEY_FINGERPRINT (got: ${fprs:-unreadable}) — not trusting it. Please report this at $REPO_URL/issues."
+            [ -n "$fprs" ] || printf '%s\n' "$gpg_out" | grep '^gpg:' >&2 || true
             return 1
         fi
     fi
@@ -332,6 +338,16 @@ case "$flavor" in
         # than fail.
         if ! pacman_repo_install; then
             warn "Binary repository unavailable — falling back to the AUR."
+            # A [arctis-sound-manager] section left by an earlier install makes
+            # pacman, and so the AUR helper, refuse to run until its key is
+            # trusted — say how, instead of letting the helper fail cryptically.
+            if grep -q "^\[$PKG\]" /etc/pacman.conf 2>/dev/null \
+               && ! sudo pacman-key --list-keys "$PACMAN_KEY_FINGERPRINT" >/dev/null 2>&1; then
+                warn "[$PKG] is in /etc/pacman.conf but its key is not trusted, so pacman will refuse it. Either trust the key:"
+                printf '      curl -fsSL %s/arctis-sound-manager.key | sudo pacman-key --add -\n' "$PACMAN_REPO" >&2
+                printf '      sudo pacman-key --lsign-key %s\n' "$PACMAN_KEY_FINGERPRINT" >&2
+                printf '    or remove the [%s] section from /etc/pacman.conf, then re-run this installer.\n' "$PKG" >&2
+            fi
             aur_install
         fi
         post_setup ;;
