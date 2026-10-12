@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPushButton,
 
 from arctis_sound_manager.config import ConfigSetting, SettingType
 from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
+from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
 from arctis_sound_manager.gui.qt_widgets.q_dual_state import QDualState
 import arctis_sound_manager.gui.theme as _theme
 from arctis_sound_manager.i18n import I18n
@@ -423,7 +424,7 @@ class QSettingsWidget(QWidget):
                 btn.clicked.connect(make_btn_callback(btn_value, btn_entries, config))
 
         elif config.type == SettingType.SELECT:
-            widget = QComboBox()
+            widget = NoWheelComboBox()
             options = self._option_lists.get(config.options_source, [])
             if options:
                 widget.addItems([_option_label(o) for o in options])

@@ -24,6 +24,7 @@ from arctis_sound_manager.gui.components import (
     SectionTitle,
     SvgIconWidget,
 )
+from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
 from arctis_sound_manager.gui.status_widget import QStatusWidget
 import arctis_sound_manager.gui.theme as _theme
 from arctis_sound_manager.gui.theme import (
@@ -122,7 +123,7 @@ class HeadsetPage(QWidget):
         #
         # Hidden while there is nothing to choose. A picker offering a single
         # item is not a choice, and this card is the first thing you see.
-        self._device_selector = QComboBox()
+        self._device_selector = NoWheelComboBox()
         self._device_selector.setMinimumWidth(220)
         self._device_selector.setVisible(False)
         self._device_selector.activated.connect(self._on_device_picked)

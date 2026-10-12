@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 import arctis_sound_manager.gui.theme as _theme
+from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
 from arctis_sound_manager.gui.qt_widgets.q_toggle import QToggle
 from arctis_sound_manager.i18n import I18n
 
@@ -483,7 +484,7 @@ class ClipsPage(QWidget):
         # capture rebuilds the capture (and empties the buffer) — the same
         # trade the source picker makes, and better than a control that is
         # greyed out for as long as autostart keeps the capture running.
-        self._fps = QComboBox()
+        self._fps = NoWheelComboBox()
         for value in _FPS_CHOICES:
             self._fps.addItem(f"{value} fps", value)
         self._fps.setCurrentIndex(max(0, _FPS_CHOICES.index(_saved_fps())))
@@ -504,7 +505,7 @@ class ClipsPage(QWidget):
         # window narrows the portal to windows only, which is the only way to
         # keep a panel or an overlay out of a clip when the game is not
         # covering the screen — the app cannot crop what it was handed.
-        self._source_kind = QComboBox()
+        self._source_kind = NoWheelComboBox()
         self._source_kind.addItem(_tr("clips_source_screen", "Whole screen"), False)
         self._source_kind.addItem(_tr("clips_source_window", "A single window"), True)
         self._source_kind.setCurrentIndex(1 if _capture_window_enabled() else 0)
