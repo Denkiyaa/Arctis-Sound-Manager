@@ -341,6 +341,17 @@ def test_the_chosen_rate_is_carried_as_a_ceiling_the_stream_understands():
             assert "framerate=15/1" not in stage.replace("max-framerate=15/1", ""), stage
 
 
+def test_nothing_drops_frames_after_the_screencast_has_capped_them():
+    """videorate on a vblank-quantised stream drops every early frame: a 60 fps
+    game came out at 22–28 fps. The ceiling is the caps' job alone."""
+    from arctis_sound_manager.clip_capture import convert_chain, video_branch
+
+    convert = convert_chain(needs_gl=True, max_fps=60)[0]
+    desc = " ".join(video_branch("pipewiresrc", convert, "nvh264enc"))
+    assert "videorate" not in desc
+    assert "max-framerate=60/1" in desc
+
+
 def test_the_gl_path_keeps_a_system_memory_fallback():
     """glupload cannot always import what the portal hands out. Without a
     second chain a GL failure takes the video branch down silently and the clip

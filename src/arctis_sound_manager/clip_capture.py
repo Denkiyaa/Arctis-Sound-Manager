@@ -1044,6 +1044,33 @@ def convert_chain(needs_gl: bool, max_fps: int) -> list[str]:
     ]
 
 
+def video_branch(source: str, convert: str, encoder: str) -> list[str]:
+    """The video half of the capture pipeline, source to appsink.
+
+    No videorate. The ceiling already rides on `convert` as max-framerate, and
+    the compositor honours it at the source (measured: 58.7, 29.9 and 15.8 fps
+    for ceilings of 60, 30 and 15). videorate on top of that only did harm:
+    KWin stamps frames on its own vblank grid — 4.17 ms steps on a 240 Hz
+    screen — so a 60 fps game arrives as a mix of 12.5 and 16.7 ms gaps, and
+    `max-rate=60 drop-only=true` threw away every frame that came in early.
+    Against a game running at 60 the capture kept 36 fps with videorate and
+    58.9 without, and in the GUI, where the encoder thread also waits on
+    Python, that came out as 22–28 fps clips.
+    """
+    return [
+        source,
+        f"! {convert} ! {encoder}",
+        "! h264parse config-interval=-1",
+        # Pin the byte format here. appsink accepts anything, so h264parse
+        # would settle on byte-stream — and matroskamux only takes avc, so the
+        # saved clip's appsrc then fails to negotiate and the file comes out
+        # empty. Deciding it at capture time means the caps we cache are
+        # already the ones the muxer will accept.
+        "! video/x-h264,stream-format=avc,alignment=au",
+        "! appsink name=video emit-signals=true sync=false max-buffers=0 drop=false",
+    ]
+
+
 def pick_encoder(Gst, gop: int, kbps: int) -> tuple[str, bool]:
     """Return (encoder description, needs_gl) for the best available encoder."""
     for element, props, needs_gl in ENCODERS:
@@ -1070,7 +1097,7 @@ class ClipCapture:
         self._Gio, self._GLib, self._Gst = _require_gst()
         self._Gst.init(None)
 
-        # The ceiling handed to videorate — not the rate being achieved. What
+        # The ceiling asked of the screencast — not the rate being achieved. What
         # capture is actually managing is measured from the buffer and read off
         # the `fps` property below. None means nobody chose one, and the
         # encoder decides (see DEFAULT_FPS).
@@ -1184,21 +1211,11 @@ class ClipCapture:
         # The rate is capped, not fixed, so a busy scene cannot run the encoder
         # past what it can sustain. Clip lengths stay correct regardless: the
         # buffer measures time from buffer timestamps, never from a frame count.
-        parts = [
+        parts = video_branch(
             self._x11_source or (
                 f"pipewiresrc name=screen fd={fd} path={node_id} "
                 f"do-timestamp=true keepalive-time=1000"),
-            f"! videorate max-rate={self.max_fps} drop-only=true",
-            f"! {convert} ! {encoder}",
-            "! h264parse config-interval=-1",
-            # Pin the byte format here. appsink accepts anything, so h264parse
-            # would settle on byte-stream — and matroskamux only takes avc, so
-            # the saved clip's appsrc then fails to negotiate and the file
-            # comes out empty. Deciding it at capture time means the caps we
-            # cache are already the ones the muxer will accept.
-            "! video/x-h264,stream-format=avc,alignment=au",
-            "! appsink name=video emit-signals=true sync=false max-buffers=0 drop=false",
-        ]
+            convert, encoder)
         for name, source in self.audio_tracks:
             parts.append(
                 f"pulsesrc device={source} provide-clock=false "
@@ -1213,6 +1230,14 @@ class ClipCapture:
         log.info("video path: %s | encoder: %s", convert.split(" !")[0], encoder.split()[0])
         log.debug("capture pipeline: %s", desc)
         self.pipeline = Gst.parse_launch(desc)
+        # The system clock, not the one pipewiresrc offers. Left to choose,
+        # the pipeline takes the PipeWire clock, and with the pulsesrc branches
+        # slaved to it the screencast lost frames in bursts: three runs of the
+        # same capture against a game at 60 kept 34, 53 and 58 fps, with gaps
+        # of exactly four frames. On the system clock it held 58+ every time.
+        # Nothing here needs the graph's clock — every branch is timestamped on
+        # arrival and the sinks do not sync.
+        self.pipeline.use_clock(Gst.SystemClock.obtain())
 
         self._watch_source_rate()
 
