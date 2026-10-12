@@ -42,7 +42,6 @@ import re
 import shutil
 import subprocess
 import time
-from collections import deque
 from pathlib import Path
 
 from arctis_sound_manager.clip_buffer import NANOSECONDS, ClipBuffer, Frame
@@ -134,10 +133,6 @@ def _is_not_a_game(name: str) -> bool:
 # The Game channel, by the node names a stream can be sitting on: the virtual
 # sink when the Sonar EQ is off, its filter-chain input when it is on.
 _GAME_SINK_NAMES = ("Arctis_Game", "effect_input.sonar-game-eq")
-
-# How much recent history the live rate read-outs average over. Long enough to
-# be steady, short enough that a stall shows up while it is still happening.
-_RATE_WINDOW_S = 4.0
 
 # Capture rates offered, and the one used unless asked otherwise.
 #
@@ -1120,10 +1115,6 @@ class ClipCapture:
         self._convert_chain: list[str] = []
         self._convert_index = 0
         self._started_at = 0.0
-        # Arrival times of the last few seconds of portal frames — see
-        # _watch_source_rate(). A deque with a maxlen cannot be used: the window
-        # is a duration, not a count, and the count is what is being measured.
-        self._source_stamps: deque[float] = deque()
         # When the last encoded video frame reached the buffer — see
         # video_stalled_s. None until the first one arrives.
         self._last_video_at: float | None = None
@@ -1135,8 +1126,6 @@ class ClipCapture:
 
     def start(self) -> None:
         Gst = self._Gst
-        # Stamps from a previous pipeline would read as an instant stall.
-        self._source_stamps = deque()
         self._last_video_at = None
         self.stream_lost = False
 
@@ -1238,8 +1227,16 @@ class ClipCapture:
         # Nothing here needs the graph's clock — every branch is timestamped on
         # arrival and the sinks do not sync.
         self.pipeline.use_clock(Gst.SystemClock.obtain())
-
-        self._watch_source_rate()
+        # No Python on the raw frame path. There used to be a pad probe on
+        # pipewiresrc counting frames as they left the portal; it ran in the
+        # source's own streaming thread and so needed the GIL once per frame.
+        # Inside the GUI the GIL is often held for tens of milliseconds at a
+        # time, and while the source thread waited for it KWin found no free
+        # buffer and skipped frames: a game at 60 recorded at 34 fps in the
+        # GUI and 58 from a bare process. With a 47 ms GIL hog standing in for
+        # the GUI the same capture kept 40 fps with the probe and 58.5
+        # without. The appsink callbacks, downstream of the encoder, made no
+        # measurable difference.
 
         self.buffer.add_video("video")
         self._wire_sink("video", "video")
@@ -1516,47 +1513,6 @@ class ClipCapture:
             return 0.0
         return (len(video.frames) - 1) * NANOSECONDS / span_ns
 
-    def _watch_source_rate(self) -> None:
-        """Count frames as they leave the portal, before anything of ours.
-
-        A clip recorded at 15 fps has two completely different explanations —
-        the compositor is only producing 15 (fullscreen games on some
-        compositors starve the screencast), or our own branch is dropping them
-        — and they need opposite fixes. Measuring at the source settles it
-        instead of leaving the number to be argued about.
-        """
-        Gst = self._Gst
-        source = self.pipeline.get_by_name("screen") if self.pipeline else None
-        pad = source.get_static_pad("src") if source is not None else None
-        if pad is None:                              # pragma: no cover - env dependent
-            log.debug("no pipewiresrc pad to measure the source rate on")
-            return
-
-        def on_buffer(_pad, _info):
-            now = time.monotonic()
-            stamps = self._source_stamps
-            stamps.append(now)
-            # A rolling window: an average over the whole session would hide a
-            # stall, which is the thing worth seeing while it happens.
-            while stamps and now - stamps[0] > _RATE_WINDOW_S:
-                stamps.popleft()
-            return Gst.PadProbeReturn.OK
-
-        pad.add_probe(Gst.PadProbeType.BUFFER, on_buffer)
-
-    @property
-    def source_fps(self) -> float:
-        """Frames per second the compositor is handing out, before our pipeline.
-
-        Compare with :attr:`fps`: equal means the screencast itself is slow;
-        higher means the frames are being lost on our side.
-        """
-        stamps = self._source_stamps
-        if len(stamps) < 2:
-            return 0.0
-        span = stamps[-1] - stamps[0]
-        return (len(stamps) - 1) / span if span > 0 else 0.0
-
     @property
     def video_stalled_s(self) -> float:
         """Seconds since the last encoded video frame, or 0.0 before the first.
@@ -1571,17 +1527,6 @@ class ClipCapture:
         if self._last_video_at is None or self.pipeline is None:
             return 0.0
         return time.monotonic() - self._last_video_at
-
-    @property
-    def source_stalled_s(self) -> float:
-        """Seconds since the portal last handed out a frame, or 0.0 if unknown.
-
-        Read next to :attr:`video_stalled_s` when a stall is logged: the portal
-        still sending means our encoder branch wedged; both silent means the
-        compositor stopped the stream.
-        """
-        stamps = self._source_stamps
-        return time.monotonic() - stamps[-1] if stamps else 0.0
 
     @property
     def video_path_label(self) -> str:

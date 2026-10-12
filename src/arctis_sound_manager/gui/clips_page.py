@@ -1093,9 +1093,7 @@ class ClipsPage(QWidget):
             logger.info("screencast ended with no game running — stopping the capture")
             self._stop_capture()
             return
-        logger.warning("no video for %.0fs (portal last sent a frame %.0fs ago) — "
-                       "rebuilding the capture", stalled,
-                       getattr(capture, "source_stalled_s", 0.0))
+        logger.warning("no video for %.0fs — rebuilding the capture", stalled)
         try:
             capture.restart()
         except Exception as exc:  # noqa: BLE001
@@ -1619,14 +1617,7 @@ class ClipsPage(QWidget):
         fps = getattr(self._capture, "fps", 0.0)
         if fps:
             where = getattr(self._capture, "video_path_label", "")
-            source = getattr(self._capture, "source_fps", 0.0)
             text = f"{fps:.0f} fps" + (f" ({where})" if where else "")
-            # Both numbers, because a recorded 15 fps means opposite things
-            # depending on whether the compositor sent 15 or 60: the first is
-            # the screencast being slow, the second is this pipeline dropping.
-            if source and abs(source - fps) > max(2.0, fps * 0.15):
-                text += "  " + _tr("clips_source_fps", "screen: {n} fps").replace(
-                    "{n}", f"{source:.0f}")
             # The live rate is a few seconds wide; a clip averages over its whole
             # length, idle stretches included. Reported alone, the live number
             # promises a smoothness the saved file does not have — which is
