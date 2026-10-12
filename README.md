@@ -17,9 +17,21 @@
 
 > [!WARNING]
 > ## ⚠️ WARNING — Pacman repository users
-> (Arch, CachyOS, EndeavourOS, Manjaro): the signing key was rotated on 2026-09-09. Your next `sudo pacman -Syu` will fail with an `unknown trust` signature error until you trust the new key. Fix with either:
+> (Arch, CachyOS, EndeavourOS, Manjaro): **the repository signing key changed again on 2026-10-12.** The key announced in [#239](https://github.com/loteran/Arctis-Sound-Manager/issues/239) was lost in a CI mistake, and v1.6.0 briefly went out signed with the older retired key ([#322](https://github.com/loteran/Arctis-Sound-Manager/issues/322)). The repository now has a dedicated key, pinned in the release workflow so this cannot silently happen again:
+>
+> ```
+> 76AA 4ED4 A738 B4FF 07E1  70A2 49F4 994D 1453 1BD4
+> ```
+>
+> If `sudo pacman -Syu` fails with an `unknown trust` signature error, trust the new key with either:
 > - `curl -fsSL https://loteran.github.io/Arctis-Sound-Manager/install.sh | bash -s -- --force`
-> - or the manual commands in **[issue #239](https://github.com/loteran/Arctis-Sound-Manager/issues/239)**
+> - or by hand:
+>   ```bash
+>   curl -fsSL https://github.com/loteran/Arctis-Sound-Manager/releases/download/pacman-repo/arctis-sound-manager.key -o /tmp/asm.key
+>   sudo pacman-key --add /tmp/asm.key
+>   sudo pacman-key --lsign-key 76AA4ED4A738B4FF07E170A249F4994D14531BD4
+>   sudo pacman -Syu
+>   ```
 >
 > Not affected: AUR, COPR, PPA, PyPI users.
 
