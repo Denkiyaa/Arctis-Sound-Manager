@@ -15,6 +15,16 @@
 [![ASM Presets](https://img.shields.io/badge/EQ%20Presets-Community%20site-FB4A00)](https://loteran.github.io/asm-presets/)
 [![ASM Themes](https://img.shields.io/badge/Themes-Community%20site-8B5CF6)](https://loteran.github.io/asm-presets/#themes)
 
+> [!NOTE]
+> ## 🔬 Help map your headset
+> SteelSeries' specifications list more settings for most headsets than ASM offers today (base station screen, line out, stream mix, mic and Bluetooth EQ…). With ASM **1.6.2** or later and your headset on, run this once — read-only, about a minute, nothing is changed:
+>
+> ```bash
+> asm-cli tools probe
+> ```
+>
+> Then attach `~/asm-probe.json` to **[#331](https://github.com/loteran/Arctis-Sound-Manager/issues/331)** with your headset's name. One file per model is enough to add what its specification defines.
+
 > [!WARNING]
 > ## ⚠️ WARNING — Pacman repository users
 > (Arch, CachyOS, EndeavourOS, Manjaro): **the repository signing key changed again on 2026-10-12.** The key announced in [#239](https://github.com/loteran/Arctis-Sound-Manager/issues/239) was lost in a CI mistake, and v1.6.0 briefly went out signed with the older retired key ([#322](https://github.com/loteran/Arctis-Sound-Manager/issues/322)). The repository now has a dedicated key, pinned in the release workflow so this cannot silently happen again:
@@ -51,7 +61,6 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
 > 🎨 **[ASM Themes](https://loteran.github.io/asm-presets/)** — browse and share color themes, previewed on a miniature of the app!
 > 💬 **[Join the Discord](https://discord.gg/tbG4D5AnVz)** — chat, share presets and get help from the community!
 > 📝 **[Share your experience in Discussions](https://github.com/loteran/Arctis-Sound-Manager/discussions)** — feedback helps improve compatibility for everyone!
-> 🔬 **[Help map your headset](https://github.com/loteran/Arctis-Sound-Manager/issues/331)** — run `asm-cli tools probe` once (read-only, about a minute) and attach the file: it lets ASM add the settings SteelSeries' specification lists for your model.
 
 
 ---
