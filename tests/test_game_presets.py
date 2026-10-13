@@ -306,3 +306,54 @@ def test_client_fallback_ignores_plain_apps(monkeypatch):
     _fake_clients(monkeypatch, [_Client("Spotify", 5), _Client("EOSOverlayRenderer", 6)],
                   {6: "wine proton"}, {5: {"SteamAppId": "0"}})
     assert gp.detect_current_game() is None
+
+
+# -- stream on the Game channel without a process id of its own --------------
+
+class _Stream:
+    def __init__(self, name, sink, client, pid=None):
+        self.sink, self.client, self.corked = sink, client, False
+        self.proplist = {"application.name": name}
+        if pid is not None:
+            self.proplist["application.process.id"] = str(pid)
+
+
+class _Sink:
+    def __init__(self, index, name):
+        self.index, self.name, self.proplist = index, name, {"node.name": name}
+
+
+class _StreamPulse(_FakePulse):
+    streams: list = []
+    sinks: list = []
+
+    def sink_input_list(self):
+        return self.streams
+
+    def sink_list(self):
+        return self.sinks
+
+    def client_info(self, index):
+        return next(c for c in self.clients if c.index == index)
+
+
+def test_game_stream_without_pid_takes_it_from_its_client(monkeypatch):
+    """Black Myth: Wukong's streams carry no process id, its client does. Read
+    from the stream alone, the game on the Game channel had no SteamAppId and
+    was known only as "b1", which no preset is named after (#328)."""
+    import pulsectl
+    from arctis_sound_manager import clip_capture as cc
+
+    client = _Client("b1", 24576)
+    client.index = 7
+    _StreamPulse.clients = [client]
+    _StreamPulse.sinks = [_Sink(3, "Arctis_Game")]
+    _StreamPulse.streams = [_Stream("b1", sink=3, client=7)]
+    monkeypatch.setattr(pulsectl, "Pulse", _StreamPulse)
+    monkeypatch.setattr(cc, "_is_audible", lambda si: True)
+    monkeypatch.setattr(cc, "process_environ_dict",
+                        lambda pid: {"SteamAppId": "2358720"} if pid == 24576 else {})
+    monkeypatch.setattr(gp, "_detect_game_client", lambda: None)
+
+    assert cc.detect_game_process(strict=True) == ("b1", 24576)
+    assert gp.detect_current_game().key == "steam:2358720"

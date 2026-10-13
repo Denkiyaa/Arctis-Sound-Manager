@@ -406,6 +406,17 @@ def detect_game(strict: bool = False) -> str | None:
     return found[0] if found else None
 
 
+def _client_props(pulse, si) -> dict:
+    """The proplist of the client that opened stream *si*, or {}."""
+    index = getattr(si, "client", None)
+    if index is None or index == 0xFFFFFFFF:
+        return {}
+    try:
+        return pulse.client_info(index).proplist or {}
+    except Exception:  # noqa: BLE001 — client gone between the two calls
+        return {}
+
+
 def detect_game_process(strict: bool = True) -> tuple[str, int | None] | None:
     """Name the app a clip is most likely about, for labelling it.
 
@@ -446,12 +457,6 @@ def detect_game_process(strict: bool = True) -> tuple[str, int | None] | None:
     except ImportError:
         return None
 
-    def pid_of(si) -> int | None:
-        try:
-            return int(si.proplist.get("application.process.id", ""))
-        except (TypeError, ValueError):
-            return None
-
     def label(si) -> str:
         name = (si.proplist.get("application.name")
                 or si.proplist.get("application.process.binary") or "")
@@ -459,6 +464,20 @@ def detect_game_process(strict: bool = True) -> tuple[str, int | None] | None:
 
     try:
         with pulsectl.Pulse("asm-clip-detect") as pulse:
+
+            def pid_of(si) -> int | None:
+                # Some streams carry no process id of their own — Black Myth:
+                # Wukong's, under Proton — while the client that opened them
+                # does. Without it there is no SteamAppId to read, the game is
+                # known only by its binary ("b1"), and no per-game preset
+                # matches it while it sits on the Game channel (#328).
+                for props in (si.proplist, _client_props(pulse, si)):
+                    try:
+                        return int(props.get("application.process.id", ""))
+                    except (TypeError, ValueError):
+                        continue
+                return None
+
             streams = [si for si in pulse.sink_input_list() if _is_audible(si)]
 
             # 0. Whatever the user routed to the Game channel.
@@ -478,9 +497,8 @@ def detect_game_process(strict: bool = True) -> tuple[str, int | None] | None:
             # games, and its own UI (steamwebhelper, which reports itself as
             # "Chromium") passed for a game and put the picker over the store.
             for si in streams:
-                try:
-                    pid = int(si.proplist.get("application.process.id", ""))
-                except (TypeError, ValueError):
+                pid = pid_of(si)
+                if pid is None:
                     continue
                 haystack = _process_cmdline(pid) + _process_environ(pid)
                 if any(hint in haystack for hint in _GAME_RUNTIME_HINTS):
