@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Arctis 7: sound cut out while the log filled with "USB error: Overflow" (#317).** The dongle can get stuck sending status frames larger than its USB endpoint allows, on every read, for hours; the sound came back only once ASM was quit. ASM now resets the dongle once when this lasts a few seconds, the way it already recovers a headset whose commands all fail, and logs the error every hundred reads instead of twice a second. Thanks @kevinhu12345 for the logs.
+
 ## [1.6.1] - 13 October 2026
 
 ### Added

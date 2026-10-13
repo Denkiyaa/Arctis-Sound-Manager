@@ -155,6 +155,9 @@ _SETTINGS_REPLAY_MIN_INTERVAL_S = 5.0
 # at most one attempt per suspend/resume cycle.
 _USB_RESET_MIN_INTERVAL_S = 60.0
 _USB_RESET_SETTLE_S = 2.0
+# Consecutive EOVERFLOW reads on one interface (one every ~0.5 s) before the
+# device is taken for stuck and reset (#317).
+_OVERFLOW_RESET_STREAK = 10
 _RESUME_STATUS_PROBE_TIMEOUT_S = 3.0
 # Worst case observed across profiles: init_sleep_length_ms tops out at 5s
 # (Nova Pro Omni/Elite/Wireless family) plus a few more seconds for
@@ -305,6 +308,10 @@ class CoreEngine:
         self._active_extra_dial_interfaces = []
         # EIO streak per listened interface (see listen_endpoint_loop).
         self._eio_counts: dict[int, int] = {}
+        # EOVERFLOW streak per listened interface, and whether the USB reset
+        # it may trigger was already used up (see _on_listen_overflow).
+        self._overflow_counts: dict[int, int] = {}
+        self._overflow_reset_spent = False
         # Interfaces the profile names but this model does not expose. Kept so
         # the "no endpoint" warning is logged once per connection rather than
         # on every read attempt.
@@ -2203,6 +2210,7 @@ class CoreEngine:
             # ChatMix responsiveness).
             read_input: list[int] = list(await asyncio.to_thread(usb_device.read, endpoint, max_packet_size, 1000))
             self._eio_counts.pop(interface_id, None)  # this interface read fine again
+            self._overflow_counts.pop(interface_id, None)
             with self._device_lock:
                 config_gone = self.device_config is None
             if config_gone:
@@ -2331,6 +2339,9 @@ class CoreEngine:
                     self.logger.warning('EIO persists after re-acquisition attempt, forcing device reset')
                     self._eio_counts.pop(interface_id, None)
                     self.on_device_disconnected(0, 0)
+            elif e.errno == 75:  # EOVERFLOW — the device sent more than a packet
+                self._on_listen_overflow(interface_id, e)
+                await asyncio.sleep(0.5)
             else:
                 self._enodev_count = 0
                 self.logger.warning('USB error: %s', e)
@@ -3125,6 +3136,30 @@ class CoreEngine:
         else:
             self._wedged_reset_spent = False
 
+    def _on_listen_overflow(self, interface_id: int, err: Exception) -> None:
+        """An interrupt read failed with EOVERFLOW (errno 75).
+
+        The device answered with more bytes than its endpoint's
+        wMaxPacketSize, so the frame is lost. An Arctis 7 dongle got stuck
+        doing this on every read, twice a second for hours — the headset went
+        silent until ASM was quit and the interface handed back (#317). It
+        used to fall through to the generic branch: one warning per read
+        (14 000 lines in two hours) and nothing else. A short streak is
+        logged and waited out; a persistent one gets the USB reset a wedged
+        device already gets, once: if the overflow is back right after it,
+        resetting again would only cut the audio over and over.
+        """
+        count = self._overflow_counts.get(interface_id, 0) + 1
+        self._overflow_counts[interface_id] = count
+        if count == 1 or count % 100 == 0:
+            self.logger.warning(
+                'USB overflow on interface %d (errno 75 ×%d): the device sends '
+                'frames larger than its endpoint allows: %s', interface_id, count, err)
+        if count == _OVERFLOW_RESET_STREAK and not self._overflow_reset_spent:
+            self._overflow_reset_spent = True
+            self._schedule_wedged_device_reset(
+                f"listen overflow on interface {interface_id}")
+
     def _schedule_wedged_device_reset(self, reason: str) -> None:
         """Fire-and-forget a USB reset from sync code.
 
@@ -3140,15 +3175,15 @@ class CoreEngine:
             return
         if self._wedged_reset_spent:
             self.logger.warning(
-                "init_device: a USB reset already failed to clear this — not "
-                "resetting again; replug the device or power-cycle it")
+                "%s: a USB reset already failed to clear this — not "
+                "resetting again; replug the device or power-cycle it", reason)
             return
         now = time.monotonic()
         since_last = now - self._last_usb_reset_monotonic
         if since_last < _USB_RESET_MIN_INTERVAL_S:
             self.logger.info(
-                "init_device: skipping reset (last one %.0fs ago, minimum %.0fs)",
-                since_last, _USB_RESET_MIN_INTERVAL_S)
+                "%s: skipping reset (last one %.0fs ago, minimum %.0fs)",
+                reason, since_last, _USB_RESET_MIN_INTERVAL_S)
             return
         self._wedged_reset_spent = True
         self._last_usb_reset_monotonic = now
@@ -5066,6 +5101,7 @@ class CoreEngine:
             pending.cancel()
         self._resume_reset_attempted = False
         self._wedged_reset_spent = False
+        self._overflow_reset_spent = False
         self.logger.info("prepare_for_sleep: releasing USB handle before system suspend")
         self._release_usb_handle()
 
