@@ -97,6 +97,12 @@ device:
   audio:
     spatial_engine: hesuvi
 
+  # Read-only queries for `asm-cli tools probe` (generated from the
+  # spec by gg_draft.py): their raw replies check a spec layout
+  # on real hardware in one pass. Constants only — nothing is set.
+  probe_queries:
+    - {name: headset_status, frame: [0xb0]}
+
   settings:
     headset:
       volume_limiter:

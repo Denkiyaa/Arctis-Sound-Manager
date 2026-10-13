@@ -124,6 +124,14 @@ device:
   audio:
     spatial_engine: hesuvi
 
+  # Read-only queries for `asm-cli tools probe` (generated from the
+  # spec by gg_draft.py): their raw replies check a spec layout
+  # on real hardware in one pass. Constants only — nothing is set.
+  probe_queries:
+    - {name: get_audio_settings, frame: [0x20]}
+    - {name: get_ux_settings, frame: [0x80]}
+    - {name: get_preset_settings, frame: [0xa0]}
+
   settings:
     microphone:
       # side_tone, command 0x39 in the spec, one byte of level.

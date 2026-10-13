@@ -665,6 +665,16 @@ def main():
     read_eq_parser.add_argument('--json', action='store_true',
                                 help='Print the raw JSON reply instead of a table')
 
+    # One pass over the headset's read-only queries, for checking settings
+    # taken from SteelSeries' spec on hardware we do not have: every reply
+    # is saved raw, nothing on the device is changed.
+    probe_parser = usb_devices_subparser.add_parser(
+        'probe',
+        help="Ask the headset for its state with read-only queries and save "
+             "the raw replies (to attach to a GitHub issue)")
+    probe_parser.add_argument('--output', default=str(Path.home() / 'asm-probe.json'),
+                              help='Where to save the replies (default: ~/asm-probe.json)')
+
     # Volume — the piece a keybind binds to (issue #193). A command rather than
     # an in-app shortcut because on Wayland the app cannot claim a key: the
     # compositor owns that, and the GlobalShortcuts portal is neither universal
@@ -794,6 +804,18 @@ def main():
                 print(json.dumps(result, indent=2))
                 sys.exit(0 if result.get('ok') and result.get('bands') is not None else 1)
             sys.exit(print_hardware_eq_readback(result))
+        elif args.action == 'probe':
+            import json
+            from arctis_sound_manager.cli_tools import probe_device_via_dbus
+            result = probe_device_via_dbus()
+            if not result.get('ok'):
+                print(f"Probe failed: {result.get('error', 'unknown_error')}")
+                sys.exit(1)
+            Path(args.output).write_text(json.dumps(result, indent=2))
+            answered = sum(1 for r in result['replies'] if r.get('frames') or r.get('feature'))
+            print(f"{result['device']}: {answered}/{len(result['replies'])} queries answered.")
+            print(f"Saved to {args.output} — please attach this file to the GitHub issue.")
+            sys.exit(0)
 
 if __name__ == '__main__':
     main()

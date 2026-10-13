@@ -329,6 +329,11 @@ class DeviceConfiguration:
     # and the opcode reading it back as a feature report (Nova Elite).
     hardware_eq_feature_report_size: int
     hardware_eq_feature_readback: int | None
+    # Read-only queries `asm-cli tools probe` sends to dump the raw replies,
+    # so a reply layout taken from the spec can be checked on a user's
+    # hardware in one pass: [{name, frame, reply: interrupt|feature, size,
+    # report_id}].
+    probe_queries: list[dict]
     # Opt-in escalation for issue #238: force a USB reset on system resume
     # instead of relying on the generic post-resume status probe. Only the
     # Nova Pro Omni declares this — see resume_from_sleep() in core.py.
@@ -560,6 +565,21 @@ class DeviceConfiguration:
             self.device_init = None
 
         self.shutdown_commands = raw_config.get('shutdown_commands', None) or None
+
+        self.probe_queries = []
+        for q in raw_config.get('probe_queries') or []:
+            frame = [int(b) for b in (q.get('frame') or [])]
+            if not frame:
+                continue
+            self.probe_queries.append({
+                'name': str(q.get('name') or f'0x{frame[-1]:02x}'),
+                'frame': frame,
+                'reply': 'feature' if q.get('reply') == 'feature' else 'interrupt',
+                'size': int(q.get('size') or 64),
+                # GET_REPORT's id: not always frame[0], profiles that keep
+                # the report id out of their frames start with the opcode.
+                'report_id': int(q.get('report_id', frame[0])),
+            })
 
         raw_status = raw_config.get('status', {})
         if raw_status:

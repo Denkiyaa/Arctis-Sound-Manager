@@ -170,7 +170,7 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
 - **Self-healing deps** — at startup ASM checks every system component (LADSPA plugins, HRIR, PipeWire, wpctl, udev rules…); a one-click dialog installs anything missing with a single `pkexec` prompt
 - **Check for updates** — in-app button forces an immediate GitHub check; installs via terminal (pacman / dnf / apt) or in-app wheel (pipx)
 - **One-click bug reports** — auto-uploads a full diagnostic (including the kernel's USB and sound messages from this boot and the previous one) as a GitHub gist and opens a pre-filled issue
-- **Built-in diagnostics** — `asm-daemon --verify-setup` and `asm-cli diagnose -o file.txt`
+- **Built-in diagnostics** — `asm-daemon --verify-setup`, `asm-cli diagnose -o file.txt`, and `asm-cli tools probe`, which asks the headset for its state with read-only queries and saves the raw replies
 - **Status for scripts and bars** — `asm-cli status --json` gives battery, power, mic and channel levels to Waybar, Polybar or any script ([details](#headset-status-in-scripts-and-status-bars))
 - **Plasma 6 widget** — headset power and battery, spare battery, noise cancelling and mic state, one click to open ASM
 - **Themes** — 6 built-in color themes plus a custom theme editor with live preview; share your own on the [community site](https://loteran.github.io/asm-presets/) or import one in a click ([details](#themes))
@@ -1087,6 +1087,7 @@ Open ASM → **Help page** → **Report a Bug**. The dialog collects a full diag
 ```bash
 asm-daemon --verify-setup           # preflight checks, exits 0/1 with per-distro install hints
 asm-cli diagnose -o /tmp/asm.txt    # full local diagnostic dump
+asm-cli tools probe                 # read-only queries to the headset, raw replies saved to ~/asm-probe.json
 
 ARCTIS_LOG_LEVEL=debug systemctl --user restart arctis-manager
 journalctl --user -u arctis-manager -f

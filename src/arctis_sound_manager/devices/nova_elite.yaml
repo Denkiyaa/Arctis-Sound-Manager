@@ -310,6 +310,17 @@ device:
     frame_report_size: 1036
     min_brightness: 1
 
+  # Read-only queries for `asm-cli tools probe` (generated from the
+  # spec by gg_draft.py): their raw replies check a spec layout
+  # on real hardware in one pass. Constants only — nothing is set.
+  probe_queries:
+    - {name: wireless_settings, frame: [0x01, 0xb0]}
+    - {name: ux_settings, frame: [0x01, 0x80]}
+    - {name: read_radio_eq_settings, frame: [0x01, 0x1a], reply: feature, size: 1036, report_id: 0x01}
+    - {name: read_bluetooth_eq_settings, frame: [0x01, 0x1e], reply: feature, size: 1036, report_id: 0x01}
+    - {name: read_microphone_eq_settings, frame: [0x01, 0x1c], reply: feature, size: 1036, report_id: 0x01}
+    - {name: audio_settings, frame: [0x01, 0x20], reply: feature, size: 1036, report_id: 0x01}
+
   settings:
     audio:
       gain:

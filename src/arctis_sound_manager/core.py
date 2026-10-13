@@ -354,6 +354,10 @@ class CoreEngine:
         # the existing reader resolve it keeps there being exactly one
         # reader.
         self._raw_response_waiters: dict[int, list[asyncio.Future]] = {}
+        # Every listen-endpoint frame also goes to these lists while one is
+        # registered — probe_device() records what follows each query without
+        # knowing in advance which byte its reply starts with.
+        self._frame_taps: list[list[list[int]]] = []
 
         # Requests sent whose replies carry no opcode (status mappings with
         # `reply_to`), oldest first: the device answers in order, so the next
@@ -2260,6 +2264,8 @@ class CoreEngine:
 
             self._absorb_settings_readback(read_input)
             self._resolve_raw_response_waiters(read_input)
+            for tap in self._frame_taps:
+                tap.append(list(read_input))
 
             # Yield to the loop, but do not sleep. This used to be a flat
             # 100 ms after every frame, so a burst of wheel reports (the Nova
@@ -4617,6 +4623,46 @@ class CoreEngine:
                 waiters.remove(future)
                 if not waiters:
                     del self._raw_response_waiters[opcode]
+
+    async def probe_device(self, window: float = 0.6) -> dict:
+        """Send the profile's read-only `probe_queries`; return every raw reply.
+
+        For checking a layout read from SteelSeries' spec against a real
+        headset in one pass, instead of one round trip per setting. Only
+        queries are ever sent — frames that ask the device for its state and
+        change nothing. Each query gets every listen-endpoint frame that
+        arrives within *window* seconds, since its reply may begin with a
+        report id or with the opcode depending on the family; frames the
+        status polling would have produced anyway are left in, the decoder
+        tells them apart. A `feature` query is answered by GET_REPORT.
+        """
+        config = self.device_config
+        if config is None:
+            return {'ok': False, 'error': 'no_device'}
+        if not config.probe_queries:
+            return {'ok': False, 'error': 'no_probe_queries'}
+        result: dict = {'ok': True, 'device': config.name,
+                        'product_id': f'{self.usb_device.idProduct:04x}'
+                        if self.usb_device is not None else None,
+                        'replies': []}
+        hexed = lambda frame: ' '.join(f'{b & 0xFF:02x}' for b in frame)  # noqa: E731
+        endpoint = self.get_command_endpoint_address()
+        for query in config.probe_queries:
+            entry: dict = {'name': query['name'], 'sent': hexed(query['frame'])}
+            tap: list[list[int]] = []
+            self._frame_taps.append(tap)
+            try:
+                if not self.send_command(list(query['frame']), endpoint):
+                    entry['error'] = 'usb_write_error'
+                await asyncio.sleep(window)
+            finally:
+                self._frame_taps.remove(tap)
+            if query['reply'] == 'feature':
+                reply = self.get_feature_report(query['report_id'], query['size'])
+                entry['feature'] = hexed(reply) if reply is not None else None
+            entry['frames'] = [hexed(f) for f in tap]
+            result['replies'].append(entry)
+        return result
 
     def has_hardware_eq_readback(self) -> bool:
         """True when this headset's profile declares how to read the

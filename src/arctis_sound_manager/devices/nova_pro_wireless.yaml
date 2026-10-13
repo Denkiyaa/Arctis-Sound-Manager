@@ -200,6 +200,15 @@ device:
     width: 128         # Panel width in pixels
     height: 64         # Panel height in pixels
 
+  # Read-only queries for `asm-cli tools probe` (generated from the
+  # spec by gg_draft.py): their raw replies check a spec layout
+  # on real hardware in one pass. Constants only — nothing is set.
+  probe_queries:
+    - {name: battery_status, frame: [0x06, 0xb7]}
+    - {name: audio_settings, frame: [0x06, 0x20]}
+    - {name: ux_settings, frame: [0x06, 0x80]}
+    - {name: wireless_settings, frame: [0x06, 0xb0]}
+
   settings:
     headset:
       gain:

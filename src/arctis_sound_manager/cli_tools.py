@@ -94,7 +94,17 @@ def arctis_usb_info(vendor_id: int = 0x1038, bInterfaceClass: int = 0x03):
 # interface claimed exclusively — a standalone open here would just fail.
 
 def read_hardware_eq_via_dbus(timeout: float = 5.0) -> dict[str, Any]:
-    """Call the daemon's ReadHardwareEq D-Bus method, return the decoded dict.
+    """Call the daemon's ReadHardwareEq D-Bus method, return the decoded dict."""
+    return _call_json_method('ReadHardwareEq', timeout)
+
+
+def probe_device_via_dbus(timeout: float = 60.0) -> dict[str, Any]:
+    """Call the daemon's ProbeDevice D-Bus method (asm-cli tools probe)."""
+    return _call_json_method('ProbeDevice', timeout)
+
+
+def _call_json_method(member: str, timeout: float) -> dict[str, Any]:
+    """Call a daemon D-Bus method returning JSON, return the decoded dict.
 
     Never raises: connection/timeout/protocol failures come back as
     {'ok': False, 'error': ...} like every other failure mode
@@ -117,7 +127,7 @@ def read_hardware_eq_via_dbus(timeout: float = 5.0) -> dict[str, Any]:
                 destination=DBUS_BUS_NAME,
                 path=DBUS_SETTINGS_OBJECT_PATH,
                 interface=DBUS_SETTINGS_INTERFACE_NAME,
-                member='ReadHardwareEq',
+                member=member,
                 message_type=MessageType.METHOD_CALL,
             )), timeout=timeout)
             if reply is None:

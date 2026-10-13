@@ -452,6 +452,20 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
             result = {'ok': False, 'error': f'internal_error: {e!r}'}
         return json.dumps(result)
 
+    @method('ProbeDevice')
+    async def probe_device(self) -> 's': # type: ignore
+        """Send the profile's read-only probe queries, return the raw replies.
+
+        Same reason as ReadHardwareEq for going through the daemon: it holds
+        the interface and is the only reader of the listen endpoint.
+        """
+        try:
+            result = await self.core_engine.probe_device()
+        except Exception as e:
+            self.logger.error(f'ProbeDevice error: {e}')
+            result = {'ok': False, 'error': f'internal_error: {e!r}'}
+        return json.dumps(result)
+
     @method('GetEqBands')
     def get_eq_bands(self) -> 's': # type: ignore
         eq_file = Path.home() / '.config' / 'arctis_manager' / 'eq_bands.json'
