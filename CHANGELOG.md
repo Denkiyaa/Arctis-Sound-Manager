@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Custom EQ on the Arctis Nova Pro Omni.** The Omni's base station runs the same firmware family as the Elite and takes the same on-device EQ, so the Equalizer page's *Switch to Custom EQ* is now offered on it too. Written from SteelSeries' specification and not yet confirmed on a real Omni — Omni owners, please try it and report on the testing issue.
+- **Custom EQ and the base station settings on the Arctis Nova Pro Omni.** The Omni's base station runs the same firmware family as the Elite and takes the same commands, so it now gets what the Elite already had: the Equalizer page's *Switch to Custom EQ*, the on-ear microphone sidetone, the line out (speaker or stream, with the stream mix volumes), and the screen's screensaver, its timeout and the home screen view and options. Written from SteelSeries' specification and not yet confirmed on a real Omni — Omni owners, please try it and report on the testing issue.
 
 ### Fixed
 

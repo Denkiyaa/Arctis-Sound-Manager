@@ -133,7 +133,7 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
   - **Smart Volume** — Sonar's loudness targets (Quiet / Balanced / Loud)
   - All changes applied live via PipeWire biquad nodes
 - **Custom 10-band EQ** — per-band gain (31 Hz – 16 kHz), save/load presets
-- **Hardware equaliser** — on ten models (the Nova Elite still in testing) ASM drives the headset's own EQ instead of a software chain, so the curve survives on the device
+- **Hardware equaliser** — on eleven models (the Nova Elite and Nova Pro Omni still in testing) ASM drives the headset's own EQ instead of a software chain, so the curve survives on the device
 - **Microphone processing** — ClearCast (rnnoise) or **DeepFilterNet**, noise gate, compressor, and a mic the chain can switch between your headset and a desk microphone on its own
 - **Audio Profiles** — save and restore your complete configuration in one click (EQ mode, presets, macro values, Spatial Audio, volumes, visible cards); instant switching from the Home page or system tray
 
