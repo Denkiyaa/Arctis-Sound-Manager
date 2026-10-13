@@ -564,6 +564,8 @@ def test_one_package_the_machine_still_needs_does_not_abandon_the_rest(
         seen.append(argv[-1])
         return _Proc()
 
+    monkeypatch.setattr("arctis_sound_manager.container.running_in_container",
+                        lambda: False)
     monkeypatch.setattr(clips_setup.shutil, "which", lambda _: "/usr/bin/pkexec")
     monkeypatch.setattr(clips_setup.subprocess, "run", _fake_run)
 
@@ -754,3 +756,33 @@ def test_the_bug_report_names_the_capture_route_when_clips_is_on(monkeypatch):
 
     assert "ScreenCast portal:" in out
     assert "portal backends:" in out
+
+
+def test_inside_a_container_the_batch_elevates_with_sudo_not_pkexec(monkeypatch):
+    """The Clips packages go into the container ASM runs in, and pkexec there
+    has no polkit agent to ask anyone: it refused on the spot with "Not
+    authorized. This incident has been reported." on every install (#329).
+    distrobox's passwordless sudo is what the system-deps dialog uses already.
+    """
+    from arctis_sound_manager.gui import clips_setup
+
+    seen: list[list[str]] = []
+
+    class _Proc:
+        returncode = 0
+        stdout = stderr = ""
+
+    def _fake_run(argv, **kwargs):
+        seen.append(argv)
+        return _Proc()
+
+    monkeypatch.setattr("arctis_sound_manager.container.running_in_container",
+                        lambda: True)
+    monkeypatch.setattr(clips_setup.shutil, "which", lambda _: "/usr/bin/pkexec")
+    monkeypatch.setattr(clips_setup.subprocess, "run", _fake_run)
+
+    ok, _ = clips_setup.run_batch([["pacman", "-S", "--noconfirm", "ffmpeg"]])
+
+    assert ok
+    assert seen[0][:2] == ["sudo", "-n"]
+    assert "pkexec" not in seen[0]

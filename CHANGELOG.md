@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Arctis 7: sound cut out while the log filled with "USB error: Overflow" (#317).** The dongle can get stuck sending status frames larger than its USB endpoint allows, on every read, for hours; the sound came back only once ASM was quit. ASM now resets the dongle once when this lasts a few seconds, the way it already recovers a headset whose commands all fail, and logs the error every hundred reads instead of twice a second. Thanks @kevinhu12345 for the logs.
+- **Clips could not be installed in a distrobox (Bazzite, SteamOS, Silverblue) (#329).** The install asked for permission through pkexec, which has no way to show a password prompt inside the container and refused at once with "Not authorized. This incident has been reported." Inside a container the Clips packages are now installed with the container's own sudo, as the other missing components already were. Thanks @ninjapinja2 for the report.
 
 ## [1.6.1] - 13 October 2026
 

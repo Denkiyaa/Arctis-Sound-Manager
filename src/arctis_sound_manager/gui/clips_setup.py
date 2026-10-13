@@ -385,7 +385,19 @@ def run_batch(argvs: list[list[str]], keep_going: bool = False) -> tuple[bool, s
     """
     if not argvs:
         return True, ""
-    if not shutil.which("pkexec"):
+    from arctis_sound_manager.container import running_in_container
+
+    # Every Clips package lives in the container, next to the ASM that uses
+    # it — so inside one, elevate there with the passwordless sudo distrobox
+    # sets up, as the system-deps dialog already does. pkexec in a container
+    # has no polkit agent to ask anyone and answers "Not authorized. This
+    # incident has been reported." without a prompt (#329). -n fails at once
+    # on any other setup rather than waiting on a password nobody is asked for.
+    if running_in_container():
+        elevate = ["sudo", "-n"]
+    elif shutil.which("pkexec"):
+        elevate = ["pkexec"]
+    else:
         raise NoPkexec
 
     def _quote(args: list[str]) -> str:
@@ -394,7 +406,7 @@ def run_batch(argvs: list[list[str]], keep_going: bool = False) -> tuple[bool, s
     joiner = "; " if keep_going else " && "
     try:
         proc = subprocess.run(
-            ["pkexec", "sh", "-c", joiner.join(_quote(a) for a in argvs)],
+            [*elevate, "sh", "-c", joiner.join(_quote(a) for a in argvs)],
             capture_output=True, text=True, timeout=_BATCH_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("clip package command failed: %s", exc)
