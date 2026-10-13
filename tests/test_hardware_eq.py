@@ -68,6 +68,7 @@ PARAMETRIC_PROFILES = {
 # frames. profile → (opcode at frame[1], chunk size)
 FEATURE_REPORT_PROFILES = {
     "nova_elite.yaml": (0x1B, 1036),
+    "nova_pro_omni.yaml": (0x1B, 1036),
 }
 
 

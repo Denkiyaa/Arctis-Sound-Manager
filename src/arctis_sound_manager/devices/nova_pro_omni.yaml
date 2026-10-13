@@ -231,6 +231,18 @@ device:
   audio:
     spatial_engine: hesuvi
 
+  # On-device parametric EQ. arctis_nova_pro_omni_tx includes
+  # base_arctis_nova_elite_tx and redefines neither parametric_eq (0x1B) nor
+  # read_radio_eq_settings (0x1A), so this is the Elite's block unchanged: one
+  # 1036-byte HIDFEATURE chunk that stores and selects the curve. Transcribed
+  # from the spec, not yet confirmed on a real Omni.
+  hardware_eq:
+    format: elite_parametric
+    eq_command: 0x1b
+    report_id: 0x01
+    feature_report_size: 1036
+    feature_readback: 0x1a
+
   # OLED: 128x64 panel on the DAC. draw_bitmap (opcode 0x93) goes over SET_REPORT
   # Feature reports (wValue 0x0301 = Feature + report id 1), interface 3,
   # column-packed 1bpp — confirmed rendering on the DAC screen.
