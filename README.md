@@ -51,6 +51,7 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
 > 🎨 **[ASM Themes](https://loteran.github.io/asm-presets/)** — browse and share color themes, previewed on a miniature of the app!
 > 💬 **[Join the Discord](https://discord.gg/tbG4D5AnVz)** — chat, share presets and get help from the community!
 > 📝 **[Share your experience in Discussions](https://github.com/loteran/Arctis-Sound-Manager/discussions)** — feedback helps improve compatibility for everyone!
+> 🔬 **[Help map your headset](https://github.com/loteran/Arctis-Sound-Manager/issues/331)** — run `asm-cli tools probe` once (read-only, about a minute) and attach the file: it lets ASM add the settings SteelSeries' specification lists for your model.
 
 
 ---
@@ -156,6 +157,7 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
 - **ANC / Transparent mode** — reflects the physical button state in real time
 - **Device status** — battery (and the base station's spare battery), mic mute, sidetone, and more
 - **Several headsets** — choose which Arctis ASM drives from the Headset page
+- **Base station settings** _(Nova Elite, Nova Pro Omni)_ — line out (speaker or stream, with the stream mix volumes), on-ear mic sidetone, screensaver and its timeout, home screen view and options
 - **DAC OLED display** _(Nova Pro Wireless / X, Nova Elite, Nova Pro Omni, Arctis Pro GameDAC, Arctis Pro Wireless base)_:
   - Toggle original vs custom display mode
   - Brightness, screen timeout, scroll speed
@@ -223,6 +225,8 @@ The SteelSeries GG and Sonar alternative for Linux: manage your **SteelSeries Ar
 > ✅ Confirmed by at least one opted-in user
 > 🔵 Product IDs shown in **blue** are actively in use — detected on real users' devices through the app's anonymous usage stats
 > 🔴 Seen in telemetry but not yet declared in a device YAML — support pending
+
+Your model is listed but a setting you know from SteelSeries GG is missing? Run `asm-cli tools probe` and attach `~/asm-probe.json` to [#331](https://github.com/loteran/Arctis-Sound-Manager/issues/331) — one file per model is enough to add what its specification defines.
 
 **Arctis GameBuds charging case** (`230c`, GameBuds X `231a`): when the case is plugged into the computer over USB, the Headset page also shows its battery, charging state, lid and which earbuds are seated in it. The case is read alongside the dongle, never instead of it, so plugging or unplugging it does not touch your audio.
 
