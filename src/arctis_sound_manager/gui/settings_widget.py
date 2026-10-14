@@ -32,6 +32,8 @@ _REFRESHABLE_OPTION_SOURCES = frozenset({
 
 # Compact panels (the Headset page's cards): see QSettingsWidget(compact=True).
 _COMPACT_MAX_BUTTONS = 4
+# Characters across all of a choice's labels before it becomes a drop-down.
+_COMPACT_MAX_BUTTON_TEXT = 70
 _COMPACT_LABEL_WIDTH = 200
 _COMPACT_SLIDER_WIDTH = 240
 _COMPACT_SELECT_WIDTH = 320
@@ -412,7 +414,7 @@ class QSettingsWidget(QWidget):
                 widget_value_label.setFixedWidth(40)
                 widget_layout.addStretch(1)
         elif (config.type == SettingType.BUTTON_GROUP and self._compact
-              and len(getattr(config, 'values_mapping', {})) > _COMPACT_MAX_BUTTONS):
+              and self._too_long_for_buttons(config)):
             widget = self._button_group_as_combo(config, value, callback)
         elif config.type == SettingType.BUTTON_GROUP:
             widget = QWidget()
@@ -447,7 +449,9 @@ class QSettingsWidget(QWidget):
                     btn.setEnabled(False)
                     btn.setToolTip(I18n.get_instance().translate('settings_values', 'option_unavailable_status'))
                 if self._compact:
-                    btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+                    # As wide as the label, never narrower: a squeezed button
+                    # clips its text ("hen headset disconnec").
+                    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
                     btn.setMinimumWidth(64)
                 widget_layout.addWidget(btn)
                 btn_entries.append((btn_value, btn))
@@ -490,6 +494,7 @@ class QSettingsWidget(QWidget):
             # the already-displayed device saved nothing (#97).
             widget.activated.connect(_on_select_change)
             if self._compact:
+                widget.setMinimumWidth(200)
                 widget.setMaximumWidth(_COMPACT_SELECT_WIDTH)
         else:
             widget = QLabel(f'UNKNOWN TYPE: {config.type}')
@@ -514,10 +519,25 @@ class QSettingsWidget(QWidget):
                     main_layout.addWidget(note, 1)
                 else:
                     main_layout.addStretch(1)
+            elif self._compact:
+                # Sized to its content and kept against the label; with a
+                # stretch factor a capped drop-down got centred in the row.
+                main_layout.addWidget(widget)
+                main_layout.addStretch(1)
             else:
                 main_layout.addWidget(widget, 1)
 
         return main_widget if widget else None
+
+    def _too_long_for_buttons(self, config: ConfigSetting) -> bool:
+        """A choice a compact row offers as a drop-down: too many options,
+        or labels too long to sit side by side in a narrow card."""
+        mapping = getattr(config, 'values_mapping', {})
+        if len(mapping) > _COMPACT_MAX_BUTTONS:
+            return True
+        translate = I18n.get_instance().translate
+        text = sum(len(translate('settings_values', label)) for label in mapping.values())
+        return text > _COMPACT_MAX_BUTTON_TEXT
 
     def _button_group_as_combo(self, config: ConfigSetting, value, callback: Callable) -> QWidget:
         """A BUTTON_GROUP with too many options for a row of buttons (ten
