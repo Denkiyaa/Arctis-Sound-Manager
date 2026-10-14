@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -38,8 +39,19 @@ POWER_ICON = os.path.join(IMAGES_DIR, "power_icon.svg")
 BLUETOOTH_ICON = os.path.join(IMAGES_DIR, "bluetooth_icon.svg")
 CHARGING_ICON = os.path.join(IMAGES_DIR, "charging_icon.svg")
 
-_TILE_COLUMNS = 4
+# At most this many tiles side by side; more are shared out over rows of
+# near-equal length, so six tiles never land as four over two.
+_TILE_MAX_COLUMNS = 6
 _TILE_ICON_SIZE = 18
+_TILE_MIN_WIDTH = 96
+
+
+def tile_columns(count: int) -> int:
+    """Columns for *count* tiles: one row up to the maximum, else balanced."""
+    if count <= _TILE_MAX_COLUMNS:
+        return max(count, 1)
+    rows = -(-count // _TILE_MAX_COLUMNS)
+    return -(-count // rows)
 
 # Status keys whose value is a level worth drawing, not just printing.
 _BAR_KEYS = frozenset({'headset_battery_charge', 'charge_slot_battery_charge'})
@@ -124,6 +136,10 @@ class _StatusTile(QFrame):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("statusTile")
+        # Equal columns whatever the text: the grid's stretch decides the
+        # width, not "Unmuted" being longer than "On".
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(_TILE_MIN_WIDTH)
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 8, 12, 8)
         row.setSpacing(10)
@@ -233,9 +249,8 @@ class StatusTiles(QWidget):
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setHorizontalSpacing(8)
         self._grid.setVerticalSpacing(8)
-        for column in range(_TILE_COLUMNS):
-            self._grid.setColumnStretch(column, 1)
         outer.addLayout(self._grid)
+        self._laid_out_count = -1
 
         self.chatmix = _ChatMixRow(self)
         self.chatmix.setVisible(False)
@@ -263,16 +278,26 @@ class StatusTiles(QWidget):
         entries = [(k, e) for k, e in flat.items() if not (has_mix and k in _CHATMIX_KEYS)]
         # Reuse tiles rather than rebuild them: status arrives every second.
         while len(self._tiles) < len(entries):
-            tile = _StatusTile(self)
-            index = len(self._tiles)
-            self._grid.addWidget(tile, index // _TILE_COLUMNS, index % _TILE_COLUMNS)
-            self._tiles.append(tile)
+            self._tiles.append(_StatusTile(self))
+        if len(entries) != self._laid_out_count:
+            self._lay_out(len(entries))
         for tile, (key, entry) in zip(self._tiles, entries):
             tile.set_entry(key, entry)
             tile.setVisible(True)
         for tile in self._tiles[len(entries):]:
             tile.setVisible(False)
         self.setVisible(bool(entries) or has_mix)
+
+    def _lay_out(self, count: int) -> None:
+        """Place the first *count* tiles on the grid, in equal columns."""
+        for tile in self._tiles:
+            self._grid.removeWidget(tile)
+        columns = tile_columns(count)
+        for column in range(max(self._grid.columnCount(), columns)):
+            self._grid.setColumnStretch(column, 1 if column < columns else 0)
+        for index, tile in enumerate(self._tiles[:count]):
+            self._grid.addWidget(tile, index // columns, index % columns)
+        self._laid_out_count = count
 
     def apply_theme(self) -> None:
         for tile in self._tiles:

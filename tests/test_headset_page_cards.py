@@ -99,6 +99,13 @@ def test_status_tiles_follow_the_reported_values(qapp):
     assert len([t for t in tiles._tiles if not t.isHidden()]) == 1
 
 
+@pytest.mark.parametrize("count,columns", [(1, 1), (4, 4), (6, 6), (7, 4), (8, 4), (9, 5), (12, 6)])
+def test_tile_rows_are_balanced(count, columns):
+    """Six tiles are one row, never four over two; more split evenly."""
+    from arctis_sound_manager.gui.headset_cards import tile_columns
+    assert tile_columns(count) == columns
+
+
 def test_the_dial_is_a_chatmix_bar_not_two_percentages(qapp):
     tiles = StatusTiles()
     tiles.update_status({"headset": {
