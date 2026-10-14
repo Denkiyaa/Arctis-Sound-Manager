@@ -197,6 +197,8 @@ class _ChatMixRow(QFrame):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("chatmixRow")
+        # Placed inside another card (the device card): no frame of its own.
+        self.embedded = False
         row = QHBoxLayout(self)
         row.setContentsMargins(14, 6, 14, 6)
         row.setSpacing(10)
@@ -218,9 +220,18 @@ class _ChatMixRow(QFrame):
     def set_levels(self, game_pct: int, chat_pct: int) -> None:
         self.bar.setValue(chatmix_percentages_to_bar_position(game_pct, chat_pct))
 
+    def embed(self, width: int) -> None:
+        """Sit inside another card at a fixed *width*, without a frame."""
+        self.embedded = True
+        self.setFixedWidth(width)
+        self.layout().setContentsMargins(0, 0, 0, 0)
+        self.apply_theme()
+
     def apply_theme(self) -> None:
-        self.setStyleSheet(_card_qss("chatmixRow"))
-        label = f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 9pt; background: transparent; border: none;"
+        self.setStyleSheet(
+            "QFrame#chatmixRow { background: transparent; border: none; }"
+            if self.embedded else _card_qss("chatmixRow"))
+        label =f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 9pt; background: transparent; border: none;"
         self.left.setStyleSheet(label)
         self.right.setStyleSheet(label)
         self.title.setStyleSheet(

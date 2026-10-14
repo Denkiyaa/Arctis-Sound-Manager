@@ -24,7 +24,12 @@ from arctis_sound_manager.gui.components import (
     SectionTitle,
     SvgIconWidget,
 )
-from arctis_sound_manager.gui.headset_cards import SettingsCard, StatusTiles, section_title
+from arctis_sound_manager.gui.headset_cards import (
+    SettingsCard,
+    StatusTiles,
+    card_contents_qss,
+    section_title,
+)
 from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
 from arctis_sound_manager.gui.settings_widget import QSettingsWidget, status_key_names
 import arctis_sound_manager.gui.theme as _theme
@@ -37,6 +42,8 @@ from arctis_sound_manager.gui.theme import (
     TEXT_SECONDARY,
 )
 from arctis_sound_manager.i18n import I18n
+
+_CHATMIX_WIDTH = 340
 
 # The base station's settings have their own panel on the DAC page.
 _SECTIONS_SHOWN_ELSEWHERE = frozenset({'station'})
@@ -74,8 +81,13 @@ class HeadsetPage(QWidget):
         layout.setContentsMargins(28, 20, 28, 24)
         layout.setSpacing(0)
 
-        # Devices section
-        layout.addWidget(SectionTitle(I18n.translate("ui", "devices")))
+        # Devices section: the title, and on its right the headset picker
+        # when more than one is plugged in (see _device_selector below).
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addWidget(SectionTitle(I18n.translate("ui", "devices")))
+        header.addStretch(1)
+        layout.addLayout(header)
         layout.addSpacing(12)
 
         # Device card
@@ -130,11 +142,15 @@ class HeadsetPage(QWidget):
         #
         # Hidden while there is nothing to choose. A picker offering a single
         # item is not a choice, and this card is the first thing you see.
+        #
+        # In the header rather than the card: the card's right side holds the
+        # ChatMix dial, and the two together made it wider than the window.
         self._device_selector = NoWheelComboBox()
         self._device_selector.setMinimumWidth(220)
+        self._device_selector.setPlaceholderText(I18n.translate("settings", "preferred_device"))
         self._device_selector.setVisible(False)
         self._device_selector.activated.connect(self._on_device_picked)
-        card_layout.addWidget(self._device_selector)
+        header.addWidget(self._device_selector, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # Device ids in the order the combo shows them. The combo carries the
         # label; this carries what the setting is actually written from.
@@ -148,6 +164,14 @@ class HeadsetPage(QWidget):
         self._status_tiles = StatusTiles(content)
         self._status_tiles.setVisible(False)
         layout.addWidget(self._status_tiles)
+
+        # The ChatMix dial goes in the device card's empty right-hand side, at
+        # the length of a dial rather than of the page.
+        chatmix = self._status_tiles.chatmix
+        chatmix.setParent(self._device_card)
+        chatmix.embed(_CHATMIX_WIDTH)
+        chatmix.setVisible(False)
+        card_layout.addWidget(chatmix)
         layout.addSpacing(16)
 
         # ── The headset's own settings ────────────────────────────────────────
@@ -212,6 +236,7 @@ class HeadsetPage(QWidget):
             f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 9pt; background: transparent;"
         )
 
+        self._device_selector.setStyleSheet(card_contents_qss())
         self._status_tiles.apply_theme()
         self._anc_section.apply_theme()
         for card in self._setting_cards:
