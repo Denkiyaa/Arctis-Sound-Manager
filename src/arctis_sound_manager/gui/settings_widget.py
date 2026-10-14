@@ -34,6 +34,7 @@ _REFRESHABLE_OPTION_SOURCES = frozenset({
 _COMPACT_MAX_BUTTONS = 4
 _COMPACT_LABEL_WIDTH = 200
 _COMPACT_SLIDER_WIDTH = 240
+_COMPACT_SELECT_WIDTH = 320
 
 
 def _button_group_qss() -> str:
@@ -488,6 +489,8 @@ class QSettingsWidget(QWidget):
             # 'currentIndexChanged' only fired on an index *change*, so picking
             # the already-displayed device saved nothing (#97).
             widget.activated.connect(_on_select_change)
+            if self._compact:
+                widget.setMaximumWidth(_COMPACT_SELECT_WIDTH)
         else:
             widget = QLabel(f'UNKNOWN TYPE: {config.type}')
 
