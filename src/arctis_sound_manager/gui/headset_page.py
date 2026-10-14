@@ -60,6 +60,9 @@ class HeadsetPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Everything here is sized to fit the window; a sideways scrollbar
+        # would only ever mean a control asking for more than it needs.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet(f"QScrollArea {{ background-color: {_theme.c('BG_MAIN')}; border: none; }}")
         self._scroll = scroll
 
@@ -68,12 +71,12 @@ class HeadsetPage(QWidget):
         self._content = content
         layout = QVBoxLayout(content)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        layout.setContentsMargins(36, 28, 36, 36)
+        layout.setContentsMargins(28, 20, 28, 24)
         layout.setSpacing(0)
 
         # Devices section
         layout.addWidget(SectionTitle(I18n.translate("ui", "devices")))
-        layout.addSpacing(20)
+        layout.addSpacing(12)
 
         # Device card
         self._device_card = QWidget()
@@ -87,10 +90,10 @@ class HeadsetPage(QWidget):
         """)
 
         card_layout = QHBoxLayout(self._device_card)
-        card_layout.setContentsMargins(20, 16, 20, 16)
-        card_layout.setSpacing(16)
+        card_layout.setContentsMargins(16, 10, 16, 10)
+        card_layout.setSpacing(12)
 
-        card_layout.addWidget(SvgIconWidget(HEADPHONE_ICON, ACCENT, size=44))
+        card_layout.addWidget(SvgIconWidget(HEADPHONE_ICON, ACCENT, size=32))
 
         device_info = QWidget()
         device_info.setStyleSheet("background: transparent;")
@@ -139,24 +142,20 @@ class HeadsetPage(QWidget):
         self._preferred_id: str | None = None
 
         layout.addWidget(self._device_card)
-        layout.addSpacing(12)
+        layout.addSpacing(8)
 
         # Live status, one tile per value the headset reports.
         self._status_tiles = StatusTiles(content)
         self._status_tiles.setVisible(False)
         layout.addWidget(self._status_tiles)
-        layout.addSpacing(28)
+        layout.addSpacing(16)
 
         # ── The headset's own settings ────────────────────────────────────────
         # Sidetone, mic volume, the volume limiter, auto power-off… everything
         # the device profile declares, one card per section of the profile.
         # They used to sit in Settings among the app's own options, where
         # nobody looking at their headset found them.
-        self._settings_title = SectionTitle(I18n.translate("ui", "device_settings"))
-        self._settings_title.setVisible(False)
-        layout.addWidget(self._settings_title)
-        layout.addSpacing(12)
-
+        #
         # Noise cancelling first: on a headset that has it, it is the control
         # people reach for most. Hidden wholesale on the ones without it (the
         # Nova 7P, for one) — dead controls read as a broken app rather than as
@@ -166,13 +165,13 @@ class HeadsetPage(QWidget):
             I18n.translate("ui", "noise_cancelling"), self._anc_widget, content)
         self._anc_section.setVisible(False)
         layout.addWidget(self._anc_section)
-        layout.addSpacing(12)
+        layout.addSpacing(8)
 
         # Rebuilt only when the device's set of sections changes; see
         # _sync_setting_cards().
         self._cards_layout = QVBoxLayout()
         self._cards_layout.setContentsMargins(0, 0, 0, 0)
-        self._cards_layout.setSpacing(12)
+        self._cards_layout.setSpacing(8)
         layout.addLayout(self._cards_layout)
         self._setting_cards: list[SettingsCard] = []
         self._card_groups: list[tuple[str | None, tuple[str, ...]]] = []
@@ -309,8 +308,6 @@ class HeadsetPage(QWidget):
         for card in self._setting_cards:
             card.body.update_settings(settings)
         self._update_anc_visibility(settings)
-        self._settings_title.setVisible(
-            bool(self._setting_cards) or self._anc_section.isVisibleTo(self))
 
     def _sync_setting_cards(self, settings: dict) -> None:
         """One card per section of the device profile, in the profile's order.
@@ -339,7 +336,7 @@ class HeadsetPage(QWidget):
             card.deleteLater()
         self._setting_cards = []
         for section, names in wanted:
-            body = QSettingsWidget(None, None, "device", keys=names)
+            body = QSettingsWidget(None, None, "device", keys=names, compact=True)
             card = SettingsCard(section_title(section), body, self._content)
             self._cards_layout.addWidget(card)
             self._setting_cards.append(card)

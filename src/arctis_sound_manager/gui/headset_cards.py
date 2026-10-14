@@ -2,13 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Building blocks of the Headset page: live status as a grid of tiles, and the
-card each group of headset settings sits in.
+Building blocks of the Headset page: live status as small tiles plus the
+ChatMix bar, and the card each group of headset settings sits in.
 """
+import os
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QProgressBar,
     QVBoxLayout,
@@ -16,22 +19,63 @@ from PySide6.QtWidgets import (
 )
 
 import arctis_sound_manager.gui.theme as _theme
+from arctis_sound_manager.gui.components import (
+    HEADPHONE_ICON,
+    IMAGES_DIR,
+    MIC_ICON,
+    SvgIconWidget,
+)
+from arctis_sound_manager.gui.home_page import (
+    _ChatMixSlider,
+    _make_chatmix_bar_qss,
+    chatmix_bar_track_css,
+    chatmix_percentages_to_bar_position,
+)
 from arctis_sound_manager.i18n import I18n
 
-# Tiles per row. Four keeps a value like "Plugged in, not charging" on one
-# line at the page's minimum width.
+BATTERY_ICON = os.path.join(IMAGES_DIR, "battery_icon.svg")
+POWER_ICON = os.path.join(IMAGES_DIR, "power_icon.svg")
+BLUETOOTH_ICON = os.path.join(IMAGES_DIR, "bluetooth_icon.svg")
+CHARGING_ICON = os.path.join(IMAGES_DIR, "charging_icon.svg")
+
 _TILE_COLUMNS = 4
+_TILE_ICON_SIZE = 18
 
 # Status keys whose value is a level worth drawing, not just printing.
 _BAR_KEYS = frozenset({'headset_battery_charge', 'charge_slot_battery_charge'})
 
+# The dial's two sides. Shown together as the ChatMix bar, not as two tiles.
+_CHATMIX_KEYS = ('media_mix', 'chat_mix')
 
-def _card_qss(object_name: str) -> str:
+
+def _tile_icon(key: str) -> str:
+    if 'battery' in key:
+        return BATTERY_ICON
+    if 'charging' in key:
+        return CHARGING_ICON
+    if key.startswith('bluetooth'):
+        return BLUETOOTH_ICON
+    if key.startswith('mic'):
+        return MIC_ICON
+    if key.endswith('power_status'):
+        return POWER_ICON
+    return HEADPHONE_ICON
+
+
+def _tile_caption(key: str) -> str:
+    """A short caption where one exists ("Battery"), else the status label."""
+    short = I18n.translate('ui', f'headset_tile_{key}')
+    if short != f'headset_tile_{key}':
+        return short
+    return I18n.translate('status', key)
+
+
+def _card_qss(object_name: str, radius: int = 10) -> str:
     return f"""
         QFrame#{object_name} {{
             background-color: {_theme.c('BG_CARD')};
             border: 1px solid {_theme.c('BORDER')};
-            border-radius: 12px;
+            border-radius: {radius}px;
         }}
     """
 
@@ -40,7 +84,32 @@ def card_contents_qss() -> str:
     """For a widget placed inside a card: the card's colour, not the page's."""
     return f"""
         QWidget {{ background-color: {_theme.c('BG_CARD')}; color: {_theme.c('TEXT_PRIMARY')}; }}
-        QLabel  {{ background-color: transparent; color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; }}
+        QLabel  {{ background-color: transparent; color: {_theme.c('TEXT_PRIMARY')}; font-size: 10pt; }}
+        QComboBox {{
+            background-color: {_theme.c('BG_BUTTON')};
+            color: {_theme.c('TEXT_PRIMARY')};
+            border: 1px solid {_theme.c('BG_BUTTON_HOVER')};
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 10pt;
+        }}
+        QComboBox:hover {{ background-color: {_theme.c('BG_BUTTON_HOVER')}; }}
+        QComboBox::drop-down {{ border: none; width: 20px; }}
+        QComboBox QAbstractItemView {{
+            background-color: {_theme.c('BG_CARD')};
+            color: {_theme.c('TEXT_PRIMARY')};
+            selection-background-color: {_theme.c('ACCENT')};
+            border: 1px solid {_theme.c('BORDER')};
+        }}
+        QSlider {{ background: transparent; }}
+        QSlider::groove:horizontal {{
+            height: 4px; background: {_theme.c('BG_BUTTON')}; border-radius: 2px;
+        }}
+        QSlider::sub-page:horizontal {{ background: {_theme.c('ACCENT')}; border-radius: 2px; }}
+        QSlider::handle:horizontal {{
+            background: {_theme.c('TEXT_PRIMARY')}; width: 14px; height: 14px;
+            margin: -5px 0; border-radius: 7px;
+        }}
     """
 
 
@@ -55,30 +124,38 @@ class _StatusTile(QFrame):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("statusTile")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(4)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(12, 8, 12, 8)
+        row.setSpacing(10)
 
+        self._icon_path = HEADPHONE_ICON
+        self.icon = SvgIconWidget(self._icon_path, _theme.c('ACCENT'), size=_TILE_ICON_SIZE)
+        row.addWidget(self.icon, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        text = QVBoxLayout()
+        text.setContentsMargins(0, 0, 0, 0)
+        text.setSpacing(1)
         self.caption = QLabel()
-        self.caption.setWordWrap(True)
-        layout.addWidget(self.caption)
-
+        text.addWidget(self.caption)
         self.value = QLabel()
-        self.value.setWordWrap(True)
-        layout.addWidget(self.value)
-
+        text.addWidget(self.value)
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
         self.bar.setTextVisible(False)
-        self.bar.setFixedHeight(4)
+        self.bar.setFixedHeight(3)
         self.bar.setVisible(False)
-        layout.addWidget(self.bar)
-        layout.addStretch(1)
+        text.addWidget(self.bar)
+        row.addLayout(text, 1)
         self.apply_theme()
 
     def set_entry(self, key: str, entry: dict) -> None:
-        self.caption.setText(I18n.translate('status', key))
+        self.caption.setText(_tile_caption(key))
         self.value.setText(_format_value(entry))
+        icon = _tile_icon(key)
+        if icon != self._icon_path:
+            self._icon_path = icon
+            self.icon._svg_path = icon
+            self.icon.set_color(_theme.c('ACCENT'))
         show_bar = key in _BAR_KEYS and isinstance(entry.get('value'), int)
         self.bar.setVisible(show_bar)
         if show_bar:
@@ -86,33 +163,84 @@ class _StatusTile(QFrame):
 
     def apply_theme(self) -> None:
         self.setStyleSheet(_card_qss("statusTile"))
+        self.icon.set_color(_theme.c('ACCENT'))
         self.caption.setStyleSheet(
-            f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 9pt; background: transparent; border: none;")
+            f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 8pt; background: transparent; border: none;")
         self.value.setStyleSheet(
-            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 14pt; font-weight: bold;"
+            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 10pt; font-weight: bold;"
             " background: transparent; border: none;")
         self.bar.setStyleSheet(f"""
-            QProgressBar {{ background-color: {_theme.c('BG_BUTTON')}; border: none; border-radius: 2px; }}
-            QProgressBar::chunk {{ background-color: {_theme.c('ACCENT')}; border-radius: 2px; }}
+            QProgressBar {{ background-color: {_theme.c('BG_BUTTON')}; border: none; border-radius: 1px; }}
+            QProgressBar::chunk {{ background-color: {_theme.c('ACCENT')}; border-radius: 1px; }}
         """)
 
 
+class _ChatMixRow(QFrame):
+    """The dial's position as the mixer page's ChatMix bar, read-only."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("chatmixRow")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(14, 6, 14, 6)
+        row.setSpacing(10)
+
+        self.title = QLabel(I18n.translate('ui', 'headset_tile_chatmix'))
+        row.addWidget(self.title)
+        row.addSpacing(6)
+        self.left = QLabel(I18n.translate('ui', 'game'))
+        row.addWidget(self.left)
+        self.bar = _ChatMixSlider(Qt.Orientation.Horizontal)
+        self.bar.setRange(0, 100)
+        self.bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.bar.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        row.addWidget(self.bar, 1)
+        self.right = QLabel(I18n.translate('ui', 'chat'))
+        row.addWidget(self.right)
+        self.apply_theme()
+
+    def set_levels(self, game_pct: int, chat_pct: int) -> None:
+        self.bar.setValue(chatmix_percentages_to_bar_position(game_pct, chat_pct))
+
+    def apply_theme(self) -> None:
+        self.setStyleSheet(_card_qss("chatmixRow"))
+        label = f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 9pt; background: transparent; border: none;"
+        self.left.setStyleSheet(label)
+        self.right.setStyleSheet(label)
+        self.title.setStyleSheet(
+            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 9pt; font-weight: bold;"
+            " background: transparent; border: none;")
+        self.bar.setStyleSheet("QSlider { background: transparent; }" + _make_chatmix_bar_qss(
+            chatmix_bar_track_css([_theme.c('COLOR_GAME')], _theme.c('COLOR_CHAT'))))
+
+
 class StatusTiles(QWidget):
-    """Every live status value the headset reports, one tile each.
+    """Every live status value the headset reports, one tile each, with the
+    ChatMix dial drawn as a bar underneath.
 
     The keys are whatever the device profile maps, so nothing here names a
     particular headset: a Nova 7 gets battery, ChatMix and Bluetooth, a wired
-    Nova 3 gets no tiles at all and the grid simply stays empty.
+    Nova 3 reports nothing and the whole block stays hidden.
     """
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self._grid = QGridLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(8)
+
+        self._grid = QGridLayout()
         self._grid.setContentsMargins(0, 0, 0, 0)
-        self._grid.setHorizontalSpacing(12)
-        self._grid.setVerticalSpacing(12)
+        self._grid.setHorizontalSpacing(8)
+        self._grid.setVerticalSpacing(8)
         for column in range(_TILE_COLUMNS):
             self._grid.setColumnStretch(column, 1)
+        outer.addLayout(self._grid)
+
+        self.chatmix = _ChatMixRow(self)
+        self.chatmix.setVisible(False)
+        outer.addWidget(self.chatmix)
+
         self._tiles: list[_StatusTile] = []
         self._status: dict | None = None
 
@@ -121,11 +249,18 @@ class StatusTiles(QWidget):
             return
         self._status = status
 
-        entries = [
-            (key, entry)
+        flat = {
+            key: entry
             for category in (status or {}).values() if isinstance(category, dict)
             for key, entry in category.items() if isinstance(entry, dict)
-        ]
+        }
+        mix = [flat.get(k, {}).get('value') for k in _CHATMIX_KEYS]
+        has_mix = all(isinstance(v, int) for v in mix)
+        if has_mix:
+            self.chatmix.set_levels(*mix)
+        self.chatmix.setVisible(has_mix)
+
+        entries = [(k, e) for k, e in flat.items() if not (has_mix and k in _CHATMIX_KEYS)]
         # Reuse tiles rather than rebuild them: status arrives every second.
         while len(self._tiles) < len(entries):
             tile = _StatusTile(self)
@@ -137,11 +272,12 @@ class StatusTiles(QWidget):
             tile.setVisible(True)
         for tile in self._tiles[len(entries):]:
             tile.setVisible(False)
-        self.setVisible(bool(entries))
+        self.setVisible(bool(entries) or has_mix)
 
     def apply_theme(self) -> None:
         for tile in self._tiles:
             tile.apply_theme()
+        self.chatmix.apply_theme()
 
 
 class SettingsCard(QFrame):
@@ -151,11 +287,10 @@ class SettingsCard(QFrame):
         super().__init__(parent)
         self.setObjectName("settingsCard")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(4)
 
         self.title = QLabel(title)
-        self.title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.title)
 
         self.body = body
@@ -165,7 +300,7 @@ class SettingsCard(QFrame):
     def apply_theme(self) -> None:
         self.setStyleSheet(_card_qss("settingsCard"))
         self.title.setStyleSheet(
-            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 13pt; font-weight: bold;"
+            f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 9pt; font-weight: bold;"
             " background: transparent; border: none;")
         self.body.setStyleSheet(card_contents_qss())
         if hasattr(self.body, "apply_theme"):

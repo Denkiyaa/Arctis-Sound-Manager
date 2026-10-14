@@ -97,3 +97,40 @@ def test_status_tiles_follow_the_reported_values(qapp):
 
     tiles.update_status({"headset": {"headset_power_status": {"value": "off", "type": "label"}}})
     assert len([t for t in tiles._tiles if not t.isHidden()]) == 1
+
+
+def test_the_dial_is_a_chatmix_bar_not_two_percentages(qapp):
+    tiles = StatusTiles()
+    tiles.update_status({"headset": {
+        "headset_power_status": {"value": "on", "type": "label"},
+        "media_mix": {"value": 100, "type": "percentage"},
+        "chat_mix": {"value": 40, "type": "percentage"},
+    }})
+    shown = [t.caption.text() for t in tiles._tiles if not t.isHidden()]
+    assert shown == ["Power"]
+    assert not tiles.chatmix.isHidden()
+    assert tiles.chatmix.bar.value() == 20  # chat pulled down: left of centre
+
+
+def test_a_long_choice_becomes_a_drop_down_in_a_compact_card(qapp):
+    """Ten auto power-off delays as buttons pushed the page sideways."""
+    from PySide6.QtWidgets import QPushButton
+
+    from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
+    from arctis_sound_manager.gui.settings_widget import QSettingsWidget
+
+    def group(n: int) -> dict:
+        return {"type": "button_group", "default_value": 0,
+                "values_mapping": {str(i): f"{i}_minutes" for i in range(n)}}
+
+    widget = QSettingsWidget(None, None, "device", compact=True)
+    widget.update_settings({
+        "settings_config": {"pm_shutdown": group(10), "mic_side_tone": group(4)},
+        "device": {"pm_shutdown": 5, "mic_side_tone": 1},
+    })
+    long_row = widget._settings_widgets["pm_shutdown"]
+    short_row = widget._settings_widgets["mic_side_tone"]
+    combo = long_row.findChild(NoWheelComboBox)
+    assert combo is not None and combo.currentIndex() == 5
+    assert not long_row.findChildren(QPushButton)
+    assert len(short_row.findChildren(QPushButton)) == 4
