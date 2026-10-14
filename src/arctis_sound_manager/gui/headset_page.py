@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Headset page — Device info + status.
+Headset page — device info, live status and the headset's own settings.
 """
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
 
+from arctis_sound_manager.gui.anc_widget import QAncWidget
 from arctis_sound_manager.gui.components import (
     HEADPHONE_ICON,
     DividerLine,
@@ -25,6 +26,7 @@ from arctis_sound_manager.gui.components import (
     SvgIconWidget,
 )
 from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
+from arctis_sound_manager.gui.settings_widget import QSettingsWidget, status_key_names
 from arctis_sound_manager.gui.status_widget import QStatusWidget
 import arctis_sound_manager.gui.theme as _theme
 from arctis_sound_manager.gui.theme import (
@@ -144,6 +146,37 @@ class HeadsetPage(QWidget):
             QLabel  {{ background-color: transparent; color: {TEXT_PRIMARY}; font-size: 11pt; }}
         """)
         layout.addWidget(self._status_widget)
+        layout.addSpacing(12)
+
+        # ── Noise cancelling ──────────────────────────────────────────────────
+        # Grouped in one container so it can be hidden wholesale: plenty of
+        # headsets have no noise cancelling at all (the Nova 7P, for one), and
+        # showing them dead controls reads as a broken app rather than as an
+        # absent feature. Shown only once the daemon reports the setting.
+        self._anc_section = QWidget(content)
+        anc_layout = QVBoxLayout(self._anc_section)
+        anc_layout.setContentsMargins(0, 0, 0, 0)
+        anc_layout.setSpacing(0)
+        anc_layout.addWidget(DividerLine())
+        anc_layout.addSpacing(12)
+        anc_layout.addWidget(SectionTitle(I18n.translate("ui", "noise_cancelling")))
+        anc_layout.addSpacing(4)
+        self._anc_widget = QAncWidget(self._anc_section)
+        anc_layout.addWidget(self._anc_widget)
+        anc_layout.addSpacing(12)
+        self._anc_section.setVisible(False)
+        layout.addWidget(self._anc_section)
+
+        # ── The headset's own settings ────────────────────────────────────────
+        # Sidetone, mic volume, the volume limiter, auto power-off… everything
+        # the device profile declares. They used to sit in Settings among the
+        # app's own options, where nobody looking at their headset found them.
+        layout.addWidget(DividerLine())
+        layout.addSpacing(12)
+        layout.addWidget(SectionTitle(I18n.translate("ui", "device_settings")))
+        layout.addSpacing(4)
+        self._device_widget = QSettingsWidget(content, None, "device")
+        layout.addWidget(self._device_widget)
         layout.addStretch(1)
 
         scroll.setWidget(content)
@@ -181,10 +214,15 @@ class HeadsetPage(QWidget):
             f"color: {_theme.c('TEXT_SECONDARY')}; font-size: 9pt; background: transparent;"
         )
 
-        self._status_widget.setStyleSheet(f"""
+        panel_qss = f"""
             QWidget {{ background-color: {_theme.c('BG_MAIN')}; color: {_theme.c('TEXT_PRIMARY')}; }}
             QLabel  {{ background-color: transparent; color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; }}
-        """)
+        """
+        self._status_widget.setStyleSheet(panel_qss)
+        self._anc_widget.setStyleSheet(panel_qss)
+        self._anc_widget.apply_theme(t)
+        self._device_widget.setStyleSheet(panel_qss)
+        self._device_widget.apply_theme()
 
     # ── preferred device (#199) ───────────────────────────────────────────────
 
@@ -243,6 +281,8 @@ class HeadsetPage(QWidget):
     @Slot(object)
     def update_status(self, status: dict):
         self._status_widget.update_status(status)
+        self._anc_widget.update_status(status)
+        self._device_widget.set_available_status_keys(status_key_names(status))
 
     @Slot(object)
     def update_settings(self, settings: dict):
@@ -268,3 +308,19 @@ class HeadsetPage(QWidget):
             self._device_selector.blockSignals(True)
             self._select_preferred()
             self._device_selector.blockSignals(False)
+
+        self._device_widget.update_settings(settings)
+        self._update_anc_visibility(settings)
+
+    def _update_anc_visibility(self, settings: dict) -> None:
+        """Show the ANC section only for headsets that actually have it.
+
+        The device profile is the authority: a headset without noise
+        cancelling simply doesn't declare the setting, so its controls could
+        never do anything. An empty config means "no device yet" — keep the
+        section as it is rather than flashing it away on a transient update.
+        """
+        config = settings.get('settings_config') or {}
+        if not config:
+            return
+        self._anc_section.setVisible('noise_cancelling' in config)

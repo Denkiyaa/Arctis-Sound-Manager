@@ -82,6 +82,22 @@ def _option_label(option: dict) -> str:
     return f"{label} · {I18n.get_instance().translate('settings_values', f'hrir_cpu_{cost}')}"
 
 
+def status_key_names(status) -> set[str]:
+    """The live status keys a device reports, for set_available_status_keys().
+
+    GetStatus's ``{category: {key: {...}}}`` shape, flattened to the key
+    names. An empty or malformed payload (no device yet, or a status shape
+    from an old daemon) yields an empty set, which only ever narrows what a
+    widget offers, never breaks it further.
+    """
+    keys: set[str] = set()
+    if isinstance(status, dict):
+        for category in status.values():
+            if isinstance(category, dict):
+                keys.update(category.keys())
+    return keys
+
+
 class QSettingsWidget(QWidget):
     sig_list_received = Signal(object)
 

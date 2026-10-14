@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from arctis_sound_manager.gui.anc_widget import QAncWidget
 from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
 from arctis_sound_manager.gui.qt_widgets.q_dual_state import QDualState
 from arctis_sound_manager.i18n import I18n
@@ -34,7 +33,7 @@ from arctis_sound_manager.gui.components import (
     DividerLine,
     SectionTitle,
 )
-from arctis_sound_manager.gui.settings_widget import QSettingsWidget
+from arctis_sound_manager.gui.settings_widget import QSettingsWidget, status_key_names
 from arctis_sound_manager.autostart import active_backend_name, autostart_enabled, set_autostart
 log = logging.getLogger(__name__)
 
@@ -392,58 +391,9 @@ class DevicePage(QWidget):
         content_layout.addWidget(DividerLine())
         content_layout.addSpacing(12)
 
-        # ── ANC / Transparent section ─────────────────────────────────────────
-        # Grouped in one container so it can be hidden wholesale: plenty of
-        # headsets have no noise cancelling at all (the Nova 7P, for one), and
-        # showing them dead controls reads as a broken app rather than as an
-        # absent feature. Shown only once the daemon reports the setting.
-        self._anc_section = QWidget(content)
-        anc_layout = QVBoxLayout(self._anc_section)
-        anc_layout.setContentsMargins(0, 0, 0, 0)
-        anc_layout.setSpacing(0)
-
-        anc_layout.addWidget(SectionTitle(I18n.translate("ui", "noise_cancelling")))
-        anc_layout.addSpacing(4)
-
-        self._anc_widget = QAncWidget(self._anc_section)
-        self._anc_widget.setStyleSheet(f"""
-            QWidget {{ background-color: {BG_MAIN}; color: {TEXT_PRIMARY}; }}
-            QLabel  {{ background-color: transparent; color: {TEXT_PRIMARY}; font-size: 11pt; }}
-        """)
-        anc_layout.addWidget(self._anc_widget)
-        anc_layout.addSpacing(6)
-        anc_layout.addWidget(DividerLine())
-        anc_layout.addSpacing(6)
-
-        self._anc_section.setVisible(False)
-        content_layout.addWidget(self._anc_section)
-
-        # ── Device Settings section ────────────────────────────────────────────
-        device_settings_title = SectionTitle(I18n.translate("ui", "device_settings"))
-        content_layout.addWidget(device_settings_title)
-        content_layout.addSpacing(4)
-
-        self._device_widget = QSettingsWidget(content, None, "device")
-        self._device_widget.setStyleSheet(
-            f"""
-            QWidget {{
-                background-color: {BG_MAIN};
-                color: {TEXT_PRIMARY};
-            }}
-            QLabel {{
-                background-color: transparent;
-                color: {TEXT_PRIMARY};
-                font-size: 11pt;
-            }}
-            """
-        )
-        content_layout.addWidget(self._device_widget)
-        content_layout.addSpacing(6)
-
-        # ── Horizontal divider ─────────────────────────────────────────────────
-        content_layout.addWidget(DividerLine())
-        content_layout.addSpacing(6)
-
+        # The headset's own settings (sidetone, mic volume, noise cancelling…)
+        # live on the Headset page, next to the headset they change. This page
+        # keeps what belongs to the app.
         self._add_settings_group(content_layout, "settings_group_audio", _AUDIO_KEYS)
         content_layout.addSpacing(6)
         content_layout.addWidget(DividerLine())
@@ -489,19 +439,9 @@ class DevicePage(QWidget):
         self._content.setStyleSheet(f"background-color: {_theme.c('BG_MAIN')};")
 
         # Settings panels
-        for widget in [getattr(self, "_device_widget", None), *getattr(self, "_settings_groups", [])]:
-            if widget is not None:
-                widget.setStyleSheet(_settings_panel_qss())
-                widget.apply_theme()
-
-        # ANC widget background + pill colors
-        if hasattr(self, "_anc_widget"):
-            self._anc_widget.setStyleSheet(f"""
-                QWidget {{ background-color: {_theme.c('BG_MAIN')}; color: {_theme.c('TEXT_PRIMARY')}; }}
-                QLabel  {{ background-color: transparent; color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; }}
-            """)
-            if hasattr(self._anc_widget, "apply_theme"):
-                self._anc_widget.apply_theme(t)
+        for widget in getattr(self, "_settings_groups", []):
+            widget.setStyleSheet(_settings_panel_qss())
+            widget.apply_theme()
 
         # Language combo
         if hasattr(self, "_lang_combo"):
@@ -609,51 +549,23 @@ class DevicePage(QWidget):
 
     @Slot(object)
     def update_status(self, status: dict):
-        self._anc_widget.update_status(status)
-        self._forward_available_status_keys(status)
-
-    def _forward_available_status_keys(self, status: dict) -> None:
         """Tell the settings widgets which live status keys the connected
-        device is actually reporting (GetStatus's ``{category: {key: {...}}}``
-        shape, flattened to just the key names).
+        device is actually reporting.
 
         This is how a global BUTTON_GROUP setting like ``micro_autoswitch``
         (settings.py) knows whether an option backed by e.g. ``mic_status``
         can do anything on the currently active device profile — see
         ``option_requires_status`` there and
-        ``QSettingsWidget._option_available``. An empty/malformed payload
-        (no device yet, or a status shape from an old daemon) yields an empty
-        key set, which — per set_available_status_keys — only ever narrows
-        what's offered, never breaks it further.
+        ``QSettingsWidget._option_available``.
         """
-        keys: set[str] = set()
-        if isinstance(status, dict):
-            for category in status.values():
-                if isinstance(category, dict):
-                    keys.update(category.keys())
+        keys = status_key_names(status)
         for widget in self._settings_groups:
             widget.set_available_status_keys(keys)
-        self._device_widget.set_available_status_keys(keys)
 
     @Slot(object)
     def update_settings(self, settings: dict):
         for widget in self._settings_groups:
             widget.update_settings(settings)
-        self._device_widget.update_settings(settings)
-        self._update_anc_visibility(settings)
-
-    def _update_anc_visibility(self, settings: dict) -> None:
-        """Show the ANC section only for headsets that actually have it.
-
-        The device profile is the authority: a headset without noise
-        cancelling simply doesn't declare the setting, so its controls could
-        never do anything. An empty config means "no device yet" — keep the
-        section as it is rather than flashing it away on a transient update.
-        """
-        config = settings.get('settings_config') or {}
-        if not config:
-            return
-        self._anc_section.setVisible('noise_cancelling' in config)
 
     # ── Language ───────────────────────────────────────────────────────────────
 
